@@ -1,0 +1,37 @@
+Maps/ant_hell/Name=Ant Hell
+
+Maps/ant_hole1/Name=Termite Mound
+Maps/ant_hole2/Name=Termite Mound
+Maps/ant_hole3/Name=Termite Mound
+Maps/ant_hole4/Name=Termite Mound
+Maps/ant_hole5/Name=Termite Mound
+
+Maps/br/main/Name=Rift
+Maps/br/ant_hell/Name=Rift
+Maps/br/factory/Name=Rift
+Maps/br/hel/Name=Rift
+Maps/br/ocean/Name=Rift
+Maps/br/victory/Name=Rift
+
+Maps/crystal_room/Name=Crystal Room
+
+Maps/desert/Name=Desert
+
+Maps/factory/Name=Factory
+
+Maps/garden/Name=Garden
+
+Maps/hel/Name=Hel
+
+Maps/jungle/Name=Jungle
+
+Maps/ocean/Name=Ocean
+
+Maps/pyramid/Name=Pyramid
+Maps/pyramid/Changing=The sands under you are starting to shift...
+
+Maps/sewers/Name=Sewers
+
+Maps/training_grounds/Name=Training Grounds
+
+Maps/worm/Name=Worm

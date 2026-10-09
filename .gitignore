@@ -1,0 +1,10 @@
+# local temp used by scripts/fetch-assets.ps1
+.tmp/
+
+# dependencies
+node_modules/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log

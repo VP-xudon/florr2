@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg"  xml:space="preserve" viewBox="0 0 256 256">
+	<path fill="#6e4b1a" d="M256 182.5v27H0v-27z"/>
+	<path fill="none" stroke="#523713" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="M0 182.5h256"/>
+	<path fill="none" stroke="#523713" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="M0 209.5h256"/>
+	<path fill="#6e4b1a" d="M256 46.5v27H0v-27z"/>
+	<path fill="none" stroke="#523713" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="M0 46.5h256"/>
+	<path fill="none" stroke="#523713" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="M0 73.5h256"/>
+	<path fill="#6e4b1a" stroke="#523713" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="m21.52 15.97 27-.49 4.17 227.97-27 .49z"/>
+	<path fill="#6e4b1a" stroke="#523713" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="m75.6 14.34 26.96 1.48-12.52 227.66L63.08 242z"/>
+	<path fill="#6e4b1a" stroke="#523713" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="m119.3 16.33 26.98-1.07 9.02 227.83-26.98 1.07z"/>
+	<path fill="#6e4b1a" stroke="#523713" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="m171.79 16.16 26.97 1.28-10.84 227.75-26.97-1.28z"/>
+	<path fill="#6e4b1a" stroke="#523713" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="3" d="m209.37 13.15 26.99-.8 6.74 227.9-26.99.8z"/>
+</svg>

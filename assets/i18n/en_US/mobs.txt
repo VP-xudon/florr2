@@ -1,0 +1,262 @@
+Mobs/rock/Name=Rock
+Mobs/rock/Description=A rock. It doesn't do much.
+Mobs/rock/Spawn=Something mountain-like appears in the distance...
+
+Mobs/cactus/Name=Cactus
+Mobs/cactus/Description=Avoid touching it, it hurts.
+Mobs/cactus/Spawn=A tower of thorns rises from the sands...
+
+Mobs/ladybug/Name=Ladybug
+Mobs/ladybug/Description=Cute and harmless.
+
+Mobs/bee/Name=Bee
+Mobs/bee/Description=It stings. Don't touch it.
+
+Mobs/ant_baby/Name=Baby Ant
+Mobs/ant_baby/Description=Weak and defenseless, but big dreams.
+
+Mobs/ant_worker/Name=Worker Ant
+Mobs/ant_worker/Description=It's a bit temperamental, probably from working all the time.
+
+Mobs/ant_soldier/Name=Soldier Ant
+Mobs/ant_soldier/Description=It's got wings and it's ready to use them.
+
+Mobs/ant_queen/Name=Queen Ant
+Mobs/ant_queen/Description=You must have done something really bad if she's chasing you.
+
+Mobs/ant_hole/Name=Ant Hole
+Mobs/ant_hole/Description=Ants go in, and come out. Can't explain that.
+
+Mobs/beetle/Name=Beetle
+Mobs/beetle/Description=It's hungry and flowers are its favorite meal.
+
+Mobs/hornet/Name=Hornet
+Mobs/hornet/Description=These aren't quite as nice as the little bees.
+Mobs/hornet/Spawn=A big yellow spot shows up in the distance...
+
+Mobs/centipede/Name=Centipede
+Mobs/centipede/Description=It's just there doing its thing.
+
+Mobs/centipede_body/Name=Centipede
+Mobs/centipede_body/Description=It's just there doing its thing.
+
+Mobs/centipede_evil/Name=Centipede
+Mobs/centipede_evil/Description=This one loves flowers.
+
+Mobs/centipede_evil_body/Name=Centipede
+Mobs/centipede_evil_body/Description=This one loves flowers.
+
+Mobs/centipede_desert/Name=Centipede
+Mobs/centipede_desert/Description=Gotta go fast.
+
+Mobs/centipede_desert_body/Name=Centipede
+Mobs/centipede_desert_body/Description=Gotta go fast.
+
+Mobs/square/Name=Square
+Mobs/square/Description=This shape... it looks familiar...
+
+Mobs/ladybug_dark/Name=Ladybug
+Mobs/ladybug_dark/Description=Cute and harmless... if left unprovoked.
+
+Mobs/ladybug_shiny/Name=Ladybug
+Mobs/ladybug_shiny/Description=Shiny, cute and mostly harmless.
+
+Mobs/spider/Name=Spider
+Mobs/spider/Description=Spooky.
+
+Mobs/scorpion/Name=Scorpion
+Mobs/scorpion/Description=IT STINGS!
+
+Mobs/fire_ant_soldier/Name=Soldier Fire Ant
+Mobs/fire_ant_soldier/Description=This ant is on fireeeeeeeeeeeeee.
+
+Mobs/fire_ant_burrow/Name=Fire Ant Burrow
+Mobs/fire_ant_burrow/Description=What could be in here?
+
+Mobs/sandstorm/Name=Sandstorm
+Mobs/sandstorm/Description=Darude (1999)
+
+Mobs/bubble/Name=Bubble
+Mobs/bubble/Description=Pop
+
+Mobs/bumble_bee/Name=Bumble Bee
+Mobs/bumble_bee/Description=GOTTA RUN.
+
+Mobs/shell/Name=Shell
+Mobs/shell/Description=Not an advertisement.
+
+Mobs/starfish/Name=Starfish
+Mobs/starfish/Description=His name is Patrick.
+
+Mobs/crab/Name=Crab
+Mobs/crab/Description=Mr. Crab.
+
+Mobs/jellyfish/Name=Jellyfish
+Mobs/jellyfish/Description=Makes the most delicious jam.
+Mobs/jellyfish/Spawn=You hear lightning strikes coming from a far distance...
+
+Mobs/digger/Name=Digger
+Mobs/digger/Description=Wrong game, bud.
+
+Mobs/sponge/Name=Sponge
+Mobs/sponge/Description=Bob.
+
+Mobs/leech/Name=Leech
+Mobs/leech/Description=Slurp slurp.
+
+Mobs/leech_body/Name=Leech
+Mobs/leech_body/Description=Slurp slurp.
+
+Mobs/dandelion/Name=Dandelion
+Mobs/dandelion/Description=Puffy.
+
+Mobs/fire_ant_baby/Name=Baby Fire Ant
+Mobs/fire_ant_baby/Description=This ant is on fireeeeeeeeeeeeee.
+
+Mobs/fire_ant_worker/Name=Worker Fire Ant
+Mobs/fire_ant_worker/Description=This ant is on fireeeeeeeeeeeeee.
+
+Mobs/fire_ant_queen/Name=Queen Fire Ant
+Mobs/fire_ant_queen/Description=This ant is on fireeeeeeeeeeeeee.
+
+Mobs/ant_egg/Name=Ant Egg
+Mobs/ant_egg/Description=Not yet an ant but perhaps soon.
+
+Mobs/fire_ant_egg/Name=Fire Ant Egg
+Mobs/fire_ant_egg/Description=This ant is not yet on fire.
+
+Mobs/fly/Name=Fly
+Mobs/fly/Description=Hzzzzzzzzzzzz.
+
+Mobs/leafbug/Name=Leafbug
+Mobs/leafbug/Description=It's not a leaf, but it is a bug.
+
+Mobs/mantis/Name=Mantis
+Mobs/mantis/Description=You better pray you don't become dinner.
+
+Mobs/termite_baby/Name=Baby Termite
+Mobs/termite_baby/Description=Weak and defenseless, but big dreams.<n/>These creatures appear to be connected somehow.
+
+Mobs/termite_worker/Name=Worker Termite
+Mobs/termite_worker/Description=It's a bit temperamental, probably from working all the time.<n/>These creatures appear to be connected somehow.
+
+Mobs/termite_soldier/Name=Soldier Termite
+Mobs/termite_soldier/Description=It's got wings and it's ready to use them.<n/>These creatures appear to be connected somehow.
+
+Mobs/termite_overmind/Name=Termite Overmind
+Mobs/termite_overmind/Description=The one who oversees all.
+
+Mobs/termite_mound/Name=Termite Mound
+Mobs/termite_mound/Description=Termites go in, and come out. Can't explain that.
+
+Mobs/termite_egg/Name=Termite Egg
+Mobs/termite_egg/Description=Not yet a termite but perhaps soon.
+
+Mobs/bush/Name=Bush
+Mobs/bush/Description=Don't misunderestimate me.
+
+Mobs/roach/Name=Roach
+Mobs/roach/Description=Gotta go FAST... until they get tired.
+
+Mobs/moth/Name=Moth
+Mobs/moth/Description=Easily scared, be nice.
+
+Mobs/firefly/Name=Firefly
+Mobs/firefly/Description=Oooooh shiny.
+Mobs/firefly/Spawn=There's a bright light in the horizon...
+
+Mobs/beetle_hel/Name=Beetle
+Mobs/beetle_hel/Description=Scourge that spawns in the other plane.
+Mobs/beetle_hel/Spawn=You sense ominous vibrations coming from a different realm...
+
+Mobs/wasp/Name=Wasp
+Mobs/wasp/Description=They are ANGRY.
+
+Mobs/dummy/Name=Target Dummy
+Mobs/dummy/Description=How do you have this in your gallery?
+
+Mobs/spider_hel/Name=Spider
+Mobs/spider_hel/Description=Scourge that spawns in the other plane.
+Mobs/spider_hel/Spawn=You sense ominous vibrations coming from a different realm...
+
+Mobs/centipede_hel/Name=Centipede
+Mobs/centipede_hel/Description=Scourge that spawns in the other plane.
+Mobs/centipede_hel/Spawn=You sense ominous vibrations coming from a different realm...
+
+Mobs/centipede_hel_body/Name=Centipede
+Mobs/centipede_hel_body/Description=Scourge that spawns in the other plane.
+Mobs/centipede_hel_body/Spawn=You sense ominous vibrations coming from a different realm...
+
+Mobs/wasp_hel/Name=Wasp
+Mobs/wasp_hel/Description=Scourge that spawns in the other plane.
+Mobs/wasp_hel/Spawn=You sense ominous vibrations coming from a different realm...
+
+Mobs/trader/Name=Trader
+Mobs/trader/Description= 
+
+Mobs/gambler/Name=Gambler
+Mobs/gambler/Description=This can happen to YOU.
+Mobs/gambler/Spawn=You hear someone whisper faintly... "just... one more game..."
+
+Mobs/oracle/Name=Oracle
+Mobs/oracle/Description= 
+
+Mobs/firefly_magic/Name=Firefly
+Mobs/firefly_magic/Description=There's something magical about this one.
+
+Mobs/titan/Name=Titan
+Mobs/titan/Description= 
+
+Mobs/beetle_nazar/Name=Beetle
+Mobs/beetle_nazar/Description=This one has a different pattern... what does that mean?
+
+Mobs/worm/Name=Worm
+Mobs/worm/Description=It's supposed to eat dirt but this one's eating flowers.
+
+Mobs/worm_guts/Name=Worm guts
+Mobs/worm_guts/Description=You're not supposed to see this text. I'm calling the police.
+
+Mobs/mecha_flower/Name=Mecha Flower
+Mobs/mecha_flower/Description=Someone has been making these mechanical flowers... What could this mean?
+
+Mobs/wasp_mecha/Name=Wasp
+Mobs/wasp_mecha/Description=They're MECHA ANGRY.
+
+Mobs/spider_mecha/Name=Spider
+Mobs/spider_mecha/Description=Mecha Spooky.
+
+Mobs/leafbug_shiny/Name=Leafbug
+Mobs/leafbug_shiny/Description=This one has a special color to it...
+
+Mobs/crab_mecha/Name=Crab
+Mobs/crab_mecha/Description=Dr. Crab.
+
+Mobs/assembler/Name=Assembler
+Mobs/assembler/Description= 
+
+Mobs/barrel/Name=Barrel
+Mobs/barrel/Description=Under no circumstances let this thing spill.<n/>We cannot risk another mutant insect this month.
+
+Mobs/beetle_mummy/Name=Beetle
+Mobs/beetle_mummy/Description=This one seems like it shouldn't be alive...
+
+Mobs/beetle_pharaoh/Name=Beetle
+Mobs/beetle_pharaoh/Description=That thing on its head looks valuable... We should steal it.
+
+Mobs/tomb/Name=Tomb
+Mobs/tomb/Description=Huh, what could be in here?
+
+Mobs/silverfish/Name=Silverfish
+Mobs/silverfish/Description=Those annoying little things that eat clothes.<n/>It also loves garbage.
+
+Mobs/garbage/Name=Garbage
+Mobs/garbage/Description=Someone's treasure...
+
+Mobs/ant_soldier_diver/Name=Soldier Ant
+Mobs/ant_soldier_diver/Description=How did they end up here?
+
+Mobs/ghost/Name=Ghost
+Mobs/ghost/Description=A tormented soul, freeing it is the best you can do for it.
+
+Mobs/crystal/Name=Crystal
+Mobs/crystal/Description= 

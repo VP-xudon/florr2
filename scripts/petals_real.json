@@ -1,0 +1,1394 @@
+[
+ {
+  "id": 1,
+  "en": "Basic",
+  "zh": "基本",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 2,
+  "en": "Light",
+  "zh": "轻",
+  "fanmade": false,
+  "stat": {
+   "dmg": 13.0,
+   "dur": 5.0,
+   "other": "",
+   "cd": "0.8s"
+  }
+ },
+ {
+  "id": 3,
+  "en": "Rock",
+  "zh": "岩石",
+  "fanmade": false,
+  "stat": {
+   "dmg": 22.0,
+   "dur": 30.0,
+   "other": "",
+   "cd": "3.0s"
+  }
+ },
+ {
+  "id": 4,
+  "en": "Square",
+  "zh": "正方形",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "",
+   "cd": "60.0s"
+  }
+ },
+ {
+  "id": 5,
+  "en": "Rose",
+  "zh": "玫瑰",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "治疗=7.5",
+   "cd": "3.5s + 1.5s"
+  }
+ },
+ {
+  "id": 6,
+  "en": "Stinger",
+  "zh": "刺",
+  "fanmade": false,
+  "stat": {
+   "dmg": 100.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "10.0s"
+  }
+ },
+ {
+  "id": 7,
+  "en": "Iris",
+  "zh": "鸢尾",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "剧毒=70 (23.3/s)",
+   "cd": "4.0s"
+  }
+ },
+ {
+  "id": 8,
+  "en": "Wing",
+  "zh": "翅膀",
+  "fanmade": false,
+  "stat": {
+   "dmg": 20.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "3.0s"
+  }
+ },
+ {
+  "id": 9,
+  "en": "Missile",
+  "zh": "导弹",
+  "fanmade": false,
+  "stat": {
+   "dmg": 35.0,
+   "dur": 2.0,
+   "other": "",
+   "cd": "1.5s + 0.5s"
+  }
+ },
+ {
+  "id": 10,
+  "en": "Grapes",
+  "zh": "葡萄",
+  "fanmade": false,
+  "stat": {
+   "dmg": 3.0,
+   "dur": 5.0,
+   "other": "子瓣数量=4/5,剧毒=25 (35.7/s)",
+   "cd": "1.5s + 0.5s"
+  }
+ },
+ {
+  "id": 11,
+  "en": "Cactus",
+  "zh": "仙人掌",
+  "fanmade": false,
+  "stat": {
+   "dmg": 7.0,
+   "dur": 15.0,
+   "other": "花朵生命值=30",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 12,
+  "en": "Faster",
+  "zh": "更快",
+  "fanmade": false,
+  "stat": {
+   "dmg": 12.0,
+   "dur": 5.0,
+   "other": "旋转速度=+0.5 rad/s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 13,
+  "en": "Bubble",
+  "zh": "泡泡",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "2.0(2.00)s + 0.7s"
+  }
+ },
+ {
+  "id": 14,
+  "en": "Pollen",
+  "zh": "花粉",
+  "fanmade": false,
+  "stat": {
+   "dmg": 38.0,
+   "dur": 5.0,
+   "other": "",
+   "cd": "2.0s + 0.5s"
+  }
+ },
+ {
+  "id": 15,
+  "en": "Dandelion",
+  "zh": "蒲公英",
+  "fanmade": false,
+  "stat": {
+   "dmg": 8.0,
+   "dur": 8.0,
+   "other": "持续时间=30s",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 16,
+  "en": "Beetle Egg",
+  "zh": "甲虫卵",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 1.0,
+   "other": "内含= 甲虫 ,生物生命值=500,生物伤害=7",
+   "cd": "30.0s"
+  }
+ },
+ {
+  "id": 17,
+  "en": "Antennae",
+  "zh": "触角",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "视野=11.1%",
+   "cd": ""
+  }
+ },
+ {
+  "id": 18,
+  "en": "Heavy",
+  "zh": "重",
+  "fanmade": false,
+  "stat": {
+   "dmg": 13.0,
+   "dur": 150.0,
+   "other": "",
+   "cd": "10.0s"
+  }
+ },
+ {
+  "id": 19,
+  "en": "Yin Yang",
+  "zh": "阴阳",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 20,
+  "en": "Web",
+  "zh": "网",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "持续时间=10s,半径=50",
+   "cd": "3.0s + 0.5s"
+  }
+ },
+ {
+  "id": 21,
+  "en": "Honey",
+  "zh": "蜂蜜",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 50.0,
+   "other": "最高生物稀有度= 普通",
+   "cd": "2.0s + 0.5s"
+  }
+ },
+ {
+  "id": 22,
+  "en": "Leaf",
+  "zh": "叶子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 16.0,
+   "dur": 12.0,
+   "other": "治疗=1/s",
+   "cd": "1.8s"
+  }
+ },
+ {
+  "id": 23,
+  "en": "Salt",
+  "zh": "盐",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "伤害反弹=100%（对于 普通 ）,20%（对于花朵）",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 24,
+  "en": "Rice",
+  "zh": "米",
+  "fanmade": false,
+  "stat": {
+   "dmg": 4.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "0.1(0.05)s"
+  }
+ },
+ {
+  "id": 25,
+  "en": "Corn",
+  "zh": "玉米",
+  "fanmade": false,
+  "stat": {
+   "dmg": 8.0,
+   "dur": 200.0,
+   "other": "",
+   "cd": "7.0s"
+  }
+ },
+ {
+  "id": 26,
+  "en": "Sand",
+  "zh": "沙子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 1.2,
+   "other": "子瓣数量=4/5",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 27,
+  "en": "Pincer",
+  "zh": "螫针",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "剧毒=15 (20/s),持续时间=0.8s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 28,
+  "en": "Yucca",
+  "zh": "丝兰",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "治疗=2.2/s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 29,
+  "en": "Magnet",
+  "zh": "磁铁",
+  "fanmade": false,
+  "stat": {
+   "dmg": 1.0,
+   "dur": 30.0,
+   "other": "拾取距离=+0",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 30,
+  "en": "Yggdrasil",
+  "zh": "世界树之叶",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 10.0,
+   "other": "治疗=100%,无法复活=13.5h",
+   "cd": "5.0s + 5.0s"
+  }
+ },
+ {
+  "id": 31,
+  "en": "Starfish",
+  "zh": "海星",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 7.0,
+   "other": "治疗=2.2/s",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 32,
+  "en": "Pearl",
+  "zh": "珍珠",
+  "fanmade": false,
+  "stat": {
+   "dmg": 20.0,
+   "dur": 50.0,
+   "other": "",
+   "cd": "4.0s + 0.5s"
+  }
+ },
+ {
+  "id": 33,
+  "en": "Lightning",
+  "zh": "闪电",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 20.0,
+   "other": "闪电=12,连锁=2",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 34,
+  "en": "Jelly",
+  "zh": "果冻",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "击退=300",
+   "cd": "10.0s"
+  }
+ },
+ {
+  "id": 35,
+  "en": "Claw",
+  "zh": "爪子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "额外伤害=100",
+   "cd": "3.5s"
+  }
+ },
+ {
+  "id": 36,
+  "en": "Shell",
+  "zh": "贝壳",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 25.0,
+   "other": "护盾=7",
+   "cd": "3.5s + 1.5s"
+  }
+ },
+ {
+  "id": 37,
+  "en": "Cutter",
+  "zh": "锯齿",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "身体伤害=27",
+   "cd": ""
+  }
+ },
+ {
+  "id": 38,
+  "en": "Dahlia",
+  "zh": "大丽花",
+  "fanmade": false,
+  "stat": {
+   "dmg": 1.7,
+   "dur": 1.7,
+   "other": "治疗=1.2,子瓣数量=3/4",
+   "cd": "1.5s + 1.5s"
+  }
+ },
+ {
+  "id": 39,
+  "en": "Uranium",
+  "zh": "铀",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 75.0,
+   "other": "剧毒=50/s",
+   "cd": "2.5s + 1.5s"
+  }
+ },
+ {
+  "id": 40,
+  "en": "Sponge",
+  "zh": "海绵",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "周期=3s,花朵生命值=-50%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 41,
+  "en": "Soil",
+  "zh": "土",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "花朵生命值=50,花朵半径=+10",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 42,
+  "en": "Fang",
+  "zh": "尖牙",
+  "fanmade": false,
+  "stat": {
+   "dmg": 15.0,
+   "dur": 1.0,
+   "other": "伤害治疗=35%",
+   "cd": "3.5s"
+  }
+ },
+ {
+  "id": 43,
+  "en": "Third Eye",
+  "zh": "第三只眼",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "攻击距离=+0",
+   "cd": ""
+  }
+ },
+ {
+  "id": 44,
+  "en": "Peas",
+  "zh": "豌豆",
+  "fanmade": false,
+  "stat": {
+   "dmg": 15.0,
+   "dur": 5.0,
+   "other": "子瓣数量=4/5",
+   "cd": "1.5s + 0.5s"
+  }
+ },
+ {
+  "id": 45,
+  "en": "Mysterious Stick",
+  "zh": "神秘的树枝",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "内含=4x 沙尘暴 ,生物生命值=30,生物伤害=30,持续时间=20s",
+   "cd": "4.0s + 5.0s"
+  }
+ },
+ {
+  "id": 46,
+  "en": "Clover",
+  "zh": "幸运草",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "幸运值=+0.1",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 47,
+  "en": "Mysterious Powder",
+  "zh": "神秘的粉末",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 10.0,
+   "other": "移动速度=+25%,最高生物稀有度= 普通",
+   "cd": "4.0s"
+  }
+ },
+ {
+  "id": 48,
+  "en": "Air",
+  "zh": "空气",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "花朵半径=+8",
+   "cd": ""
+  }
+ },
+ {
+  "id": 49,
+  "en": "Basil",
+  "zh": "罗勒",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "治疗增益=+20%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 50,
+  "en": "Orange",
+  "zh": "橙子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 8.0,
+   "dur": 6.7,
+   "other": "子瓣数量=3/4",
+   "cd": "3.5s"
+  }
+ },
+ {
+  "id": 51,
+  "en": "Ant Egg",
+  "zh": "蚁卵",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 1.0,
+   "other": "子瓣数量=4/5,内含=4/5x 兵蚁 ,生物生命值=250,生物伤害=6",
+   "cd": "60.0s"
+  }
+ },
+ {
+  "id": 52,
+  "en": "Poo",
+  "zh": "便便",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "生物仇恨距离=-25%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 53,
+  "en": "Mysterious Relic",
+  "zh": "神秘的遗物",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "花朵生命值=+10%",
+   "cd": ""
+  }
+ },
+ {
+  "id": 54,
+  "en": "",
+  "zh": "莲花",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "剧毒抗性=14/s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 55,
+  "en": "Light Bulb",
+  "zh": "灯泡",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "半径=300",
+   "cd": "1.0s + 0.5s"
+  }
+ },
+ {
+  "id": 56,
+  "en": "Cotton",
+  "zh": "棉花",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 2.0,
+   "other": "",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 57,
+  "en": "Carrot",
+  "zh": "胡萝卜",
+  "fanmade": false,
+  "stat": {
+   "dmg": 18.0,
+   "dur": 18.0,
+   "other": "",
+   "cd": "1.0s + 0.5s"
+  }
+ },
+ {
+  "id": 58,
+  "en": "Bone",
+  "zh": "骨头",
+  "fanmade": false,
+  "stat": {
+   "dmg": 14.0,
+   "dur": 10.0,
+   "other": "护甲=10",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 59,
+  "en": "Plank",
+  "zh": "木板",
+  "fanmade": false,
+  "stat": {
+   "dmg": 18.0,
+   "dur": 15.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 60,
+  "en": "Tomato",
+  "zh": "番茄",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.5s + 1.0s"
+  }
+ },
+ {
+  "id": 61,
+  "en": "Dark Mark",
+  "zh": "暗黑标记",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 10.0,
+   "other": "被标记者将在冥界被困5分钟。=",
+   "cd": "1.0s + 960.0s"
+  }
+ },
+ {
+  "id": 62,
+  "en": "Rubber",
+  "zh": "橡胶",
+  "fanmade": false,
+  "stat": {
+   "dmg": 1.0,
+   "dur": 30.0,
+   "other": "击退=+0.3",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 63,
+  "en": "Blood Stinger",
+  "zh": "血刺",
+  "fanmade": false,
+  "stat": {
+   "dmg": 100.0,
+   "dur": 1.0,
+   "other": "自我伤害=5",
+   "cd": "7.5s"
+  }
+ },
+ {
+  "id": 64,
+  "en": "Bur",
+  "zh": "刺果",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "护甲减益=-1.5,持续时间=3s",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 65,
+  "en": "Root",
+  "zh": "根",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "花朵护甲=2.5,间隔=2s,上限=10",
+   "cd": "5.0s"
+  }
+ },
+ {
+  "id": 66,
+  "en": "Ankh",
+  "zh": "安卡",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "256.0s + 0.5s"
+  }
+ },
+ {
+  "id": 67,
+  "en": "Dice",
+  "zh": "骰子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 68,
+  "en": "Talisman of Evasion",
+  "zh": "闪避护符",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 10.0,
+   "other": "花朵闪避=+3%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 69,
+  "en": "Battery",
+  "zh": "电池",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "闪电=12,连锁=2,充能=3",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 70,
+  "en": "Amulet",
+  "zh": "护符",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 10.0,
+   "other": "过量治疗转化=+5%",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 71,
+  "en": "Compass",
+  "zh": "指南针",
+  "fanmade": false,
+  "stat": {
+   "dmg": 1.0,
+   "dur": 40.0,
+   "other": "已损坏。=",
+   "cd": "2.5s + 9.0s"
+  }
+ },
+ {
+  "id": 72,
+  "en": "Disc",
+  "zh": "圆盘",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "碰撞伤害抗性=+9%",
+   "cd": ""
+  }
+ },
+ {
+  "id": 73,
+  "en": "Shovel",
+  "zh": "铲子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "",
+   "cd": "15.0(15.00)s + 2.0s"
+  }
+ },
+ {
+  "id": 74,
+  "en": "Coin",
+  "zh": "硬币",
+  "fanmade": false,
+  "stat": {
+   "dmg": 15.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 75,
+  "en": "Poker Chip",
+  "zh": "扑克筹码",
+  "fanmade": false,
+  "stat": {
+   "dmg": 7.0,
+   "dur": 1.0,
+   "other": "闪避=90%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 76,
+  "en": "Card",
+  "zh": "纸牌",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 30.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 77,
+  "en": "Moon Rock",
+  "zh": "月石",
+  "fanmade": false,
+  "stat": {
+   "dmg": 3.0,
+   "dur": 5000.0,
+   "other": "",
+   "cd": "100.0s"
+  }
+ },
+ {
+  "id": 78,
+  "en": "Privet Berry",
+  "zh": "女贞子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "额外剧毒=0.2s",
+   "cd": "4.0(4.00)s"
+  }
+ },
+ {
+  "id": 79,
+  "en": "Glass",
+  "zh": "玻璃",
+  "fanmade": false,
+  "stat": {
+   "dmg": 22.0,
+   "dur": 0.0,
+   "other": "间隔=1s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 80,
+  "en": "Corruption",
+  "zh": "腐化",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "无法卸下。=,死亡时丢失。=",
+   "cd": ""
+  }
+ },
+ {
+  "id": 81,
+  "en": "Mana Orb",
+  "zh": "魔法球",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 25.0,
+   "other": "魔力=8.2, 魔法 基础魔力上限 =57.8,允许寻找魔法花瓣。=",
+   "cd": "2.5s + 1.5s"
+  }
+ },
+ {
+  "id": 82,
+  "en": "Blueberries",
+  "zh": "蓝莓",
+  "fanmade": false,
+  "stat": {
+   "dmg": 30.0,
+   "dur": 5.0,
+   "other": "子瓣数量=4/5",
+   "cd": "1.2 + 0.5s"
+  }
+ },
+ {
+  "id": 83,
+  "en": "Magic Cotton",
+  "zh": "魔法棉花",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "伤害吸收=0.5/ 魔法 mana",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 84,
+  "en": "Magic Stinger",
+  "zh": "魔法刺",
+  "fanmade": false,
+  "stat": {
+   "dmg": 100.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "10 + 1.0s"
+  }
+ },
+ {
+  "id": 85,
+  "en": "Magic Leaf",
+  "zh": "魔法叶子",
+  "fanmade": false,
+  "stat": {
+   "dmg": 16.0,
+   "dur": 12.0,
+   "other": "魔力=2.5/s,基础魔力上限=57.8",
+   "cd": "1.8s"
+  }
+ },
+ {
+  "id": 86,
+  "en": "Magic Cactus",
+  "zh": "魔法仙人掌",
+  "fanmade": false,
+  "stat": {
+   "dmg": 7.0,
+   "dur": 15.0,
+   "other": "魔力上限=+115.5",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 87,
+  "en": "Magic Eye",
+  "zh": "魔法之眼",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "闪电=3.3/ 魔法 mana ,连锁=7",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 88,
+  "en": "Magic Missile",
+  "zh": "魔法导弹",
+  "fanmade": false,
+  "stat": {
+   "dmg": 35.0,
+   "dur": 2.0,
+   "other": "",
+   "cd": "5.4 + 0.2s"
+  }
+ },
+ {
+  "id": 89,
+  "en": "Magic Stick",
+  "zh": "魔法树枝",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "内含= 沙尘暴 ,生成消耗=20 魔法 mana ,生物生命值=30,生物伤害=30,持续时间=20s",
+   "cd": "4.0s + 0.5s"
+  }
+ },
+ {
+  "id": 90,
+  "en": "Coral",
+  "zh": "珊瑚",
+  "fanmade": false,
+  "stat": {
+   "dmg": 11.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "1.5s"
+  }
+ },
+ {
+  "id": 91,
+  "en": "Magic Bubble",
+  "zh": "魔法泡泡",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "",
+   "cd": "5 + 2.0(2.00)s + 0.7s"
+  }
+ },
+ {
+  "id": 92,
+  "en": "Nazar Amulet",
+  "zh": "邪眼护符",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "充能=3",
+   "cd": "60.0(60.00)s"
+  }
+ },
+ {
+  "id": 93,
+  "en": "Mimic",
+  "zh": "拟态",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "",
+   "cd": ""
+  }
+ },
+ {
+  "id": 94,
+  "en": "Fragment",
+  "zh": "碎片",
+  "fanmade": false,
+  "stat": {
+   "dmg": 1.0,
+   "dur": 1.0,
+   "other": "",
+   "cd": "10.0s"
+  }
+ },
+ {
+  "id": 95,
+  "en": "Mecha Missile",
+  "zh": "机械导弹",
+  "fanmade": false,
+  "stat": {
+   "dmg": 35.0,
+   "dur": 2.0,
+   "other": "",
+   "cd": "1.5s + 0.5s"
+  }
+ },
+ {
+  "id": 96,
+  "en": "Wax",
+  "zh": "蜂蜡",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 1000.0,
+   "other": "半径=30",
+   "cd": "30.0s"
+  }
+ },
+ {
+  "id": 97,
+  "en": "Golden Leaf",
+  "zh": "黄金之叶",
+  "fanmade": false,
+  "stat": {
+   "dmg": 16.0,
+   "dur": 12.0,
+   "other": "冷却时间=-2.5%",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 98,
+  "en": "Cogwheel",
+  "zh": "齿轮",
+  "fanmade": false,
+  "stat": {
+   "dmg": 19.0,
+   "dur": 13.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 99,
+  "en": "Monstera",
+  "zh": "龟背竹",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 75.0,
+   "other": "治疗=1.4/s",
+   "cd": "2.5s + 0.5s"
+  }
+ },
+ {
+  "id": 100,
+  "en": "Mecha Antennae",
+  "zh": "机械触角",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "激活制导=机械导弹（ 普通 ）,视野=7.8%",
+   "cd": ""
+  }
+ },
+ {
+  "id": 101,
+  "en": "Laser",
+  "zh": "激光器",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "伤害=50/s (lightning)",
+   "cd": "5.0s"
+  }
+ },
+ {
+  "id": 102,
+  "en": "Domino",
+  "zh": "多米诺骨牌",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 16.0,
+   "other": "",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 103,
+  "en": "Bandage",
+  "zh": "绷带",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "死亡延缓=1.5s,无法复活=30s,身体伤害=-75%",
+   "cd": ""
+  }
+ },
+ {
+  "id": 104,
+  "en": "Pharaoh's Crown",
+  "zh": "法老之冠",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "内含=甲虫（ 神话 ）,持续时间=6s",
+   "cd": "1.0s"
+  }
+ },
+ {
+  "id": 105,
+  "en": "Totem",
+  "zh": "图腾",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "持续时间=10s,治疗=1/s",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 106,
+  "en": "Triangle",
+  "zh": "三角形",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 107,
+  "en": "Electric Web",
+  "zh": "电网",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 5.0,
+   "other": "伤害=5/s (lightning) ,持续时间=10s,半径=50",
+   "cd": "3.0s + 0.5s"
+  }
+ },
+ {
+  "id": 108,
+  "en": "Blood Sacrifice",
+  "zh": "血祭",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "生成稀有度= 普通 ,使用时消耗。=",
+   "cd": "10.0s"
+  }
+ },
+ {
+  "id": 109,
+  "en": "Sawblade",
+  "zh": "锯片",
+  "fanmade": false,
+  "stat": {
+   "dmg": 40.0,
+   "dur": 25.0,
+   "other": "",
+   "cd": "2.5s"
+  }
+ },
+ {
+  "id": 110,
+  "en": "Clay",
+  "zh": "黏土",
+  "fanmade": false,
+  "stat": {
+   "dmg": 5.0,
+   "dur": 10.0,
+   "other": "",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 111,
+  "en": "Dust",
+  "zh": "灰尘",
+  "fanmade": false,
+  "stat": {
+   "dmg": 4.3,
+   "dur": 1.7,
+   "other": "",
+   "cd": "0.8s"
+  }
+ },
+ {
+  "id": 112,
+  "en": "Broccoli",
+  "zh": "西兰花",
+  "fanmade": false,
+  "stat": {
+   "dmg": 10.0,
+   "dur": 15.0,
+   "other": "导弹=3,导弹耐久=3.3,导弹伤害=5",
+   "cd": "2.8s"
+  }
+ },
+ {
+  "id": 113,
+  "en": "Lentil",
+  "zh": "小扁豆",
+  "fanmade": false,
+  "stat": {
+   "dmg": 13.0,
+   "dur": 12.0,
+   "other": "花瓣吸引范围=+8",
+   "cd": "2.0s"
+  }
+ },
+ {
+  "id": 114,
+  "en": "Dead Leaf",
+  "zh": "枯叶",
+  "fanmade": false,
+  "stat": {
+   "dmg": 16.0,
+   "dur": 12.0,
+   "other": "花瓣耐久=+0%,冷却时间=+5%",
+   "cd": "1.8s"
+  }
+ },
+ {
+  "id": 115,
+  "en": "Soul Splitter",
+  "zh": "灵魂分裂",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "",
+   "cd": ""
+  }
+ },
+ {
+  "id": 116,
+  "en": "Paranormal Goggles",
+  "zh": "超自然护目镜",
+  "fanmade": false,
+  "stat": {
+   "dmg": 0.0,
+   "dur": 0.0,
+   "other": "视野=-20%,最高生物稀有度= 普通",
+   "cd": ""
+  }
+ }
+]

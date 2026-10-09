@@ -1,0 +1,37 @@
+UI/Time/Days={#UI/Time/Days/{0:1orN}}
+UI/Time/Hours={#UI/Time/Hours/{0:1orN}}
+UI/Time/Minutes={#UI/Time/Minutes/{0:1orN}}
+UI/Time/Seconds={#UI/Time/Seconds/{0:1orN}}
+UI/Time/Now=immediately
+
+UI/TooltipTime/Days={#UI/TooltipTime/Days/{0:1orN}}
+UI/TooltipTime/Hours={#UI/TooltipTime/Hours/{0:1orN}}
+UI/TooltipTime/Minutes={#UI/TooltipTime/Minutes/{0:1orN}}
+UI/TooltipTime/Seconds={#UI/TooltipTime/Seconds/{0:1orN}}
+UI/TooltipTime/Now=immediately
+
+UI/Tooltip/Grouping=1000
+UI/Tooltip/Group0={0}
+UI/Tooltip/Group1={0}k
+UI/Tooltip/Group2={0}m
+UI/Tooltip/Group3={0}b
+UI/Tooltip/Group4={0}t
+
+# Helpers
+UI/Time/Days/1=1 day
+UI/Time/Days/N={0} days
+UI/Time/Hours/1=1 hour
+UI/Time/Hours/N={0} hours
+UI/Time/Minutes/1=1 minute
+UI/Time/Minutes/N={0} minutes
+UI/Time/Seconds/1=1 second
+UI/Time/Seconds/N={0} seconds
+
+UI/TooltipTime/Days/1=1 day
+UI/TooltipTime/Days/N={0:tooltip} days
+UI/TooltipTime/Hours/1=1 hour
+UI/TooltipTime/Hours/N={0:tooltip} hours
+UI/TooltipTime/Minutes/1=1 minute
+UI/TooltipTime/Minutes/N={0:tooltip} minutes
+UI/TooltipTime/Seconds/1=1 second
+UI/TooltipTime/Seconds/N={0:tooltip} seconds

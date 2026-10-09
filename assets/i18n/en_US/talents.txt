@@ -1,0 +1,338 @@
+Talents/crafting/Name=Crafting
+Talents/crafting/Description=Unlocks the ability to craft <c val="{#Colors/{0:rarity}}">{#Rarities/{0:rarity}/Name}</c> petals
+
+Talents/crafting_unusual/Name={#Talents/crafting/Name}
+Talents/crafting_unusual/Description={#Talents/crafting/Description}
+
+Talents/crafting_rare/Name={#Talents/crafting/Name}
+Talents/crafting_rare/Description={#Talents/crafting/Description}
+
+Talents/crafting_epic/Name={#Talents/crafting/Name}
+Talents/crafting_epic/Description={#Talents/crafting/Description}
+
+Talents/crafting_legendary/Name={#Talents/crafting/Name}
+Talents/crafting_legendary/Description={#Talents/crafting/Description}
+
+Talents/crafting_mythic/Name={#Talents/crafting/Name}
+Talents/crafting_mythic/Description={#Talents/crafting/Description}
+
+Talents/crafting_ultra/Name={#Talents/crafting/Name}
+Talents/crafting_ultra/Description={#Talents/crafting/Description}
+
+Talents/crafting_super/Name={#Talents/crafting/Name}
+Talents/crafting_super/Description={#Talents/crafting/Description}
+
+Talents/inventory6/Name=Loadout
+Talents/inventory6/Description=Enables a 6th loadout slot to equip petals.
+
+Talents/inventory7/Name=Loadout
+Talents/inventory7/Description=Enables a 7th loadout slot to equip petals.
+
+Talents/inventory8/Name=Loadout
+Talents/inventory8/Description=Enables a 8th loadout slot to equip petals.
+
+Talents/inventory9/Name=Loadout
+Talents/inventory9/Description=Enables a 9th loadout slot to equip petals.
+
+Talents/inventory10/Name=Loadout
+Talents/inventory10/Description=Enables a 10th loadout slot to equip petals.
+
+Talents/health/Name=Health
+Talents/health/Description=Increases base {#Flower/Attribute/HealthNoColon} from {1:perc}% to {2:perc}%.
+
+Talents/health1/Name={#Talents/health/Name}
+Talents/health1/Description=Increases base {#Flower/Attribute/HealthNoColon} by {0:perc}%.
+
+Talents/health2/Name={#Talents/health/Name}
+Talents/health2/Description={#Talents/health/Description}
+
+Talents/health3/Name={#Talents/health/Name}
+Talents/health3/Description={#Talents/health/Description}
+
+Talents/health4/Name={#Talents/health/Name}
+Talents/health4/Description={#Talents/health/Description}
+
+Talents/health5/Name={#Talents/health/Name}
+Talents/health5/Description={#Talents/health/Description}
+
+Talents/health6/Name={#Talents/health/Name}
+Talents/health6/Description={#Talents/health/Description}
+
+Talents/health7/Name={#Talents/health/Name}
+Talents/health7/Description={#Talents/health/Description}
+
+Talents/health8/Name={#Talents/health/Name}
+Talents/health8/Description={#Talents/health/Description}
+
+Talents/health9/Name={#Talents/health/Name}
+Talents/health9/Description={#Talents/health/Description}
+
+Talents/luck/Name=Luck
+Talents/luck/Description=Increases {#Flower/Attribute/LuckNoColon} by {0:tooltip}.<n/>{#UI/Luck/Help}
+
+Talents/luck1/Name={#Talents/luck/Name}
+Talents/luck1/Description={#Talents/luck/Description}
+
+Talents/luck2/Name={#Talents/luck/Name}
+Talents/luck2/Description={#Talents/luck/Description}
+
+Talents/luck3/Name={#Talents/luck/Name}
+Talents/luck3/Description={#Talents/luck/Description}
+
+Talents/luck4/Name={#Talents/luck/Name}
+Talents/luck4/Description={#Talents/luck/Description}
+
+Talents/luck5/Name={#Talents/luck/Name}
+Talents/luck5/Description={#Talents/luck/Description}
+
+Talents/luck6/Name={#Talents/luck/Name}
+Talents/luck6/Description={#Talents/luck/Description}
+
+Talents/luck7/Name={#Talents/luck/Name}
+Talents/luck7/Description={#Talents/luck/Description}
+
+Talents/luck8/Name={#Talents/luck/Name}
+Talents/luck8/Description={#Talents/luck/Description}
+
+Talents/luck9/Name={#Talents/luck/Name}
+Talents/luck9/Description={#Talents/luck/Description}
+
+Talents/medic/Name=Medic
+Talents/medic/Description=Increases {#Flower/Attribute/HealingNoColon} from your petals from {1:perc}% to {2:perc}%.<n/>Affects allies healed by your petals.
+
+Talents/medic1/Name={#Talents/medic/Name}
+Talents/medic1/Description={#Talents/medic/Description}
+
+Talents/medic2/Name={#Talents/medic/Name}
+Talents/medic2/Description={#Talents/medic/Description}
+
+Talents/medic3/Name={#Talents/medic/Name}
+Talents/medic3/Description={#Talents/medic/Description}
+
+Talents/medic4/Name={#Talents/medic/Name}
+Talents/medic4/Description={#Talents/medic/Description}
+
+Talents/medic5/Name={#Talents/medic/Name}
+Talents/medic5/Description={#Talents/medic/Description}
+
+Talents/medic6/Name={#Talents/medic/Name}
+Talents/medic6/Description={#Talents/medic/Description}
+
+Talents/medic7/Name={#Talents/medic/Name}
+Talents/medic7/Description={#Talents/medic/Description}
+
+Talents/medic8/Name={#Talents/medic/Name}
+Talents/medic8/Description={#Talents/medic/Description}
+
+Talents/medic9/Name={#Talents/medic/Name}
+Talents/medic9/Description={#Talents/medic/Description}
+
+Talents/summoner/Name=Summoner
+Talents/summoner/Description=Increases {#Mob/Attribute/HealthNoColon} of summoned mobs from {1:perc}% to {2:perc}%.
+
+Talents/summoner1/Name={#Talents/summoner/Name}
+Talents/summoner1/Description={#Talents/summoner/Description}
+
+Talents/summoner2/Name={#Talents/summoner/Name}
+Talents/summoner2/Description={#Talents/summoner/Description}
+
+Talents/summoner3/Name={#Talents/summoner/Name}
+Talents/summoner3/Description={#Talents/summoner/Description}
+
+Talents/summoner4/Name={#Talents/summoner/Name}
+Talents/summoner4/Description={#Talents/summoner/Description}
+
+Talents/summoner5/Name={#Talents/summoner/Name}
+Talents/summoner5/Description={#Talents/summoner/Description}
+
+Talents/summoner6/Name={#Talents/summoner/Name}
+Talents/summoner6/Description={#Talents/summoner/Description}
+
+Talents/summoner7/Name={#Talents/summoner/Name}
+Talents/summoner7/Description={#Talents/summoner/Description}
+
+Talents/summoner8/Name={#Talents/summoner/Name}
+Talents/summoner8/Description={#Talents/summoner/Description}
+
+Talents/summoner9/Name={#Talents/summoner/Name}
+Talents/summoner9/Description={#Talents/summoner/Description}
+
+Talents/reload1/Name=Reload
+Talents/reload1/Description=Decreases the reload time for petals by -{0:perc}%.<n/>Decreases minimum reload time when swapping petals from {3}s to {2}s.
+
+Talents/reload2/Name=Reload
+Talents/reload2/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.<n/>Decreases minimum reload time when swapping petals from {3}s to {2}s.
+
+Talents/reload3/Name=Reload
+Talents/reload3/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.<n/>Decreases minimum reload time when swapping petals from {3}s to {2}s.
+
+Talents/reload4/Name=Reload
+Talents/reload4/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.<n/>Decreases minimum reload time when swapping petals from {3}s to {2}s.
+
+Talents/reload5/Name=Reload
+Talents/reload5/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.<n/>Decreases minimum reload time when swapping petals from {3}s to {2}s.
+
+Talents/reload6/Name=Reload
+Talents/reload6/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.
+
+Talents/reload7/Name=Reload
+Talents/reload7/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.
+
+Talents/reload8/Name=Reload
+Talents/reload8/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.
+
+Talents/reload9/Name=Reload
+Talents/reload9/Description=Decreases the reload time for petals from -{1:perc}% to -{0:perc}%.
+
+Talents/body_damage/Name=Sharp Edges
+Talents/body_damage/Description=Increases {#Flower/Attribute/BodyDamageNoColon} by {0:perc}%.
+
+Talents/body_damage1/Name={#Talents/body_damage/Name}
+Talents/body_damage1/Description={#Talents/body_damage/Description}
+
+Talents/body_damage2/Name={#Talents/body_damage/Name}
+Talents/body_damage2/Description={#Talents/body_damage/Description}
+
+Talents/body_damage3/Name={#Talents/body_damage/Name}
+Talents/body_damage3/Description={#Talents/body_damage/Description}
+
+Talents/body_damage4/Name={#Talents/body_damage/Name}
+Talents/body_damage4/Description={#Talents/body_damage/Description}
+
+Talents/body_damage5/Name={#Talents/body_damage/Name}
+Talents/body_damage5/Description={#Talents/body_damage/Description}
+
+Talents/body_damage6/Name={#Talents/body_damage/Name}
+Talents/body_damage6/Description={#Talents/body_damage/Description}
+
+Talents/body_damage7/Name={#Talents/body_damage/Name}
+Talents/body_damage7/Description={#Talents/body_damage/Description}
+
+Talents/body_damage8/Name={#Talents/body_damage/Name}
+Talents/body_damage8/Description={#Talents/body_damage/Description}
+
+Talents/petal_rotation/Name=Petal Rotation
+Talents/petal_rotation/Description=Increases petal {#Flower/Attribute/RotationSpeedNoColon} from {1:tooltip} to {0:tooltip} rad/s.
+
+Talents/petal_rotation1/Name={#Talents/petal_rotation/Name}
+Talents/petal_rotation1/Description={#Talents/petal_rotation/Description}
+
+Talents/petal_rotation2/Name={#Talents/petal_rotation/Name}
+Talents/petal_rotation2/Description={#Talents/petal_rotation/Description}
+
+Talents/petal_rotation3/Name={#Talents/petal_rotation/Name}
+Talents/petal_rotation3/Description={#Talents/petal_rotation/Description}
+
+Talents/petal_rotation4/Name={#Talents/petal_rotation/Name}
+Talents/petal_rotation4/Description={#Talents/petal_rotation/Description}
+
+Talents/petal_rotation5/Name={#Talents/petal_rotation/Name}
+Talents/petal_rotation5/Description={#Talents/petal_rotation/Description}
+
+Talents/reach/Name=Reach
+Talents/reach/Description=Increases petal {#Flower/Attribute/AttackRangeNoColon} by {0:tooltip}.
+
+Talents/reach1/Name={#Talents/reach/Name}
+Talents/reach1/Description={#Talents/reach/Description}
+
+Talents/reach2/Name={#Talents/reach/Name}
+Talents/reach2/Description={#Talents/reach/Description}
+
+Talents/reach3/Name={#Talents/reach/Name}
+Talents/reach3/Description={#Talents/reach/Description}
+
+Talents/second_chance1/Name=Second Chance
+Talents/second_chance1/Description=Prevents death for {0:tooltip}s upon taking fatal damage. Has a {1:tooltip}s cooldown.
+
+Talents/second_chance2/Name=Second Chance
+Talents/second_chance2/Description=Increases duration to {0:tooltip}s, decreases cooldown to {1:tooltip}s.
+
+Talents/magnetism/Name=Magnetism
+Talents/magnetism/Description=Increases petal pick up range by {0} while alive.
+
+Talents/body_toxicity/Name=Body Toxicity
+Talents/body_toxicity/Description=When colliding with an enemy, deals additional damage<n/>equal to {0:tooltip}x {#Flower/Attribute/BodyDamageNoColon} as {#Attribute/PoisonNoColon} over {1:tooltip}s.
+
+Talents/poison/Name=Poison
+Talents/poison/Description=Increases all {#Attribute/PoisonNoColon} damage by {0:perc}%.
+
+Talents/poison1/Name={#Talents/poison/Name}
+Talents/poison1/Description={#Talents/poison/Description}
+
+Talents/poison2/Name={#Talents/poison/Name}
+Talents/poison2/Description={#Talents/poison/Description}
+
+Talents/poison3/Name={#Talents/poison/Name}
+Talents/poison3/Description={#Talents/poison/Description}
+
+Talents/poison4/Name={#Talents/poison/Name}
+Talents/poison4/Description={#Talents/poison/Description}
+
+Talents/poison5/Name={#Talents/poison/Name}
+Talents/poison5/Description={#Talents/poison/Description}
+
+Talents/poison6/Name={#Talents/poison/Name}
+Talents/poison6/Description={#Talents/poison/Description}
+
+Talents/poison7/Name={#Talents/poison/Name}
+Talents/poison7/Description={#Talents/poison/Description}
+
+Talents/poison8/Name={#Talents/poison/Name}
+Talents/poison8/Description={#Talents/poison/Description}
+
+Talents/poison9/Name={#Talents/poison/Name}
+Talents/poison9/Description={#Talents/poison/Description}
+
+Talents/concentrated_poison/Name=Concentrated Poison
+Talents/concentrated_poison/Description=Increases {#Attribute/PoisonNoColon} damage per second by {0:perc}%.<n/>Decreases {#Attribute/PoisonNoColon} duration by {1:perc}%.
+
+Talents/duplicator/Name=Duplicator
+Talents/duplicator/Description=Adds an extra copy for petals that have at least {0:tooltip} copies.
+
+Talents/duplicator2/Name=Duplicator
+Talents/duplicator2/Description=Adds an extra copy for petals that have at least {0:tooltip} copies.
+
+Talents/duplicator3/Name=Duplicator
+Talents/duplicator3/Description=Adds an extra copy for the left-most petal in the loadout.<n/>Does not affect {#Rarities/{0}/NameColored} and {#Rarities/{1}/NameColored} petals.<n/>Does not affect <c val="{#Colors/generic}">Unstackable</c> petals.
+
+Talents/duplicator4/Name=Duplicator
+Talents/duplicator4/Description=Allows the previous talent to affect {#Rarities/{0}/NameColored} and {#Rarities/{1}/NameColored} petals.
+
+Talents/antennae1/Name=Antennae
+Talents/antennae1/Description=Increases vision range by {0:perc}%.
+
+Talents/antennae2/Name=Antennae
+Talents/antennae2/Description=Increases extra vision range from {2:perc}% to {1:perc}%.
+
+Talents/antennae3/Name=Antennae
+Talents/antennae3/Description=Increases extra vision range from {2:perc}% to {1:perc}%.
+
+Talents/petal_health/Name=Petal Health
+Talents/petal_health/Description=Increases {#Flower/Attribute/PetalHealthNoColon} from {1:perc}% to {2:perc}%.
+
+Talents/petal_health1/Name={#Talents/petal_health/Name}
+Talents/petal_health1/Description={#Talents/petal_health/Description}
+
+Talents/petal_health2/Name={#Talents/petal_health/Name}
+Talents/petal_health2/Description={#Talents/petal_health/Description}
+
+Talents/petal_health3/Name={#Talents/petal_health/Name}
+Talents/petal_health3/Description={#Talents/petal_health/Description}
+
+Talents/petal_health4/Name={#Talents/petal_health/Name}
+Talents/petal_health4/Description={#Talents/petal_health/Description}
+
+Talents/petal_health5/Name={#Talents/petal_health/Name}
+Talents/petal_health5/Description={#Talents/petal_health/Description}
+
+Talents/petal_health6/Name={#Talents/petal_health/Name}
+Talents/petal_health6/Description={#Talents/petal_health/Description}
+
+Talents/petal_health7/Name={#Talents/petal_health/Name}
+Talents/petal_health7/Description={#Talents/petal_health/Description}
+
+Talents/petal_health8/Name={#Talents/petal_health/Name}
+Talents/petal_health8/Description={#Talents/petal_health/Description}
+
+Talents/petal_health9/Name={#Talents/petal_health/Name}
+Talents/petal_health9/Description={#Talents/petal_health/Description}

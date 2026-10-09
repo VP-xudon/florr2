@@ -1,0 +1,435 @@
+Achievements/0/Name=Tutorial
+Achievements/0/Description=Move a little bit.
+Achievements/0/ExtraDescription=Use your mouse to move. Your flower will automatically follow your cursor.<n/>You can change to keyboard movement in the settings menu.<n/><n/>Move a little bit to proceed.
+
+Achievements/1/Name=Tutorial
+Achievements/1/Description=Kill a mob.
+Achievements/1/ExtraDescription=Those insects are your enemies. Destroying them has a chance of dropping new petals.<n/><n/>Find one and destroy it.<n/>You might find helpful to hold down your left mouse button to extend your petals.
+
+Achievements/2/Name=Tutorial
+Achievements/2/Description=Collect a petal.
+Achievements/2/ExtraDescription=Keep destroying enemies until they drop a petal, then get close to the petal to collect it.
+
+Achievements/3/Name=Tutorial
+Achievements/3/Description=Equip a petal.
+Achievements/3/ExtraDescription=If you have space in your loadout when you collect a petal, it'll go there, otherwise it'll go to your inventory.<n/>Click the petal you just collected to equip it (or use the numeric hotkey for it).
+
+# Disabled
+Achievements/4/Name=Tutorial
+Achievements/4/Description=Collect more petals.
+Achievements/4/ExtraDescription=For the next step, we'll need a lot of petals.<n/>Keep destroying enemies and collecting petals.
+
+Achievements/5/Name=Tutorial
+Achievements/5/Description=Get to level {0}.
+Achievements/5/ExtraDescription=To level up, just keep destroying some insects.
+
+Achievements/6/Name=Tutorial
+Achievements/6/Description=Use your talent point.
+Achievements/6/ExtraDescription=Use this new talent point you got to unlock any talent.<n/><n/>Remember you need to click and HOLD to upgrade a talent.
+
+Achievements/7/Name=Tutorial
+Achievements/7/Description=Collect some petals.
+Achievements/7/ExtraDescription=Now we need to collect {0} of the same {#Rarities/{1}/NameColored} petal to craft {#Rarities/{2}/Article} {#Rarities/{2}/NameColored} petal.<n/>Keep destroying some insects to collect a couple more petals.
+
+Achievements/8/Name=Tutorial
+Achievements/8/Description=Craft a petal.
+Achievements/8/ExtraDescription=Now try to craft your first petal.<n/>Note that you might need to unequip some petals to have enough to do this craft.<n/>You need 5 of the same petal.<n/><n/>Don't worry, we loaded the dice for this one, it will succeed.
+
+Achievements/9/Name=Tutorial
+Achievements/9/Description=Complete the tutorial.
+
+Achievements/10/Name=Crafter
+Achievements/10/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/11/Name=Crafter
+Achievements/11/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/12/Name=Crafter
+Achievements/12/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/13/Name=Crafter
+Achievements/13/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/14/Name=Crafter
+Achievements/14/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/15/Name=Crafter
+Achievements/15/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/16/Name=Crafter
+Achievements/16/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name} petal.
+
+Achievements/17/Name=Consolation prize
+Achievements/17/Description=Fail to craft a petal and lose {0} petals.
+
+Achievements/18/Name=Consolation prize
+Achievements/18/Description=Fail to craft {#Rarities/{1}/Article} {#Rarities/{1}/Name} petal and lose {0} petals.
+
+Achievements/19/Name=Consolation prize
+Achievements/19/Description=Fail to craft {#Rarities/{1}/Article} {#Rarities/{1}/Name} petal and lose {0} petals.
+
+Achievements/20/Name=Digger
+Achievements/20/Description=Equip a {#Petals/cutter/Name}.
+
+Achievements/21/Name=Growing up
+Achievements/21/Description=Reach Level {0}.
+
+Achievements/22/Name=Growing up
+Achievements/22/Description=Reach Level {0}.
+
+Achievements/23/Name=Growing up
+Achievements/23/Description=Reach Level {0}.
+
+Achievements/24/Name=Growing up
+Achievements/24/Description=Reach Level {0}.
+
+Achievements/25/Name=Growing up
+Achievements/25/Description=Reach Level {0}.
+
+Achievements/26/Name=Growing up
+Achievements/26/Description=Reach Level {0}.
+
+Achievements/27/Name=Growing up
+Achievements/27/Description=Reach Level {0}.
+
+Achievements/28/Name=Wasteful Crafting
+Achievements/28/Description=Destroy {0:short} petals in crafting attempts.
+
+Achievements/29/Name=High volume crafter
+Achievements/29/Description=Craft {0:short} petals.
+
+Achievements/30/Name=Desert
+Achievements/30/Description=Visit the desert.
+
+Achievements/31/Name=Ocean
+Achievements/31/Description=Visit the ocean.
+
+Achievements/32/Name=Welcome to the Jungle
+Achievements/32/Description=Visit the jungle.
+
+Achievements/33/Name=Ant Hell
+Achievements/33/Description=Find out where all these pesky ants keep coming from.
+
+Achievements/34/Name=Sewers
+Achievements/34/Description=Find out where that pipe goes.
+
+Achievements/35/Name=Conqueror
+Achievements/35/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/36/Name=Conqueror
+Achievements/36/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/37/Name=Conqueror
+Achievements/37/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/38/Name=Conqueror
+Achievements/38/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/39/Name=Conqueror
+Achievements/39/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/40/Name=Conqueror
+Achievements/40/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/41/Name=Conqueror
+Achievements/41/Description=Defeat your first {#Rarities/{0}/Name} mob.
+
+Achievements/42/Name=Go to WHERE?!
+Achievements/42/Description=Visit the other plane.
+
+Achievements/43/Name=Challenger
+Achievements/43/Description=Complete a challenge.
+
+Achievements/44/Name=Challenger
+Achievements/44/Description=Complete {0} challenges.
+
+Achievements/45/Name=Challenger
+Achievements/45/Description=Complete {0} challenges.
+
+Achievements/46/Name=Challenger
+Achievements/46/Description=Complete {0} challenges.
+
+Achievements/47/Name=Gear Up
+Achievements/47/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/48/Name=Gear Up
+Achievements/48/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/49/Name=Gear Up
+Achievements/49/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/50/Name=Gear Up
+Achievements/50/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/51/Name=Gear Up
+Achievements/51/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/52/Name=Gear Up
+Achievements/52/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/53/Name=Gear Up
+Achievements/53/Description=Equip {1} {#Rarities/{0}/Name} petals.
+
+Achievements/54/Name=Summoner
+Achievements/54/Description=Spawn a friendly mob.
+
+Achievements/55/Name=Summoner
+Achievements/55/Description=Spawn {0} friendly mobs.
+
+Achievements/56/Name=Summoner
+Achievements/56/Description=Spawn {0} friendly mobs.
+
+Achievements/57/Name=Summoner
+Achievements/57/Description=Spawn {0} friendly mobs.
+
+Achievements/58/Name=Shiny!
+Achievements/58/Description=Destroy a shiny Ladybug
+
+Achievements/59/Name=Wrong game
+Achievements/59/Description=Destroy a Square
+
+Achievements/60/Name=Pain dealer
+Achievements/60/Description=Deal {0:short} damage.
+
+Achievements/61/Name=Pain dealer
+Achievements/61/Description=Deal {0:short} damage.
+
+Achievements/62/Name=Pain dealer
+Achievements/62/Description=Deal {0:short} damage.
+
+Achievements/63/Name=One-hit KO
+Achievements/63/Description=Destroy {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob in one hit.
+
+Achievements/64/Name=One-hit KO
+Achievements/64/Description=Destroy {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob in one hit.
+
+Achievements/65/Name=One-hit KO
+Achievements/65/Description=Destroy {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob in one hit.
+
+Achievements/66/Name=One-hit KO
+Achievements/66/Description=Destroy {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob in one hit.
+
+Achievements/67/Name=One-hit KO
+Achievements/67/Description=Destroy {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob in one hit.
+
+Achievements/68/Name=Getting tanned
+Achievements/68/Description=Survive {0:time} in Hel.
+
+Achievements/69/Name=Skill issue
+Achievements/69/Description=Find the dead dev flower.
+
+Achievements/70/Name=Termites...?
+Achievements/70/Description=Spawn a friendly Termite.
+
+Achievements/71/Name=Pacifist
+Achievements/71/Description=Spend {0:time} admiring nature without destroying anything.
+
+Achievements/72/Name=Be gone
+Achievements/72/Description=Send a flower to Hel.
+
+Achievements/73/Name=Be gone
+Achievements/73/Description=Send {0} flowers to Hel.
+
+Achievements/74/Name=Saved
+Achievements/74/Description=Get revived.
+
+Achievements/75/Name=Savior
+Achievements/75/Description=Revive a flower.
+
+Achievements/76/Name=Savior
+Achievements/76/Description=Revive {0} flowers.
+
+Achievements/77/Name=All-seeing
+Achievements/77/Description=Equip {#Petals/{0}/Name}.
+
+Achievements/78/Name=Return to sender
+Achievements/78/Description=Hit a mob with {#Petals/{0}/Name}.
+
+Achievements/79/Name=Homewrecker
+Achievements/79/Description=Destroy an {#Mobs/{1}/Name}, {#Mobs/{2}/Name} or {#Mobs/{3}/Name}.
+
+Achievements/80/Name=Homewrecker
+Achievements/80/Description=Destroy {0} {#Mobs/{1}/Name}s, {#Mobs/{2}/Name}s or {#Mobs/{3}/Name}s.
+
+Achievements/81/Name=Bad
+Achievements/81/Description=Die.
+
+Achievements/82/Name=Bad
+Achievements/82/Description=Die {0} times.
+
+Achievements/83/Name=Bad
+Achievements/83/Description=Die {0} times.
+
+Achievements/84/Name=Serial killer
+Achievements/84/Description=Destroy {0} mobs within {1:time} of each other.
+
+Achievements/85/Name=Unkillable
+Achievements/85/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/86/Name=Unkillable
+Achievements/86/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/87/Name=Unkillable
+Achievements/87/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/88/Name=Unkillable
+Achievements/88/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/89/Name=Unkillable
+Achievements/89/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/90/Name=Unkillable
+Achievements/90/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/91/Name=Unkillable
+Achievements/91/Description=Destroy {0} {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/92/Name=You're the dummy
+Achievements/92/Description=Die to a {#Mobs/{0}/Name}.
+
+Achievements/93/Name=Genocide
+Achievements/93/Description=Destroy {0} mobs within {1:time}.
+
+Achievements/94/Name=Rolling in dough
+Achievements/94/Description=Acquire {0} drops within {1:time}.
+
+Achievements/95/Name=Shiny Hunter
+Achievements/95/Description=Destroy {0} shiny Ladybugs within {1:time}.
+
+Achievements/96/Name=Super Hunter
+Achievements/96/Description=Destroy {0} {#Rarities/{1}/Name} mobs.
+
+Achievements/97/Name=Sacrifice
+Achievements/97/Description=Die within {0:time} of reviving someone.
+
+Achievements/98/Name=Useless
+Achievements/98/Description=Get kill credit for a mob without dealing any damage to it.
+
+Achievements/99/Name=Useless
+Achievements/99/Description=Get kill credit for {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob without dealing any damage to it.
+
+Achievements/100/Name=The lucky one
+Achievements/100/Description=Successfully craft {0} petals in a row.
+
+Achievements/101/Name=The unlucky one
+Achievements/101/Description=Fail to craft {0} petals in a row.
+
+Achievements/102/Name=Paper
+Achievements/102/Description=Die to a damage instance higher than your max hp.
+
+Achievements/103/Name=Statue
+Achievements/103/Description=Spawn then kill {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob without moving.
+
+Achievements/104/Name=Statue
+Achievements/104/Description=Spawn then kill {#Rarities/{0}/Article} {#Rarities/{0}/Name} mob without moving.
+
+Achievements/105/Name=Breathe in, breathe out
+Achievements/105/Description=Equip and unequip {#Petals/{0}/Name} many times
+
+Achievements/106/Name=Sound barrier
+Achievements/106/Description=Move really fast.
+
+Achievements/107/Name=Sound barrier
+Achievements/107/Description=Move even faster.
+
+Achievements/108/Name=Biologist
+Achievements/108/Description=Destroy {0} different types of mobs without dying.
+
+Achievements/109/Name=Collector
+Achievements/109/Description=Collect {0} different types of petals without dying.
+
+Achievements/110/Name=Touch grass
+Achievements/110/Description=Don't play the game for {0:time}.
+
+Achievements/111/Name=Racecar
+Achievements/111/Description=Visit Garden, Desert, Jungle, Ocean, then get back to Garden in less than {0:time}.
+
+Achievements/112/Name=Racecar
+Achievements/112/Description=Visit Garden, Desert, Jungle, Ocean, then get back to Garden in less than {0:time}.
+
+Achievements/113/Name=Racecar
+Achievements/113/Description=Visit Garden, Desert, Jungle, Ocean, then get back to Garden in less than {0:time}.
+
+Achievements/114/Name=Racecar
+Achievements/114/Description=Visit Garden, Desert, Jungle, Ocean, then get back to Garden in less than {0:time}.
+
+Achievements/115/Name=Biologist
+Achievements/115/Description=Destroy {0} different types of {#Rarities/{1}/Name}+ mobs without dying.
+
+Achievements/116/Name=Bad in every way
+Achievements/116/Description=Die to {0} different types of mobs.
+
+Achievements/117/Name=Bad in every way
+Achievements/117/Description=Die to {0} different types of mobs.
+
+Achievements/118/Name=Bad in every way
+Achievements/118/Description=Die to {0} different types of mobs.
+
+Achievements/119/Name=Touched
+Achievements/119/Description=Touch the developer.
+
+Achievements/120/Name=Evasive
+Achievements/120/Description=Evade {0:short} damage.
+
+Achievements/121/Name=Evasive
+Achievements/121/Description=Evade {0:short} damage.
+
+Achievements/122/Name=Evasive
+Achievements/122/Description=Evade {0:short} damage.
+
+Achievements/123/Name=Devil's advocate
+Achievements/123/Description=While in Hel, destroy {0} flowers without dying.
+
+Achievements/124/Name=Hater
+Achievements/124/Description=Destroy {0} of the same type of mob in a row without dying.
+
+Achievements/125/Name=Hater
+Achievements/125/Description=Destroy {0} of the same type of {#Rarities/{1}/Name}+ mob in a row without dying.
+
+Achievements/126/Name=Hater
+Achievements/126/Description=Destroy {0} of the same type of {#Rarities/{1}/Name}+ mob in a row without dying.
+
+Achievements/127/Name=Hater
+Achievements/127/Description=Destroy {0} of the same type of {#Rarities/{1}/Name}+ mob in a row without dying.
+
+Achievements/128/Name=Revenge
+Achievements/128/Description=Destroy the mob that killed you.
+
+Achievements/129/Name=Revenge
+Achievements/129/Description=Destroy the mob that killed you within {0:time} of your death.
+
+Achievements/130/Name=Trade
+Achievements/130/Description=Acquire a {#Petals/{0:base}/Name} through trade.
+
+Achievements/131/Name=Trade
+Achievements/131/Description=Acquire {#Rarities/{0:rarity}/Article} {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/Name} through trade.
+
+Achievements/132/Name=Trade
+Achievements/132/Description=Acquire {#Rarities/{0:rarity}/Article} {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/Name} through trade.
+
+Achievements/133/Name=Gambler
+Achievements/133/Description=Insert {0} Chips into Plinko.
+
+Achievements/134/Name=JACKPOT!
+Achievements/134/Description=Hit the Jackpot in Plinko.
+
+Achievements/135/Name=High roller
+Achievements/135/Description=Insert {#Rarities/{0:rarity}/Article} {#Rarities/{0:rarity}/Name}+ {#Petals/{0:base}/Name} in Plinko.
+
+Achievements/136/Name=The all-seeing one
+Achievements/136/Description=Craft a petal using the Oracle.
+
+Achievements/137/Name=It was destiny
+Achievements/137/Description=Craft {#Rarities/{0}/Article} {#Rarities/{0}/Name}+ petal using the Oracle.
+
+Achievements/138/Name=Magician
+Achievements/138/Description=Equip an {#Petals/{0}/Name}.
+
+Achievements/139/Name=I'm feeling lucky
+Achievements/139/Description=Get an extra drop due to a {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/Name}.
+
+Achievements/140/Name=Blood Sacrifice
+Achievements/140/Description=Perform a Blood Sacrifice.
+
+Achievements/141/Name=Consolation prize
+Achievements/141/Description=Fail to craft {#Rarities/{1}/Article} {#Rarities/{1}/Name} petal and lose {0} petals.

@@ -1,0 +1,249 @@
+Mobs/AnnouncementPrefix={#Rarities/{0:rarity}/ArticleUpper} {#Rarities/{0:rarity}/Name} {#Mobs/{0:base}/Name}
+Petals/AnnouncementPrefix={#Rarities/{0:rarity}/ArticleUpper} {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName}
+
+Chat/PetalCraftedUnnamed={#Chat/PetalCraftedUnnamed/{0:rarity}#Chat/PetalCraftedUnnamed/default}
+Chat/PetalCraftedNamed={#Chat/PetalCraftedNamed/{0:rarity}#Chat/PetalCraftedNamed/default}
+Chat/PetalCraftedUnnamed/unique=The {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName} has been forged!
+Chat/PetalCraftedNamed/unique=The {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName} has been forged by {1}!
+Chat/PetalCraftedUnnamed/default={#Petals/AnnouncementPrefix:0} has been crafted!
+Chat/PetalCraftedNamed/default={#Petals/AnnouncementPrefix:0} has been crafted by {1}!
+
+Chat/PetalFoundUnnamed={#Chat/PetalFoundUnnamed/{0:base}#Chat/PetalFoundUnnamed/generic}
+Chat/PetalFoundNamed={#Chat/PetalFoundNamed/{0:base}#Chat/PetalFoundNamed/generic}
+Chat/PetalFoundUnnamed/generic={#Petals/AnnouncementPrefix:0} has been found!
+Chat/PetalFoundNamed/generic={#Petals/AnnouncementPrefix:0} has been found by {1}!
+
+Chat/PetalFoundUnnamed/pharaoh_crown=The {#Petals/{0:base}/FullName} has been stolen!
+Chat/PetalFoundNamed/pharaoh_crown=The {#Petals/{0:base}/FullName} has been stolen by {1}!
+
+Chat/PetalFoundUnnamed/champion_crown=The {#Petals/{0:base}/FullName} has been taken!
+Chat/PetalFoundNamed/champion_crown=The {#Petals/{0:base}/FullName} has been taken by {1}!
+
+Chat/MobSpawnedHere={#Chat/MobSpawnedHere/Special/{1}#Mobs/{0:base}/Spawn#Chat/MobSpawnedHere/Text}
+Chat/MobSpawnedSomewhere={#Chat/MobSpawnedSomewhere/Special/{1}#Mobs/{0:base}/Spawn#Chat/MobSpawnedSomewhere/Text}
+
+Chat/MobSpawnedHere/Text={#Mobs/AnnouncementPrefix:0} has spawned!
+Chat/MobSpawnedSomewhere/Text={#Mobs/AnnouncementPrefix:0} has spawned somewhere!
+
+Chat/MobSpawnedHere/Special/sacrifice={#Mobs/AnnouncementPrefix:0} has been summoned!
+Chat/MobSpawnedSomewhere/Special/sacrifice={#Mobs/AnnouncementPrefix:0} has been summoned somewhere!
+
+Chat/MobDefeated={#Chat/MobDefeated/{1}}
+Chat/MobDefeated/0={#Mobs/AnnouncementPrefix:0} has been defeated!
+Chat/MobDefeated/1={#Mobs/AnnouncementPrefix:0} has been defeated by {2}!
+Chat/MobDefeated/2={#Mobs/AnnouncementPrefix:0} has been defeated by {2} and {3}!
+Chat/MobDefeated/3={#Mobs/AnnouncementPrefix:0} has been defeated by {2}, {3} and {4}!
+Chat/MobDefeated/4={#Mobs/AnnouncementPrefix:0} has been defeated by {2}, {3}, {4} and {5}!
+
+Chat/Rift/Opened=A mysterious rift has opened!
+
+Chat/Revived=You were revived by {0}.
+Chat/Marked=You were marked by {0}.
+
+Chat/Muted=You are not allowed to chat right now because of past inappropriate messages.<n/>You'll be able to chat again in {0:time}.
+Chat/Muted/Message=I have previously said things which I regret. Now I ponder in silence.
+Chat/Spam=You're doing that too much.
+Chat/Alone=No one is around to hear you.
+Chat/Banned=You're currently banned so you will not be able to play.
+Chat/NegativeStars=Your payment for stars was reversed, you cannot play while your balance is negative.
+Chat/BadChannel=You can't do that
+Chat/SquadChannelNotInSquad=Not in a squad.
+Chat/GuildChannelNotInGuild=Not in a guild.
+Chat/GuildChannelDisabled=You have guild chat disabled.
+Chat/GuestTooChatty=Sorry, guest accounts have limited chat privileges until they're level {0}.
+Chat/PlayerReported=Player reported.
+Chat/PlayerBlocked={0} has been blocked.
+Chat/ServerClosing=This server is scheduled to close in {0:time}.
+Chat/ServerClosed=Server is closed, time to leave.
+Chat/ServerNoLongerClosing=Server is no longer scheduled to close.
+Chat/MatchEnding=This match ends in {0:time}.
+Chat/MatchEnded=Match is over. Good-bye.
+Chat/MatchWinner={0} is the winner of the match.
+
+Chat/DamageDone/Self=You dealt {0:short} damage to the {#Rarities/{1:rarity}/Name} {#Mobs/{1:base}/Name}.
+
+Chat/Squad/Created=Squad created.
+Chat/Squad/Joined=Joined squad.
+Chat/Squad/Left=Left squad.
+Chat/Squad/MemberJoined={0} has joined the squad.
+Chat/Squad/MemberLeft={0} has left the squad.
+Chat/Squad/InviteSent=You invited {0} to the squad.
+
+Chat/Squad/Error/InviteExpired=Invite expired or squad no longer exists.
+Chat/Squad/Error/NotAllowed=Squads not allowed in this mode.
+Chat/Squad/Error/Spam=You're doing that too much.
+Chat/Squad/Error/DoesNotExist=Squad does not exist.
+Chat/Squad/Error/CannotJoin=You can't join this squad.
+Chat/Squad/Error/LevelDifference=Your level isn't close enough to the squad level.
+Chat/Squad/Error/Full=Squad is full.
+Chat/Squad/Error/PendingInvite=Player already has a pending invite.
+Chat/Squad/Error/AlreadyHasSquad=Player is already in a squad.
+Chat/Squad/Error/WrongTeam=You cannot invite players from a different team.
+Chat/Squad/Error/SplittedCannotSquad=Only a whole flower can be part of a squad.
+Chat/Squad/Error/CannotInviteSplitted=You cannot invite less than a whole flower to a squad.
+
+Chat/Channel/Local=Local
+Chat/Channel/Squad=Squad
+Chat/Channel/Guild=Guild
+Chat/Channel/Whisper=Whisper
+Chat/Channel/WhisperTo=@{0}
+Chat/Channel/Map=Map
+Chat/Channel/Global=Global
+
+Chat/Guild/PlayerJoined={0} has joined the guild.
+Chat/Guild/PlayerLeft={0} has left the guild.
+Chat/Guild/NewLeader={0} is the new guild leader!
+Chat/Guild/Invited=You've been invited to join the guild "{0}". Open the guild menu to accept.
+Chat/Guild/Created=Guild created.
+Chat/Guild/Left=You've left the guild.
+Chat/Guild/InviteSent=Invite sent.
+Chat/Guild/LeadershipTransferred=Leadership transferred.
+Chat/Guild/Welcome=Welcome to the guild.
+Chat/Guild/Kicked=Player kicked.
+Chat/Guild/MOTDUpdated=MOTD updated.
+
+Chat/CommandError/NoAvailableChannels=All chat channels are disabled.
+Chat/CommandError/MessageTooLong=Message too long.
+Chat/CommandError/Invalid=Invalid command, type /help to list all commands.
+Chat/CommandError/SpaceError=There can be no space after the /.
+Chat/CommandError/EmptyMessage=Message cannot be empty.
+Chat/CommandError/InvalidNumArguments=Invalid number of arguments.
+Chat/CommandError/VeryInvalidSquadCode=That doesn't look like a squad code.
+Chat/CommandError/BlockedPlayerNotFound=No such player is on your block list.
+Chat/CommandError/NoBlockedPlayers=No players are currently blocked.
+Chat/CommandError/BlockListCleared=Removed {0} players from block list.
+Chat/CommandError/NotInSquad=Not in a squad.
+Chat/CommandError/MustHaveFlower=Must have a flower to do this.
+Chat/CommandError/NoFlowersClose=No flowers close enough to you.
+Chat/CommandError/InvalidValue=Invalid value.
+Chat/CommandError/InvalidBooleanArgument=Boolean argument must be y or n.
+Chat/CommandError/InvalidNumberArgument=Number argument must be a valid number.
+Chat/CommandError/InvalidMobTypeArgument=Invalid mob type.
+Chat/CommandError/InvalidMobRarityArgument=Invalid mob rarity.
+Chat/CommandError/InvalidMap=Invalid map.
+Chat/CommandError/AccountNotLoaded=Account not loaded.
+Chat/CommandError/TargetEmpty=Target can't be empty.
+Chat/CommandError/TargetSelf=Can't target yourself.
+Chat/CommandError/TargetDisconnected=Target disconnected.
+Chat/CommandError/TargetNotFound=Target not found.
+Chat/CommandError/TargetMustHaveFlower=Target doesn't have a flower.
+Chat/CommandError/InternalError=Internal error.
+Chat/CommandError/InvalidPetalArgument=Invalid petal id.
+Chat/CommandError/InvalidWhisperTarget=Invalid target.
+Chat/CommandError/WhisperTargetNotFound=Target not found.
+Chat/CommandError/WhisperTargetNotConnected=Target not connected or not accepting whispers.
+Chat/CommandError/WhisperSelf=You can keep those thoughts in your head.
+Chat/CommandError/GuestsCannotSendWhispers=Guests cannot send whispers.
+Chat/CommandError/GuestsCannotReceiveWhispers=Guests cannot receive whispers.
+Chat/CommandError/WhispersDisabled=You cannot send whispers if you have whispers disabled in the settings.
+Chat/CommandError/NotInGuild=You're not in a guild.
+Chat/CommandError/MustHaveNameToJoinGuild=You must have a name to join a guild.
+Chat/CommandError/SquadsNotAllowedInThisMode=Squads are not allowed in this mode.
+Chat/CommandError/SquadFull=Your squad is full.
+Chat/CommandError/AlreadyInGuild=You're already in a guild.
+Chat/CommandError/MustHaveNameToCreateGuild=You must have a name to be able to create guilds.
+Chat/CommandError/MustLevelToCreateGuild=You must be at least level {0} to be able to create guilds.
+Chat/CommandError/InvalidGuildName=Invalid guild name.
+Chat/CommandError/InvalidGuildTag=Invalid guild tag.
+Chat/CommandError/GuildTagAlreadyInUse=Guild tag is already in use.
+Chat/CommandError/GuildCreateFailed=Failed to create guild.
+Chat/CommandError/CannotLeaveGuildAsLeader=You cannot leave your guild if you're the leader, transfer it first.
+Chat/CommandError/MustBeLeaderToDoThat=You must be the leader to do that.
+Chat/CommandError/MustBeLeaderToInvite=You must be the leader to invite others.
+Chat/CommandError/GuildFull=Guild is full.
+Chat/CommandError/PlayerAlreadyInGuild=Player already has a guild.
+Chat/CommandError/PlayerHasPendingGuildInvite=This player already has a pending guild invite.
+Chat/CommandError/GuildInviteExpired=Invite has already expired.
+Chat/CommandError/GuildCannotKickSelf=You can't kick yourself.
+Chat/CommandError/BothInSquadsAlready=You and that player are both in squads already.
+Chat/CommandError/OtherPlayerSquadFull=That player's squad is full.
+Chat/CommandError/SquadIncompatibleLevels=Your level isn't compatible enough with theirs to squad.
+
+Chat/Oracle/Idle={#Chat/Oracle/Idle/{!math:{0}:%:41}}
+Chat/Oracle/Idle/0=I can see the future
+Chat/Oracle/Idle/1=We can make a fair exchange
+Chat/Oracle/Idle/2=If not now, when?
+Chat/Oracle/Idle/3=The Oracle sees all
+Chat/Oracle/Idle/4=Let if be all that we see or seem
+Chat/Oracle/Idle/5=So many paths to choose
+Chat/Oracle/Idle/6=Beware what you wish for
+Chat/Oracle/Idle/7=Can one ever be sure?
+Chat/Oracle/Idle/8=If that is what one wants
+Chat/Oracle/Idle/9=And what if I do?
+Chat/Oracle/Idle/10=And what if I don't?
+Chat/Oracle/Idle/11=Ho ho! Imagine the outcome
+Chat/Oracle/Idle/12=It is ever thus
+Chat/Oracle/Idle/13=That is one possible course
+Chat/Oracle/Idle/14=There are no guarantees
+Chat/Oracle/Idle/15=So many destinies
+Chat/Oracle/Idle/16=Interpret this!
+Chat/Oracle/Idle/17=Choose wisely
+Chat/Oracle/Idle/18=Do not fear to commit
+Chat/Oracle/Idle/19=Commit! Or don't
+Chat/Oracle/Idle/20=Don't mind me
+Chat/Oracle/Idle/21=I scry with my little eye
+Chat/Oracle/Idle/22=If is not a word I use lightly
+Chat/Oracle/Idle/23=If only it were all this simple
+Chat/Oracle/Idle/24=Beware of stairs
+Chat/Oracle/Idle/25=You will die in a house fire
+Chat/Oracle/Idle/26=I see you dying of extreme old age. Or perhaps a very old person will kill you. One or the other
+Chat/Oracle/Idle/27=This prophecy supersedes all previous prophecies
+Chat/Oracle/Idle/28=Ignore all previous prophecies
+Chat/Oracle/Idle/29=I have a prophecy to deliver
+Chat/Oracle/Idle/30=Ignore all prior utterances
+Chat/Oracle/Idle/31=Prepare for unforeseen consequences
+Chat/Oracle/Idle/32=Some fates are indeterminate
+Chat/Oracle/Idle/33=I appear to be suffering from a blind spot
+Chat/Oracle/Idle/34=A vague anomaly when one considers this particular future. Troubling
+Chat/Oracle/Idle/35=Fate cannot be denied
+Chat/Oracle/Idle/36=Some futures cannot be bought
+Chat/Oracle/Idle/37=The cost of certainty
+Chat/Oracle/Idle/38=Again, again, and once again
+Chat/Oracle/Idle/39=Precisely as planned
+Chat/Oracle/Idle/40=I cannot be held responsible for all the outcomes
+
+# When a Super/Unique petal is about to be crafted
+Chat/Oracle/Prediction={#Chat/Oracle/Prediction/{!math:{0}:%:3}}
+Chat/Oracle/Prediction/0=Ah yes, the prophecy... it should happen any time now...
+Chat/Oracle/Prediction/1=It was foretold, this is the moment...
+Chat/Oracle/Prediction/2=I was waiting for this moment...
+
+Chat/Oracle/ShopPrediction/No=The future is too cloudy to tell
+Chat/Oracle/ShopPrediction/Distance0=It is imminent
+Chat/Oracle/ShopPrediction/Distance1=Soon
+Chat/Oracle/ShopPrediction/Distance2=Eventually
+Chat/Oracle/ShopPrediction/Distance3=Perhaps some futures are just indeterminate
+Chat/Oracle/ShopPrediction/Request=Oracle, oracle, make me a prediction about {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName}
+
+# Target dummy says these 4 lines 1 second apart after getting damaged a lot
+Chat/TargetDummy/Damaged/1=Ouch
+Chat/TargetDummy/Damaged/2=I mean
+Chat/TargetDummy/Damaged/3=Beep boop
+Chat/TargetDummy/Damaged/4=I'm a robot
+
+Chat/Gambler/Idle={#Chat/Gambler/Idle/{!math:{0}:%:10}}
+Chat/Gambler/Idle/0=I LOVE GAMBLING
+Chat/Gambler/Idle/1=Where are the blackjack tables?
+Chat/Gambler/Idle/2=Where are the slots?
+Chat/Gambler/Idle/3=99% of gamblers quit just before they win big
+Chat/Gambler/Idle/4=Just one more game...
+Chat/Gambler/Idle/5=I'M ALL IN
+Chat/Gambler/Idle/6=I'm feeling lucky
+Chat/Gambler/Idle/7=Thirty-seventh time's the charm
+Chat/Gambler/Idle/8=Double or nothing?
+Chat/Gambler/Idle/9=Winner winner!
+
+Chat/Titan/Idle={#Chat/Titan/Idle/{!math:{0}:%:8}}
+Chat/Titan/Idle/0=There can be only one
+Chat/Titan/Idle/1=I was the hammer at the Founding
+Chat/Titan/Idle/2=What is weak must break
+Chat/Titan/Idle/3=The forge of creation burns hotter
+Chat/Titan/Idle/4=The Worldsmith wanders
+Chat/Titan/Idle/5=Formed of the forge
+Chat/Titan/Idle/6=As the Shaper wills
+Chat/Titan/Idle/7=I stride the terrene plane
+
+Chat/Trader/Idle={#Chat/Trader/Idle/{!math:{0}:%:3}}
+Chat/Trader/Idle/0=May I interest you in a little trade?
+Chat/Trader/Idle/1=I'm looking to expand my collection...
+Chat/Trader/Idle/2=I have the coin, if you have wares

@@ -1,0 +1,73 @@
+UI/Chat/CommandHelp=/{0} {#Chat/Command/{0}/Args} - {#Chat/Command/{0}/Description}
+
+Chat/Command/help/Args=[cmd]
+Chat/Command/help/Description=List all commands or list help for a specific command
+
+Chat/Command/guild/Args=<message>
+Chat/Command/guild/Description=Sends a message only to other guild members
+
+Chat/Command/guild-create/Args=<name> <tag>
+Chat/Command/guild-create/Description=Creates a new guild. Name must be 3-13 chars. Tag must be 2-4 chars
+
+Chat/Command/guild-invite/Args=<name>
+Chat/Command/guild-invite/Description=Invites player to guild. Must be the leader. Player must be near you
+
+Chat/Command/guild-transfer-leader/Args=<target>
+Chat/Command/guild-transfer-leader/Description=Transfer guild leadership to someone else
+
+Chat/Command/guild-motd/Args=<text>
+Chat/Command/guild-motd/Description=Sets the guild MOTD
+
+Chat/Command/squad/Args=<message>
+Chat/Command/squad/Description=Sends a message only to other squad members
+
+Chat/Command/squad-create/Args=
+Chat/Command/squad-create/Description=Creates a squad
+
+Chat/Command/squad-invite/Args=<target>
+Chat/Command/squad-invite/Description=Invite the target player to the squad
+
+Chat/Command/squad-leave/Args=
+Chat/Command/squad-leave/Description=Leaves squad
+
+Chat/Command/squad-find-public/Args=
+Chat/Command/squad-find-public/Description=Joins a random public squad
+
+Chat/Command/squad-public/Args=
+Chat/Command/squad-public/Description=Make squad public
+
+Chat/Command/squad-private/Args=
+Chat/Command/squad-private/Description=Make squad private
+
+Chat/Command/whisper/Args=<target> <message>
+Chat/Command/whisper/Description=Sends a message to a specific player
+
+Chat/Command/w/Args={#Chat/Command/whisper/Args}
+Chat/Command/w/Description={#Chat/Command/whisper/Description}
+
+Chat/Command/reply/Args=<message>
+Chat/Command/reply/Description=Reply to the latest received whisper
+
+Chat/Command/r/Args={#Chat/Command/reply/Args}
+Chat/Command/r/Description={#Chat/Command/reply/Description}
+
+Chat/Command/local/Args=<message>
+Chat/Command/local/Description=Sends a message only to people around you
+
+Chat/Command/map/Args=<message>
+Chat/Command/map/Description=Sends a map message
+
+Chat/Command/global/Args=<message>
+Chat/Command/global/Description=Sends a global message
+
+Chat/Command/unblock/Args=<name>
+Chat/Command/unblock/Description=Remove someone from your block list
+
+Chat/Command/unblock-all/Args=
+Chat/Command/unblock-all/Description=Unblock everyone in your block list
+
+Chat/Command/rot-speed/Args=<value>
+Chat/Command/rot-speed/Description=Set petal rotation speed, from 0.0 to 1.0
+
+Chat/Command/print-players/Args=
+Chat/Command/print-players/Description=Lists the account id of the players near you

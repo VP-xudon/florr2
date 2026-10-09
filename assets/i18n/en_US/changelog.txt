@@ -1,0 +1,441 @@
+# The format for this file is different
+# Date on a line by itself, then all entries for that date are prefixed by a TAB character.
+
+December 21st 2025
+	- A mysterious rift has opened in the garden. It seems to take flowers back to a simpler time.
+
+November 26th 2025
+	- Unique forging mechanic has been reworked.
+	  They will now always require 5 Supers to forge, but you will permanently lose one of them when another player forges that same Unique.
+	  There's a global cooldown per petal type to prevent your petal from getting immediately stolen.
+	  The global cooldown duration depends on how often that petal is forged.
+
+November 25th 2025
+	- The game now asks for permission to view your email when you login with discord/apple. This will be used to avoid accidentally creating a new account when you already have one registered with that email. We will not send you emails.
+
+October 23rd 2025
+	- Balancing and stuff idk
+
+October 14th 2025
+	- Luck now affects mob spawns again, increasing the rarity of mobs that spawn in that area.
+
+February 23rd 2025
+	- Added Factory. There's still more things that need to be added, but it's at a point where players can start playing it.
+
+February 6th 2025
+	- Eggs now only spawn mobs when they break.
+	- Sandstorm now phases through non-flower entities (still deals damage normally).
+
+January 16th 2025
+	- Mobile now has loadouts. Hold X and you can switch loadouts by tapping the secondary petal slots. Each loadout uses the first petal in the loadout as its icon.
+	- Loading a loadout on a keyboard is done by holding L+number, or K+number for the second set of loadouts.
+	- Changed default behavior of when loadouts are saved. With auto-save enabled, they'll be saved whenever switching loadouts. If disabled, you'll need to press O to save the current loadout.
+
+January 9th 2025
+	- Slows have been reworked. Now their effectiveness will depend on mob vs petal rarity.
+	- Yggdrasil now applies a 30s cooldown on the revived flower, preventing it from being revived again during that time.
+	- Aggressive and semi-aggressive mobs will run away if attacked by an entity that it can't attack back (behind wall, underground, etc).
+	- Some death ui improvements.
+
+December 25th 2024
+	- As a little throwback, for a few days the Garden map will be something that might seem a little familiar.
+
+December 16th 2024
+	- Mana gain & cost have been reworked to scale at higher rarities.
+
+December 5th 2024
+	- A few more petals got added and stuff.
+
+June 2nd 2024
+	- Talents can now be reset for free an unlimited amount of times without delay.
+
+May 30th 2024
+	- You can now precisely control how fast/slow you want petals to rotate. Slowest is 30% of maximum speed.
+
+May 22nd 2024
+	- Respawning now clears damage credit dealt to mobs for the purposes of looting. This does not apply to getting revived.
+	- Crafting talents have been removed.
+
+May 11th 2024
+	- Some changes were made on how achievements are stored, that means a couple of achievements will have been reset. However, because of these changes, now it's guaranteed that once you've completed an achievement, it'll be kept completed even if its requirements change.
+
+May 8th 2024
+	- Level requirements have been doubled, that means your level should likely have been cut in half.
+	- Added achievements. They provide TP which will replace the ones lost from the levels you lost.
+	- More achievements will be added soon.
+
+April 21st 2024
+	- Absorbing has been removed.
+	- Salvaging talent has been removed.
+
+April 20th 2024
+	- Destroying mobs now awards experience.
+	- The ability to absorb petals will be removed in a future update.
+
+April 12th 2024
+	- Adjusted drop rates for ultra+ mobs.
+	- Some small map changes.
+
+April 3rd 2024
+	- We've added daily challenges. You will now need to destroy specific mobs each day to earn stars.
+	- Stars are no longer granted passively as you play.
+
+April 1st 2024
+	- Ads are now disabled for everyone. You will still earn stars as if you had watched them.
+
+January 17th 2024
+	- Crafting talents are now cheaper.
+	- Talent reset delay now depends on the player level (2 + level/3).
+	- Everyone's talent reset cooldown has been reset.
+
+January 14th 2024
+	- Changed keys to save/restore loadouts. L+Number loads a specific loadout, and L+Shift+Number saves the current loadout.
+
+January 11th 2024
+	- Re-enabled player collisions in most cases.
+
+January 5th 2024
+	- Ultras can now spawn anywhere other mobs can (much more likely in high rarity zones). There can still only be one Ultra of each type at a time in the realm. There's still a global per-realm timer that prevents them from respawning too often.
+	- Super mobs are no longer more likely to spawn the longer an Ultra mob has gone unkilled.
+	- Poison from different players against the same mob now stack.
+
+January 4th 2024
+	- Early-mid game progression has been adjusted significantly.
+	- Mythic- mobs should respawn a bit faster now. This should mostly affect areas that were full of players hunting them.
+	- Mobs missile health now scale like petal health instead of mob health. Their base health has been buffed to compensate.
+
+January 1st 2024
+	- Approximately doubled Ultra (but not Super) mob drops.
+	- Ultra+ spawn frequency is back to before the Dec 25th update.
+
+December 30th 2023
+	- Doubled most Ultra+ mobs HP.
+
+December 29th 2023
+	- We've added some basic guild functionality, to be expanded soon. It's currently only accessible through chat commands.
+
+December 25th 2023
+	- Ultras should now respawn twice as fast. Super chance halved so it should result in about the same frequency as before.
+
+December 13th 2023
+	- Non-passive petals are now disabled in Centralia and Ellne to prevent lag.
+
+December 9th 2023
+	- XP required to level up is now a more round number. This might make some players gain or lose levels as they will have been recalculated.
+
+December 8th 2023
+	- Skills are now called Talents.
+	- Re-enabled Luck talent.
+	- Talents can no longer be reset by sacrificing levels.
+	- Talents can now be reset for free every 30 days.
+
+December 2nd 2023
+	- We're adjusting the prices of some petals in the shop to account for their rarity properly. For the time being we're setting a 50% discount on everything.
+
+July 3rd 2023
+	- Supers are now more likely to spawn for mobs whose ultras aren't destroyed very often.
+
+June 27th 2023
+	- We're slowly adding special moves to every Ultra+ mob. So far, Sandstorm and Shell got new moves, and more to come.
+
+May 9th 2023
+	- Buffed healing by 50% (now it's about -25% from before May 1st).
+	- Ultra/Super healing & health petals now scale a bit less.
+
+May 3rd 2023
+	- Ultras now spawn about 10x more frequently, with 3-4x lower drop rate.
+
+May 1st 2023
+	- The map now has a couple new areas to explore! It's still a work in progress, some more areas coming eventually.
+	- All healing has been nerfed by 50%.
+	- Some other changes I forgor.
+
+March 17th 2023
+	- PvP is back!
+	- Entrance is located on the east side of Centralia.
+	- Arenas are divided into 3 difficulties: Common-Epic, Legendary-Mythic, Ultra-Super. You'll enter the arena corresponding to the highest rarity petal you have equipped.
+	- You cannot change your loadout inside the arena.
+
+March 3rd 2023
+	- Super mob spawns are now announced to all the players in all maps in the region.
+
+March 2nd 2023
+	- Added a new section to Centralia Fields.
+
+February 27th 2023
+	- Added a new section to Ant Hell.
+
+February 22nd 2023
+	- Drops are no longer the same for every player that contributes to destroying a mob. They're now randomly rolled for each player.
+	- We noticed an issue where the payment system was misidentifying the player's country, leading to failure to process some payments. We've enabled an option to select the payment country. We're working with our payment processor to fix it so it should identify it automatically soon.
+
+February 20th 2023
+	- Added a new section to Ant Hell.
+
+February 19th 2023
+	- Added two mobs to Centralia Sewers.
+	- Added two new petals.
+
+February 14th 2023
+	- Ultra mobs now have a 1% chance of spawning as Super mobs, even more powerful mobs with possibly amazing drops.
+	- Ultra+ mobs damage threshold to receive drops decreased from 5% to 1%. Max number of players that can receive drops increased from 4 to 15.
+	- Yggdrasil nerfed slightly, now heals for less on revive.
+	- Fixed Hornet not receiving knockback when firing missiles.
+
+February 13th 2023
+	- Accounts that have purchased stars in the premium shop no longer have to watch ads (but still gain stars as if they did).
+
+February 12th 2023
+	- Third Eye no longer stacks.
+
+February 10th 2023
+	- Added a premium shop. You can now support the game by buying petals using stars, which you can acquire with money or by watching ads.
+	- Rebalanced a couple of petals.
+	- Changed TP cost of many talents.
+	- Changed TP reward per level (now it's always 1 per level).
+	- Added a couple new talents.
+	- Everyone's talent allocation has been reset for free.
+
+January 29th 2023
+	- We've rebalanced all mobs and petals. The idea is extending the early game a little bit, as it was too easy to get legendary petals in the first hour of gameplay.
+
+January 28th 2023
+	- Nicknames are now permanent and unique. You'll be prompted for one the first time you play.
+	- Mobs are no longer constrained by mere physical space limits. Their hitbox against the map has been decreased significantly.
+
+January 21st 2023
+	- Added a new map section to Centralia Fields, East Waters and South Desert.
+	- Changed the way beetles move.
+
+January 19th 2023
+	- The game finally has a world map. Enjoy exploring and finding interesting places.
+	- Note that it's still fairly small, we plan to add more areas soon.
+	- Squads have been disabled for the time being as they'll require significant work to work again.
+
+January 2nd 2023
+	- Due to popular demand, the change mentioned in the previous changelog was changed to today.
+	- We're introducing a new petal rarity: Super.
+	- We've added a couple commands to join/create squads while in-game, type /help in the chat for more info.
+	- By default a chat message is only seen by people around you. To send it to your squad members regardless of where they are, prefix it with /squad or press TAB.
+
+January 1st 2023
+	- Reenabled summoner petals. Summoned mobs no longer have collision with other squad mobs. Summoned mobs now deal collision damage to non-squad friendly mobs.
+	- An area can now temporarily run out of mobs if they're farmed too quickly.
+	- Crafting Ultras has been temporarily disabled. We'll be reworking them to a permanent rarity. Existing ultras can still be used. On January 3rd: every 10 ultras will be reverted into a mythic. Then any left over will be absorbed for 50k each.
+	- Higher tier mobs now have varying amounts of slow resistance.
+
+December 30th 2022
+	- Drops are now shared among the 4 players that dealt the most damage to the mob (as long as they deal at least 5% damage). Squad damage is counted together. Only flowers within about a screen distance can get drops from a mob.
+
+December 29th 2022
+	- As a special event, we'll be running a game mode that some of you might feel some familiarity with. Have fun!
+	- Some summoner petals are disabled in the main map of this mode (still useable inside antholes). Unfortunately this is too abuseable.
+
+December 28th 2022
+	- We're experimenting with a HUGE rebalancing of the entire game. We've reset everyone's waves for this. Please be patient while we tweak things to get everything perfect.
+	- The idea is increasing the gap between rarities. Such that if you have unusual petals, a rare mob actually presents a bigger challenge. Before this update, there wasn't really enough distinction between lower mob rarities.
+
+December 26th 2022
+	- Added chat.
+	- Added damage numbers, toggleable in the settings (default on).
+	- Petal tooltips values now update correctly to match values after taking talents into account.
+	- Added more Medic talent tiers.
+	- Removed luck talent, anyone who owned it has been refunded.
+
+December 20th 2022
+	- We've added a texture to Desert. Other maps will get their own soon. Check out the discord server for the contest!
+
+December 11th 2022
+	- It is now possible to refund all your TP, at a cost of 5 levels.
+
+December 10th 2022
+	- Due to some changes in the talent tree, we've reset everyone's talents and refunded all TP.
+
+November 30th 2022
+	- Mobile users can now tap and hold a petal on the crafting screen to add many at a time.
+	- To make the game a little bit easier, petals now move towards enemies within a certain range of them, which should make it easier to hit enemies.
+	- Since many people have spent their TP without realizing how permanent they are, we will be doing a future update (in late December) in which players can reset their TP allocation once per year.
+	- As a reminder, we'll be adding more things to spend TP on as time goes on.
+
+November 29th 2022
+	- The long awaited talents update is here.
+	- Killing mobs no longer awards XP. We have reset everyone's levels back to 1 as this update significantly changes how levels are acquired.
+	- Petals can now be absorbed to earn XP.
+	- Advancing levels provides TP, which can be used to upgrade talents.
+	- Talents have a permanent effect on your flower. Once upgraded they're unlocked forever. There is no way to undo TP spent on talents.
+	- We may change the formula of XP required on each level. If so, we'll adjust everyone's levels to match the new formula (and award or take back any TP).
+	- Level cap has been raised to 200.
+
+November 15th 2022
+	- Nerfed Hornet health.
+
+November 6th 2022
+	- Tweaked number of mobs in each wave.
+	- Tweaked map size in later waves.
+	- We're trying to incentivize clearing mobs before the wave ends by making all mobs aggro when it ends. The map size changes also makes it harder to stay in one spot and just tank all mobs.
+	- We've reset the highest wave beaten by everyone to wave 25, if it was previously higher than that. This is due to the change in wave difficulty.
+	- Enemies no longer have their attack range the same as their aggro range (so hornets for example won't start attacking from half way across the map).
+
+November 4th 2022
+	- Map now scales based on the mobs contained within, this should avoid crowding out in late game waves.
+	- Recipe for Ultra petals has changed.
+	  Now creates 50 Ultras from 5 Mythics.
+
+November 3rd 2022
+	- Recipe for Ultra petals has changed.
+	  Now creates 3 Ultras from 1 Mythic.
+	  No longer reverts back to Mythic on use, it's just lost forever.
+	  Unused Ultras before this update have been converted back to 2 Mythics (old recipe).
+
+November 2nd 2022
+	- Added Ultra petals.
+	  You can combine 2 Mythics to form an Ultra.
+	  Ultra petals are several times stronger than Mythics, but only last for one match.
+	  After one match, they will revert back to 1 Mythic (the other is lost).
+
+October 20th 2022
+	- Pseudo-RNG system has been removed from crafting. Now it's back to truly random with no increasing odds. If you have any failed attempts on a specific petal, it'll keep using the old system until you succeed (so you don't lose increased odds you already accumulated).
+
+October 11th 2022
+	- Added Apple ID login. Note that it doesn't merge Apple ID accounts with Discord accounts. If you already logged in using Discord, keep using that to login. This addition is intended to make it easier for those that don't have a Discord account to keep their progress.
+
+September 13th 2022
+	- PvP now has higher rarity mobs (equivalent to wave 18 or so in PvE).
+	- PvP now has a scoreboard again.
+	- Killing players in PvP now awards Basic petals, rarity depends on how many points they have.
+	- PvP map size changes based on how many players are in game.
+	- Magnets no longer increase pick up range in PvP.
+
+September 12th 2022
+	- Added extra stats in mob gallery.
+
+September 6th 2022
+	- Since wave difficulty was changed significantly, we're resetting everyone's highest wave beaten back to 0.
+	- Special wave chance is now 15%.
+
+September 5th 2022
+	- Leeches now share their health among all segments.
+	- Special single-mob waves are no longer on specific waves, but can occur randomly on any wave.
+	- Changed how initial wave is calculated for a squad, allowing higher initial waves.
+	- Drop rate has been slightly reduced to compensate.
+	- When joining a public squad, players will always be placed on the highest-wave game currently available to them.
+
+September 1st 2022
+	- Increased mythic craft chance to 3%.
+
+August 31st 2022
+	- Peas have been split into Peas and Grapes. Existing Peas have been turned into Grapes.
+
+August 30th 2022
+	- Reworked several mythic petals.
+	- Leaf can now heal friendly mobs.
+
+August 29th 2022
+	- Added a wave bar.
+	- We have started banning people for using any sort of scripts. A ban is permanent and will result in loss of all progress.
+
+August 28th 2022
+	- Added an autocraft button at the bottom of the crafting menu. It will automatically preserve your rarest petals so it is always safe to use.
+
+August 26th 2022
+	- A lot of changes were made in the past week but we were too lazy to put them in the changelog.
+	- Added an AFK timer in public squads.
+
+August 18th 2022
+	- Ant holes now have a timer so players can't afk inside.
+
+August 17th 2022
+	- Decreased drop chance of higher rarities a bit.
+	- Increased craft chances for higher rarities.
+
+August 16th 2022
+	- Players can now start on wave 11.
+	- Mobs can now only drop petals of at most their own rarity.
+	- Tweaked petal drop rate to compensate.
+	- Craft chances have been changed.
+	- Rare rarity color is now a bit more blue.
+
+August 10th 2022
+	- Added a deadzone around the middle of the screen so mouse users can keep their flower still.
+
+August 9th 2022
+	- Added a craft all button to mobile (still not fully supported, but this will fix a pain point).
+	- Added a minimal wave display setting that won't display mobs in the wave ui.
+
+August 7th 2022
+	- Rebalanced a lot of petals. They're now separated in offensive and defensive types, which changes how their damage and health scales.
+	- Fixed poison deaths being mislabeled.
+
+August 5th 2022
+	- Players will now join existing public games automatically as long as they've beaten the wave the squad is at.
+
+August 4th 2022
+	- Rebalanced late game waves. They're now significantly shorter than before.
+	- Reworked Lightning petal.
+
+August 2nd 2022
+	- We will now rotate between PvE scenarios every 24 hours.
+
+August 1st 2022
+	- Added Mob Gallery. It keeps track of every mob you have defeated.
+
+July 30th 2022
+	- Reduced Lightning petal range.
+	- Cactus no longer turns poisonous at higher rarity, more health instead.
+
+July 29th 2022
+	- Ocean released. It'll replace Desert for a couple of days then we'll alternate between them every day or so.
+
+July 25th 2022
+	- Scientists have now discovered the map is a circle, rather than a square, as previously thought.
+	- Adjusted mobs in each wave.
+	- Added setting to hide lower rarity drops. You can still pick them up, you just won't be able to see them. This is a workaround until we optimize them so they won't lag the game.
+
+July 24th 2022
+	- Web no longer stacks, slow increased to -75%.
+
+July 22nd 2022
+	- Web rarity now affects radius rather than duration.
+
+July 21st 2022
+	- Squads will now start at a higher wave that partially depends on the best wave each squad member has beaten.
+	- Balance and stuff.
+
+July 20th 2022
+	- Increased base poison damage rate to 15/s (from 9/s).
+	- Increased mythic craft chance to 2%. This might or might not be temporary.
+	- Magnet no longer stacks with itself.
+
+July 19th 2022
+	- Crafting now uses a pseudo random distribution that increases success rate on each failure until a successful craft.
+	- Nominal craft chances on the long run are still the same. It will not show the calculated craft chance for each attempt.
+	- For example, a 75% craft chance means that 66.6% of the time it'll succeed on the first attempt, and 100% of the time on the second attempt.
+
+July 18th 2022
+	- Released PvP.
+	- Salt now stacks with itself. Reflected damage is reduced by 75% against flowers.
+	- Web movement speed debuff changed from -75% to -50%.
+
+July 16th 2022
+	- Next wave will now start once current wave has 4 or fewer mobs alive.
+	- Mob aggro range now constantly increases while they're alive.
+	- Rarer mobs now give more experience as intended.
+	- Level experience requirements have been increased to compensate.
+
+July 15th 2022
+	- Released Desert scenario.
+
+July 14th 2022
+	- In-game inventory management has been simplified, now it is only possible to swap the primary and secondary petal for each slot.
+
+July 13th 2022
+	- Ant holes can now be of higher rarities again, but only the queen will be above Rare.
+	- Petals now have a Mythic rarity. It does not drop from mobs, only available via crafting.
+
+July 12th 2022
+	- Mobs can now only drop petals up to 1 rarity level above themselves.
+	- Ant holes can no longer have a rarity higher than Rare.
+	- Added Craft All button, hold SHIFT before clicking the Craft button.
+
+July 11th 2022
+	- The game has been re-released. It's nothing like it was before, so might as well clear this changelog too :)

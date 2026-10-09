@@ -1,0 +1,7 @@
+Tutorial/Start=<s val="1.5">Tutorial</s><n/><n/>You seem to be new here, let's get you through the basics.<n/>Click {#UI/Title/Ready} to start.
+Tutorial/End=<s val="1.5">Tutorial</s><n/><n/>That's it! Remember to use the inventory to equip and unequip petals.<n/>You can click a petal to equip/unequip it.<n/><n/>Keep expanding your petal collection and good luck!
+Tutorial/MustBeAlive=You must be alive to proceed in the tutorial.
+Tutorial/MustBeInGame=You must be in-game for this part of the tutorial, just click the big green {#UI/Title/Ready} button.
+Tutorial/MustLeaveGame=To proceed, abandon this game by clicking the abandon button on the top left.
+Tutorial/Next=Next
+Tutorial/Done=Done

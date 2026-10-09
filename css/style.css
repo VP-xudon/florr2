@@ -1,0 +1,203 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0e1a14; }
+body {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #fff; user-select: none; -webkit-user-select: none;
+}
+
+#game { display: block; position: absolute; inset: 0; }
+
+/* HUD */
+#hud { position: absolute; inset: 0; pointer-events: none; }
+#hud button, #hud .clickable { pointer-events: auto; }
+
+#topbar {
+  position: absolute; top: 14px; left: 16px;
+  font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6);
+  display: flex; gap: 10px; align-items: baseline;
+}
+#lvl { color: #ffe27a; }
+#pname { color: #cfe8c0; font-weight: 500; font-size: 15px; }
+
+#bottom {
+  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+  width: min(440px, 80vw);
+}
+#hpwrap {
+  position: relative; height: 22px; border-radius: 11px;
+  background: rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.25); overflow: hidden;
+}
+#hpfill {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, #ff5a5a, #ff8a5a);
+  transition: width .12s linear;
+}
+#hptext {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.8);
+}
+#xpwrap {
+  margin-top: 6px; height: 8px; border-radius: 4px;
+  background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.18); overflow: hidden;
+}
+#xpfill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffe27a, #ffd24a); transition: width .15s linear; }
+
+#bagBtn {
+  position: absolute; bottom: 22px; right: 22px;
+  width: 56px; height: 56px; border-radius: 14px; font-size: 26px;
+  background: rgba(20,40,28,.85); border: 2px solid rgba(255,255,255,.25);
+  color: #fff; cursor: pointer; transition: transform .1s, background .1s;
+}
+#bagBtn:hover { background: rgba(40,70,50,.95); transform: translateY(-2px); }
+#bagBtn:active { transform: scale(.94); }
+
+#hint {
+  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: rgba(255,255,255,.55); white-space: nowrap;
+}
+
+/* 背包面板 */
+#inventory {
+  position: absolute; top: 0; right: 0; height: 100%; width: 340px;
+  background: rgba(14,26,20,.96); border-left: 2px solid rgba(255,255,255,.15);
+  padding: 18px; overflow-y: auto; pointer-events: auto;
+  box-shadow: -8px 0 24px rgba(0,0,0,.4);
+}
+#inventory.hidden { display: none; }
+.inv-title { font-size: 20px; font-weight: 800; margin-bottom: 12px; color: #ffe27a; }
+.inv-section { font-size: 13px; color: #bcd; margin: 14px 0 8px; opacity: .85; }
+
+.slot-row { display: flex; gap: 10px; }
+.slot {
+  width: 56px; height: 56px; border-radius: 12px;
+  border: 2px solid rgba(255,255,255,.25); background: rgba(0,0,0,.3);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative;
+}
+.slot.sel { box-shadow: 0 0 0 3px #ffe27a; }
+.slot img { width: 40px; height: 40px; }
+.slot .rar, .card .rar {
+  position: absolute; bottom: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%;
+}
+
+.inv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.card {
+  aspect-ratio: 1; border-radius: 12px; border: 2px solid rgba(255,255,255,.25);
+  background: rgba(0,0,0,.3); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; cursor: pointer; position: relative; padding: 4px;
+}
+.card:hover { background: rgba(255,255,255,.08); }
+.card img { width: 70%; height: 70%; object-fit: contain; }
+.card .nm { font-size: 10px; color: #ddd; margin-top: 2px; }
+.card .rar { bottom: 4px; right: 4px; }
+.empty { color: #889; font-size: 13px; grid-column: 1 / -1; padding: 18px 0; text-align: center; }
+.inv-hint { margin-top: 16px; font-size: 12px; color: #9ab; line-height: 1.5; }
+
+/* 死亡 */
+#death {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); pointer-events: none;
+}
+#death.hidden { display: none; }
+.death-card {
+  text-align: center; padding: 30px 44px; border-radius: 18px;
+  background: rgba(40,12,12,.9); border: 2px solid rgba(255,120,120,.4);
+}
+.death-title { font-size: 34px; font-weight: 900; color: #ff7a7a; }
+.death-sub { margin-top: 8px; color: #e9b3b3; font-size: 14px; }
+#death-timer { margin-top: 14px; color: #ffd; font-size: 13px; opacity: .8; }
+
+/* 图鉴按钮 */
+#dexBtn {
+  position: absolute; bottom: 22px; right: 90px;
+  width: 56px; height: 56px; border-radius: 14px; font-size: 26px;
+  background: rgba(20,40,28,.85); border: 2px solid rgba(255,255,255,.25);
+  color: #fff; cursor: pointer; transition: transform .1s, background .1s;
+}
+#dexBtn:hover { background: rgba(40,70,50,.95); transform: translateY(-2px); }
+#dexBtn:active { transform: scale(.94); }
+
+/* 即时物品栏（底部常驻，淡灰色卡槽） */
+#invBarWrap {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  pointer-events: auto; z-index: 20;
+}
+#invBar { display: flex; gap: 8px; padding: 8px; border-radius: 16px;
+  background: rgba(8,16,12,.55); border: 2px solid rgba(255,255,255,.12); }
+.invslot {
+  width: 50px; height: 50px; border-radius: 11px;
+  border: 2px solid rgba(255,255,255,.5);
+  background: rgba(205,210,206,.5);   /* 淡灰色卡槽 */
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+.invslot.filled { animation: slotIn .18s ease; }
+.invcard {
+  width: 100%; height: 100%; border-radius: 9px; border: 2px solid #fff;
+  background: rgba(0,0,0,.25); display: flex; align-items: center; justify-content: center;
+  cursor: grab; position: relative; transition: transform .08s;
+}
+.invcard:hover { transform: translateY(-2px); }
+.invcard img { width: 72%; height: 72%; object-fit: contain; pointer-events: none; }
+.invcard .rar, .slot .rar, .card .rar {
+  position: absolute; bottom: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%;
+}
+.invcard .nm, .card .nm { position: absolute; bottom: -14px; left: 0; right: 0;
+  font-size: 9px; color: #cfe; text-align: center; white-space: nowrap; }
+@keyframes slotIn { from { transform: scale(.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* 图鉴面板 */
+#dex {
+  position: absolute; top: 0; right: 0; height: 100%; width: 460px;
+  background: rgba(14,26,20,.97); border-left: 2px solid rgba(255,255,255,.15);
+  padding: 18px; overflow-y: auto; pointer-events: auto; z-index: 30;
+  box-shadow: -8px 0 24px rgba(0,0,0,.4);
+}
+#dex.hidden { display: none; }
+.dex-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.dex-count { font-size: 12px; color: #9ab; }
+.dex-body { display: flex; flex-direction: column; gap: 6px; }
+.dex-row { display: flex; align-items: center; gap: 10px; padding: 4px; border-radius: 8px; background: rgba(255,255,255,.03); }
+.dex-label { width: 92px; flex: 0 0 92px; display: flex; flex-direction: column; }
+.dex-name { font-size: 13px; font-weight: 700; color: #ffe27a; }
+.dex-tier { font-size: 10px; color: #9ab; }
+.dex-slots { display: flex; gap: 5px; flex: 1; flex-wrap: wrap; }
+.dex-cell {
+  width: 34px; height: 34px; border-radius: 7px; border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; position: relative;
+}
+.dex-cell.got { border-color: rgba(120,220,120,.6); cursor: help; }
+.dex-cell img { width: 78%; height: 78%; object-fit: contain; }
+.dex-cell .dex-lv { position: absolute; bottom: -2px; right: 1px; font-size: 9px; color: #cfe; text-shadow: 0 1px 2px #000; }
+.dex-manual { margin-top: 16px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); }
+.dex-manual-title { font-size: 12px; color: #ffb; margin-bottom: 6px; }
+.dex-manual-item { font-size: 11px; color: #c9b79a; line-height: 1.6; }
+
+/* 拖拽幽灵 / 飞入动画 */
+.flyghost, #dragGhost {
+  position: fixed; z-index: 200; pointer-events: none; width: 54px; height: 54px;
+}
+.flyghost .inner, #dragGhost .inner {
+  width: 54px; height: 54px; transform: translate(-50%,-50%) scale(1.25);
+  border-radius: 10px; border: 2px solid #fff; background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center;
+}
+.flyghost img, #dragGhost img { width: 78%; height: 78%; }
+#dragGhost .inner { animation: cardShake .55s ease-in-out infinite; }
+@keyframes cardShake { 0% { rotate: -9deg; } 50% { rotate: 9deg; } 100% { rotate: -9deg; } }
+
+/* 图鉴悬浮提示 */
+#dexTip {
+  position: fixed; z-index: 300; max-width: 280px; pointer-events: none;
+  background: rgba(8,16,12,.96); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #dfe; line-height: 1.55;
+}
+#dexTip.hidden { display: none; }
+.tip-name { font-size: 14px; font-weight: 800; color: #ffe27a; margin-bottom: 4px; }
+.tip-en { font-size: 11px; color: #9ab; font-weight: 400; }
+.tip-row { margin: 2px 0; }
+.tip-row b { color: #9effa0; }
+
+/* 加载 */
+#loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: #0e1a14; font-size: 18px; color: #cfe8c0; z-index: 50;
+}

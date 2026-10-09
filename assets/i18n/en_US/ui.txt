@@ -1,0 +1,343 @@
+UI/Language/Name=English (US)
+# These are the translators that worked on this translation. Separate with <n/>
+UI/Language/Credits=
+
+UI/Title/Loading=Loading...
+UI/Title/Connecting=Connecting...
+UI/Title/LoggingIn=Logging in...
+UI/Title/Ready=Ready
+UI/Title/GuestName=Guest
+UI/Title/GuestLimitation=You can choose a nickname once you link an account or reach level {0}.
+UI/Title/LockedInHel=You are stuck in Hel for {0:time}.
+UI/Title/Name/Title=This pretty little flower is called...
+UI/Title/Name/Rules1=Your name must be alphanumeric or {2}, and contain {0}~{1} chars.
+UI/Title/Name/Rules2=Must have at least {0} alphanumeric chars.
+UI/Title/Name/Rules3=Cannot contain consecutive {0} chars.
+UI/Title/Name/Rules4=This name is permanent and cannot be changed later.
+UI/Title/Name/Button=OK
+UI/Title/Name/Bad=Your nickname was reset, please choose a new one.
+UI/Title/Name/AlreadyTaken=Nickname already taken.
+UI/Title/Name/InternalError=Internal error, try again later.
+
+UI/Title/Biome={#UI/Title/Biome/{0}}
+UI/Title/Biome/0=Garden
+UI/Title/Biome/1=Desert
+UI/Title/Biome/2=Ocean
+UI/Title/Biome/3=Jungle
+UI/Title/Biome/4=Hel
+
+UI/Login/Title=Account
+UI/Login/PlayAsGuest=Play as guest
+UI/Login/SignInApple=Sign in with Apple
+UI/Login/SignInDiscord=Sign in with Discord
+UI/Login/Logout=Logout
+UI/Login/AccountID=Account ID:
+UI/Login/Connecting=(connecting)
+UI/Login/GuestName=Guest
+UI/Login/GuestInfo=If you already have a guest account in this device,<n/>signing in will link that account and keep your progress.
+UI/Login/LinkInfo=You can link your account to<n/>keep your progress across devices.
+UI/Login/Linked=Linked
+UI/Login/SupportPIN=Support PIN: {0}
+UI/Login/SupportPINHidden=Support PIN: (click to show)
+UI/Login/SupportPINInstructions1=Save this in case you lose access to your account
+UI/Login/SupportPINInstructions2=Do not share your support PIN with anyone
+UI/Login/Reminder=Link your account to save your progress
+UI/Login/SupportWebsite=If you lose access to your account, please access:
+
+UI/Social/Discord=Join our Discord community!
+UI/Social/QQ=加入我们的QQ群!
+
+UI/AbandonGame=Abandon game
+UI/Reconnecting=Connection lost, reconnecting...
+
+UI/LevelBar/Level=Lvl {0}
+UI/LevelBar/LevelLong=Lvl {0} Flower
+UI/LevelBar/XP={0}/{1} XP
+UI/LevelBar/LevelAndXP=Level {0} - {1}/{2} XP
+UI/LevelBar/NextLevelTP=Next level: +{0} TP
+
+UI/Scoreboard/Title={#UI/Scoreboard/Title/{0:1orN}}
+UI/Scoreboard/Title/1=1 Flower
+UI/Scoreboard/Title/N={0} Flowers
+UI/Scoreboard/HiddenName=Player #{0}
+
+UI/Chat/PromptTap=Tap here to chat
+UI/Chat/PromptClick=Click here to chat
+UI/Chat/PromptKeyboardOrClick=Press [ENTER] or click here to chat
+UI/Chat/Player/Block=Block
+UI/Chat/Player/ReportMessage=Report message
+UI/Chat/Player/Whisper=Whisper
+UI/Chat/Player/InviteToSquad=Invite to Squad
+UI/Chat/Player/InviteToGuild=Invite to Guild
+
+UI/Flower/Level=Lvl {0}
+
+# When you evade damage
+UI/Damage/Evade=Evade
+
+# When the target evades damage
+UI/Damage/Miss=Miss
+
+UI/Dummy/Last=Last: {0:tooltip}
+UI/Dummy/Total=Total: {0:tooltip}
+UI/Dummy/DPS=DPS: {0:tooltip}
+
+UI/Death/Title=You were destroyed by:
+UI/Death/NoSource=A mysterious entity
+UI/Death/Continue=Continue
+UI/Death/Revive=Revive
+UI/Death/Close=Close
+UI/Death/CollectedThisRun=Collected this run
+UI/Death/RevivingSoon=You'll be revived soon.
+
+UI/AFKCheck/Title=AFK Check
+UI/AFKCheck/Instructions=Drag the circle until the end
+UI/AFKCheck/Flap/Instructions=Flap until the end
+
+UI/Achievements/Title=Achievements
+UI/Achievements/Reward=Reward
+UI/Achievements/RewardTP={0} TP
+UI/Achievements/Done=Done
+UI/Achievements/Track=Track
+UI/Achievements/TrackAutomatically=Track automatically
+UI/Achievements/Hidden=???
+UI/Achievements/TotalProgress={0}/{1} completed
+UI/Achievements/UnlockedNotification={#UI/Achievements/UnlockedNotification/{0:1orN}}
+UI/Achievements/UnlockedNotification/1=Achievement unlocked
+UI/Achievements/UnlockedNotification/N=Achievements unlocked
+
+UI/MobGallery/Title=Mob Gallery
+
+UI/Changelog/Title=Changelog
+UI/Changelog/Bottom=Older changelog entries not available
+
+UI/Inventory/Title=Inventory
+UI/Inventory/Stack=Stack
+UI/Inventory/Instructions=Drag a petal to equip it
+UI/Inventory/Speed=Speed
+UI/Inventory/Rarity={#UI/Petal/Rarity}
+
+UI/Guild/Title=Guild
+UI/Guild/NoGuild=You don't have a guild yet
+UI/Guild/Invite=You've been invited to:
+UI/Guild/Invite/Button=Accept
+UI/Guild/Invite/Expiration=This invitation will expire soon if not accepted
+UI/Guild/ChatSetting=Chat
+UI/Guild/SquadButton=Squad
+UI/Guild/KickButton=Kick
+UI/Guild/Leader=(Leader)
+UI/Guild/Members={#UI/Guild/Members/{0:1orN}}
+UI/Guild/Members/1=Member (1)
+UI/Guild/Members/N=Members ({0})
+UI/Guild/LeaveButton=Leave
+UI/Guild/Leave/Title=Leave guild
+UI/Guild/Leave/Instructions=Are you sure?
+UI/Guild/Leave/Confirm=Leave
+UI/Guild/Leave/Cancel=Cancel
+
+UI/Squad/Title=Squad
+UI/Squad/Invited1=Squad Invite
+UI/Squad/Invited2=Invited by: {0}
+UI/Squad/Invited/Join=Join
+UI/Squad/Invited/Ignore=Ignore
+
+UI/Shop/Title=Shop
+UI/Shop/Button=Shop
+UI/Shop/Instructions=Today's offers:
+UI/Shop/TimeLeft=Store will change in {0:time}
+UI/Shop/Lock=Lock
+UI/Shop/LockedChanged=Store will change once unlocked.
+UI/Shop/LockedNoChange=Store will not change while locked.
+UI/Shop/StarsHelp1=You gain stars by completing challenges, or you can
+UI/Shop/StarsHelp2=buy some by clicking the number on the right.
+UI/Shop/MustLink1=To make any purchases, you must first
+UI/Shop/MustLink2=link your account to Discord or Apple.
+UI/Shop/MustLinkCancel=Cancel
+UI/Shop/BuyStars/Instructions=In case of any issues with your purchase,<n/>please contact our payment processor:<n/>support@xsolla.com or live chat at xsolla.com.
+UI/Shop/BuyStars/Extra=I have too much money
+UI/Shop/BuyStars/Cancel=Cancel
+UI/Shop/BuyPetal/Title=Confirm
+UI/Shop/BuyPetal/Instructions=Are you sure you want to buy this?<n/><c val="{#Colors/danger}">Petal purchases are not refundable</c>
+UI/Shop/BuyPetal/Cancel=Cancel
+UI/Shop/MagicPetalError/Title=Error
+UI/Shop/MagicPetalError/Instructions=You cannot buy magic petals<n/>until you have a {#Petals/{0}/FullName}.
+UI/Shop/MagicPetalError/Cancel=Cancel
+UI/Shop/Loyalty/Title=Thank you!
+UI/Shop/Loyalty/Instructions=As a thank you for your support,<n/>we'd like to give you some stars, for free.<n/><n/>This is the equivalent of what you'd have gotten had you spent<n/>the same amount of money you already did, but with larger packages.
+UI/Shop/Price/USD=${0}
+
+UI/Banned/Title=BANNED
+UI/Banned/Instructions=Your account has been banned.
+UI/Banned/TimeLeft=This ban will expire in {0:time}.
+UI/Banned/Permanent=This ban is permanent.
+UI/Banned/Account=Account: {0}
+
+UI/DailyChallenge/Title=Challenge
+UI/DailyChallenge/Button=Challenge
+UI/DailyChallenge/Instructions=Defeat these enemies:
+UI/DailyChallenge/TimeLeft=Challenges will change in {0:time}
+UI/DailyChallenge/Claimed=Claimed
+UI/DailyChallenge/SupportersOnly=Challenge available<n/>for supporters only.
+
+UI/Bonus/Title=Bonus
+UI/Bonus/Button=Bonus
+UI/Bonus/Instructions=Earn bonus drops
+UI/Bonus/Instructions2=For the first hour you play each day, you get extra drops.
+UI/Bonus/Pill/Label={0}x
+UI/Bonus/Delay=You can activate your bonus again in {0:time}.
+UI/Bonus/CurrentlyActive=Your bonus is active for {0:time}.
+UI/Bonus/Available=You can activate your bonus now. It will last {0:time}.
+UI/Bonus/AvailableExpiration=If you do not activate your bonus, it will reset in {0:time}.
+UI/Bonus/AutoDelay=Your bonus will activate again in {0:time}.
+UI/Bonus/Activate=Activate
+UI/Bonus/Activate/Setting=Activate automatically
+
+UI/Petal/Name={#Petals/{0:base}/Name}
+UI/Petal/SortName={#Petals/{0:base}/Name}
+UI/Petal/FullName={#Petals/{0:base}/FullName}
+UI/Petal/Description={#Petals/{0:base}/Description}
+UI/Petal/Rarity={#Rarities/{0:rarity}/Name}
+UI/Petal/Reload1={0}s
+UI/Petal/Reload2={0}s + {1}s
+
+UI/Mob/Name={#Mobs/{0:base}/Name}
+UI/Mob/SortName={#Mobs/{0:base}/Name}
+UI/Mob/Description={#Mobs/{0:base}/Description}
+UI/Mob/Rarity={#Rarities/{0:rarity}/Name}
+UI/Mob/Summon=Summon
+
+UI/Map/Name={#Maps/{0}/Name}
+UI/Map/Changing={#Maps/{0}/Changing#UI/Map/Changing/generic}
+UI/Map/Changing/generic=Something is happening...
+UI/Map/Instance=(instance)
+
+UI/Achievements/Name={#Achievements/{0}/Name:1-}
+UI/Achievements/SortName={#Achievements/{0}/Name:1-}
+UI/Achievements/Description={#Achievements/{0}/Description:1-}
+UI/Achievements/ExtraDescription={#Achievements/{0}/ExtraDescription:1-}
+UI/Achievements/Rarity={#UI/Petal/Rarity}
+
+UI/Talent/Title=Talents
+UI/Talent/Name={#Talents/{0}/Name:1-}
+UI/Talent/Description={#Talents/{0}/Description:1-}
+UI/Talent/Rarity={#Rarities/{1}/Name}
+UI/Talent/TP=TP
+UI/Talent/Tooltip=You can acquire more TP by leveling up
+UI/Talent/Reset=Reset
+UI/Talent/HoldToUpgrade=HOLD to upgrade
+UI/Talent/HoldToRemove=HOLD to remove
+
+UI/Craft/Title=Craft
+UI/Craft/Button=Craft
+UI/Craft/Chance={0:perc}% success chance
+UI/Craft/UnknownChance=?% success chance
+UI/Craft/CombineInstructions=Combine {0} of the same petal to craft an upgrade
+UI/Craft/FailureInstructions=Failure will destroy {0}-{1} petals
+
+UI/Absorb/Title=Absorb
+UI/Absorb/Button=Absorb
+UI/Absorb/Instructions=Absorb petals to gain XP<n/>The Crystal will need time to recharge once used.<n/><c val="{#Colors/danger}">WARNING: The petals will be destroyed in the process</c>
+UI/Absorb/Crystal/Title=Crystal Energy
+UI/Absorb/Crystal/1={0:perc}%
+UI/Absorb/Crystal/2=+{0:perc}%/hr
+
+UI/CoinCraft/Title=Trade
+UI/CoinCraft/Button=Trade
+UI/CoinCraft/Instructions=You can trade a petal for a coin of the same rarity
+UI/CoinCraft/Delay=You'll be able to trade again in {0:time}
+
+UI/OracleCraft/Title=Oracle
+UI/OracleCraft/Button=Craft
+UI/OracleCraft/Instructions=The Oracle will guarantee a craft... for the right price.
+UI/OracleCraft/Delay=You'll be able to craft again in {0:time}
+
+UI/Plinko/Title=Plinko
+UI/Plinko/Auto=Auto
+
+UI/UniqueCraft/Title=Forge
+UI/UniqueCraft/Button=Forge
+UI/UniqueCraft/Instructions=Unique petals will last until another player forges the same petal.<n/>When that happens, you will receive your Super petals back,<n/>but one will be permanently destroyed.
+UI/UniqueCraft/NoSupers=You do not have any Super petals to attempt this.
+UI/UniqueCraft/Cooldown=Cannot be forged again for {0:time}.
+UI/UniqueCraft/OwnerNamed="Ah I remember forging that petal for a flower named {0}..."
+UI/UniqueCraft/OwnerUnnamed="Ah I remember forging that petal... I can't recall their name..."
+
+UI/AssemblerCraft/Title=Assemble
+UI/AssemblerCraft/Button=Assemble
+UI/AssemblerCraft/Instructions=Combine specific petals to assemble a new petal.
+
+UI/Death/Poison=Poison
+
+UI/Luck/Help=Luck is used by specific petals to change their stats.<n/>Luck also increases the rarity of mobs that spawn around you.
+
+UI/Settings/Title=Settings
+UI/Settings/Game=Game
+UI/Settings/Graphics=Graphics
+UI/Settings/Controls=Controls
+UI/Settings/Credits=Credits
+
+UI/Settings/Language=Language
+UI/Settings/Language/Warning=NOTE: will only take effect after game is restarted
+UI/Settings/Language/Automatic=Automatic
+
+UI/Settings/Realm=Realm
+UI/Settings/Realms={#UI/Settings/Realms/{0}}
+UI/Settings/Realms/0=Automatic
+UI/Settings/Realms/1=Juliett (US)
+UI/Settings/Realms/2=Romeo (EU)
+UI/Settings/Realms/3=Sierra (ASIA)
+
+UI/Settings/Chat=Chat
+UI/Settings/ChatWhispers=Chat Whispers
+
+UI/Settings/AutoJoinSquads=Auto-join squads
+UI/Settings/ReceiveSquadInvites=Receive squad invites
+
+UI/Settings/HideOtherPetals=Hide other petals
+
+UI/Settings/EquipDrops=Equip drops
+
+UI/Settings/Quality=Quality
+UI/Settings/Quality/Low=Low
+UI/Settings/Quality/Medium=Medium
+UI/Settings/Quality/High=High
+
+UI/Settings/ShowDamageNumbers=Show damage numbers
+
+UI/Settings/ScreenShake=Screen shake
+
+UI/Settings/LiveIcons=Live icons
+
+UI/Settings/TouchControls=Touch controls
+
+UI/Settings/KeyboardMovement=Keyboard movement
+
+UI/Settings/MovementHelper=Movement helper
+
+UI/Settings/AutoSearchPetals=Search petals when opening inventory
+
+UI/Settings/FixedJoystick=Fixed joystick
+
+UI/Settings/InvertAttack=Invert attack button
+UI/Settings/InvertDefend=Invert defend button
+
+UI/Settings/AutoSaveLoadout=Auto-save loadout
+UI/Settings/AutoSaveLoadout/Help=If disabled, press [O] to save current loadout
+
+UI/Settings/Fullscreen=Fullscreen
+
+UI/Settings/PrivacyPolicy=Privacy Policy
+UI/Settings/TermsOfService=Terms of Service
+
+UI/Credits/MadeBy=Made by {0}
+UI/Credits/SomeIcons=Some icons from {0}
+UI/Credits/SomeTiles=Some tiles from {0}
+UI/Credits/SpecialThanks=Special Thanks
+UI/Credits/Translators=Translators
+
+# The little arrows around dead flowers
+UI/HelperText/Guild=Guild
+UI/HelperText/Squad=Squad
+UI/HelperText/You=You
+
+UI/ChromeBug=The Chrome version you're using has a massive performance issue.<n/>Until it is fixed, for the optimal experience, please use<n/>Google Chrome Canary, which contains the fix to this issue.

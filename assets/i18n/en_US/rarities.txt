@@ -1,0 +1,49 @@
+Rarities/common/Name=Common
+Rarities/common/ArticleUpper=A
+Rarities/common/Article=a
+Rarities/common/NameColored=<c val="{#Colors/common}">{#Rarities/common/Name}</c>
+
+Rarities/unusual/Name=Unusual
+Rarities/unusual/ArticleUpper=An
+Rarities/unusual/Article=an
+Rarities/unusual/NameColored=<c val="{#Colors/unusual}">{#Rarities/unusual/Name}</c>
+
+Rarities/rare/Name=Rare
+Rarities/rare/ArticleUpper=A
+Rarities/rare/Article=a
+Rarities/rare/NameColored=<c val="{#Colors/rare}">{#Rarities/rare/Name}</c>
+
+Rarities/epic/Name=Epic
+Rarities/epic/ArticleUpper=An
+Rarities/epic/Article=an
+Rarities/epic/NameColored=<c val="{#Colors/epic}">{#Rarities/epic/Name}</c>
+
+Rarities/legendary/Name=Legendary
+Rarities/legendary/ArticleUpper=A
+Rarities/legendary/Article=a
+Rarities/legendary/NameColored=<c val="{#Colors/legendary}">{#Rarities/legendary/Name}</c>
+
+Rarities/mythic/Name=Mythic
+Rarities/mythic/ArticleUpper=A
+Rarities/mythic/Article=a
+Rarities/mythic/NameColored=<c val="{#Colors/mythic}">{#Rarities/mythic/Name}</c>
+
+Rarities/ultra/Name=Ultra
+Rarities/ultra/ArticleUpper=An
+Rarities/ultra/Article=an
+Rarities/ultra/NameColored=<c val="{#Colors/ultra}">{#Rarities/ultra/Name}</c>
+
+Rarities/super/Name=Super
+Rarities/super/ArticleUpper=A
+Rarities/super/Article=a
+Rarities/super/NameColored=<c val="{#Colors/super}">{#Rarities/super/Name}</c>
+
+Rarities/eternal/Name=Eternal
+Rarities/eternal/ArticleUpper=An
+Rarities/eternal/Article=an
+Rarities/eternal/NameColored=<c val="{#Colors/eternal}">{#Rarities/eternal/Name}</c>
+
+Rarities/unique/Name=Unique
+Rarities/unique/ArticleUpper=A
+Rarities/unique/Article=a
+Rarities/unique/NameColored=<c val="{#Colors/unique}">{#Rarities/unique/Name}</c>
