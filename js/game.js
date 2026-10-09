@@ -13,7 +13,6 @@ class Game {
     this.camera = { x: 0, y: 0 };
     this.shake = 0;
     this.last = 0;
-    this.spawnTimer = 0;
     this.selectedSlot = 0;
 
     this.player = null;
@@ -54,6 +53,9 @@ class Game {
     UI.onSlotClick = (i) => this.moveSlotToInv(i);          // 点击已装备花瓣 -> 卸下到物品栏
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
     UI.onBagCardClick = (i) => this.moveBagToInv(i);        // 点击背包卡 -> 进物品栏（无空槽则无反应）
+    UI.onGalleryCardClick = (card) =>                       // 点击画廊卡 -> 装备到空槽；槽满则替换 1 号槽
+      this.addGalleryCard(card.type, card.rarity, { type: 'flower' }) ||
+      this.addGalleryCard(card.type, card.rarity, { type: 'slot', index: 0 });
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
 
     // 玩家与初始装备
@@ -62,7 +64,6 @@ class Game {
     this.camera.x = this.player.x; this.camera.y = this.player.y;
 
     this.buildBackground();
-    this._spawnInitial();
     this.updateHUD();
   }
 
@@ -89,13 +90,6 @@ class Game {
       this.bgHalf = WORLD_R;
     }
     this.bg = null;
-  }
-
-  _spawnInitial() {
-    for (let i = 0; i < 12; i++) {
-      const [x, y] = this.map.spawnPointAwayFrom(this.player.x, this.player.y, 320 * SPEED_SCALE);
-      this.mobs.push(new Mob(rollMobType(1), x, y, 1));
-    }
   }
 
   _resize() {
@@ -127,45 +121,26 @@ class Game {
 
   update(dt) {
     const p = this.player;
-    if (p.dead) {
-      p.update(dt, { x: 0, y: 0 }, this.map);
-      if (p.deathTimer > 2.4) this._respawn();
-    } else {
-      const dir = this._readDir();
-      p.update(dt, dir, this.map);
-    }
+    const dir = this._readDir();
+    p.update(dt, dir, this.map, this.mobs);   // 传入生物列表：花瓣会与生物碰撞
 
-    // 生物
-    for (const m of this.mobs) m.update(dt, p, this.map);
-
-    // 刷怪
-    this._spawn(dt);
-
-    // 战斗
-    this._combat(dt);
-
-    // 卡片
+    // 卡片（拾取 / 入栏）——无战斗时已不掉落，但保留拖拽到世界时的回收
     for (const c of this.cards) {
       c.update(dt, p);
       if (!c.picked && dist2(c.x, c.y, p.x, p.y) < (p.r + 16) * (p.r + 16)) {
-        const acc = this.pickupCard(c.type, c.rarity);
-        if (acc) {
+        if (this.pickupCard(c.type, c.rarity)) {
           c.picked = true;
-          this.spawnText(p.x, p.y - p.r - 12, '+' + c.type.name, '#9effa0');
           this.syncInventory();
         }
       }
     }
     this.cards = this.cards.filter(c => !c.done);
 
-    // 粒子 / 伤害数字
+    // 粒子 / 伤害数字（保留基础设施，目前无战斗触发）
     for (const pt of this.particles) pt.update(dt);
     this.particles = this.particles.filter(pt => pt.life > 0);
     for (const d of this.dmgTexts) d.update(dt);
     this.dmgTexts = this.dmgTexts.filter(d => d.life > 0);
-
-    // 清理死亡生物
-    this.mobs = this.mobs.filter(m => !(m.dead && m.deathTimer > 0.5));
 
     // 相机
     this.camera.x = damp(this.camera.x, p.x, 8, dt);
@@ -185,93 +160,7 @@ class Game {
     return { x: dx, y: dy };
   }
 
-  _mobLevel() {
-    return clamp(1 + Math.floor(this.player.level / 3) + randInt(0, 1), 1, 9);
-  }
 
-  _spawn(dt) {
-    this.spawnTimer -= dt;
-    const target = Math.min(26, 10 + Math.floor(this.player.level * 1.4));
-    const alive = this.mobs.filter(m => !m.dead).length;
-    if (this.spawnTimer <= 0 && alive < target) {
-      this.spawnTimer = 0.9;
-      const [x, y] = this.map.spawnPointAwayFrom(this.player.x, this.player.y, 360 * SPEED_SCALE);
-      this.mobs.push(new Mob(rollMobType(this.player.level), x, y, this._mobLevel()));
-    }
-  }
-
-  _combat(dt) {
-    const p = this.player;
-    if (p.dead) return;
-
-    // 花瓣 -> 生物
-    if (p.damage > 0) {
-      for (const m of this.mobs) {
-        if (m.dead) continue;
-        let hit = false;
-        for (const pp of p.petalWorld) {
-          if (dist2(pp.x, pp.y, m.x, m.y) < (pp.r + m.r) * (pp.r + m.r)) { hit = true; break; }
-        }
-        if (hit && m.hitCd <= 0) {
-          m.hp -= p.damage; m.hitCd = 0.42; m.flash = 0.14; m.squash = 0.5;
-          const a = angleTo(p.x, p.y, m.x, m.y);
-          m.vx += Math.cos(a) * 130; m.vy += Math.sin(a) * 130;
-          for (const s of p.slots) if (s) s.lunge = 0.16;
-          this.spawnText(m.x, m.y - m.r, String(Math.round(p.damage)), '#ffffff');
-          if (m.hp <= 0) this._killMob(m);
-        }
-      }
-    }
-
-    // 生物 -> 玩家
-    for (const m of this.mobs) {
-      if (m.dead) continue;
-      if (dist2(m.x, m.y, p.x, p.y) < (m.r + p.r * 0.8) * (m.r + p.r * 0.8)) {
-        if (p.invuln <= 0) {
-          const a = angleTo(m.x, m.y, p.x, p.y);
-          p.hp -= m.dmg; p.invuln = 0.6; p.flash = 0.18; this.shake = 9;
-          p.vx += Math.cos(a) * 200; p.vy += Math.sin(a) * 200;
-          this.spawnText(p.x, p.y - p.r - 6, '-' + Math.round(m.dmg), '#ff6b6b');
-          if (p.hp <= 0) this._killPlayer();
-        }
-      }
-    }
-  }
-
-  _killMob(m) {
-    if (m.dead) return;
-    m.dead = true; m.deathTimer = 0;
-    this.recordDefeat(m.type.id, m.level);
-    this.spawnParticles(m.x, m.y, m.color, m.boss ? 18 : 8);
-    this.player.gainXp(m.xpVal);
-    const drops = m.boss ? 3 : 1;
-    for (let i = 0; i < drops; i++) {
-      const drop = rollDrop(m);
-      const card = new Card(m.x + rand(-22, 22), m.y + rand(-22, 22), drop.type, drop.rarity);
-      this.cards.push(card);
-    }
-    this.syncInventory();
-  }
-
-  _killPlayer() {
-    const p = this.player;
-    if (p.dead) return;
-    p.dead = true; p.deathTimer = 0;
-    // 掉落已装备的花瓣
-    for (const s of p.slots) {
-      if (s) this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), s.type, s.rarity));
-    }
-    p.slots = [null, null, null, null, null]; p.recompute();
-    UI.showDeath();
-    this.syncInventory();
-  }
-
-  _respawn() {
-    this._resetPlayer(false);
-    UI.hideDeath();
-    this.camera.x = this.player.x; this.camera.y = this.player.y;
-    this.updateHUD();
-  }
 
   spawnText(x, y, text, color) { this.dmgTexts.push(new DamageText(x, y, text, color)); }
   spawnParticles(x, y, color, n) {
@@ -355,6 +244,40 @@ class Game {
 
   // ---------- 物品栏模型 ----------
   firstEmptySlot() { return this.player.slots.findIndex(s => !s); }
+
+  // 管理员画廊：把一张「新的」花瓣卡放入目标（物品栏 / 卡槽 / 背包 / 花朵）
+  addGalleryCard(type, rarity, target) {
+    const p = this.player;
+    if (!target) return false;
+    const card = { type, rarity, lunge: 0 };
+    if (target.type === 'slot') {
+      const old = p.slots[target.index];
+      p.slots[target.index] = card;
+      if (old) this._recycle(old);
+      p.recompute(); this.renderInventory(); return true;
+    }
+    if (target.type === 'inv') {
+      if (p.invBar.length < p.maxInvBar) { p.invBar.push(card); this.renderInventory(); return true; }
+      return false;
+    }
+    if (target.type === 'bag') {
+      if (p.backpack.length < p.maxBackpack) { p.backpack.push(card); this.renderInventory(); return true; }
+      return false;
+    }
+    if (target.type === 'flower') {
+      const s = this.firstEmptySlot();
+      if (s < 0) return false;
+      p.slots[s] = card; p.recompute(); this.renderInventory(); return true;
+    }
+    return false;
+  }
+  // 把被替换下来的卡回收：物品栏 -> 背包 -> 掉到地上
+  _recycle(card) {
+    const p = this.player;
+    if (p.invBar.length < p.maxInvBar) p.invBar.push(card);
+    else if (p.backpack.length < p.maxBackpack) p.backpack.push(card);
+    else this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
+  }
 
   // 拾取卡片：优先进物品栏，其次进背包；物品栏满则挤掉最旧的一张
   pickupCard(type, rarity) {
@@ -446,6 +369,7 @@ class Game {
   dispatchDrop(drag, target) {
     const from = drag.from;
     if (!target || !from) return false;
+    if (from.type === 'gallery') return this.addGalleryCard(drag.card.type, drag.card.rarity, target);
     if (target.type === 'slot') {
       if (from.type === 'inv') return this.moveInvToSlot(from.index, target.index);
       if (from.type === 'bag') return this.moveBagToSlot(from.index, target.index);

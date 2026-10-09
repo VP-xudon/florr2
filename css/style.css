@@ -6,195 +6,119 @@ body {
 }
 
 #game { display: block; position: absolute; inset: 0; }
+.hidden { display: none !important; }
 
 /* HUD */
 #hud { position: absolute; inset: 0; pointer-events: none; }
-#hud button, #hud .clickable { pointer-events: auto; }
-
-#topbar {
-  position: absolute; top: 14px; left: 16px;
-  font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6);
-  display: flex; gap: 10px; align-items: baseline;
-}
-#lvl { color: #ffe27a; }
+#topbar { position: absolute; top: 14px; left: 16px; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); }
 #pname { color: #cfe8c0; font-weight: 500; font-size: 15px; }
+#hint { position: absolute; bottom: 10px; right: 16px; font-size: 12px; color: rgba(255,255,255,.55); }
 
-#bottom {
-  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
-  width: min(440px, 80vw);
+/* 左下角图标列：淡蓝底 + 白色矢量图形（层级高于窗口） */
+#dockBtns {
+  position: absolute; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px;
+  pointer-events: auto; z-index: 45;
 }
-#hpwrap {
-  position: relative; height: 22px; border-radius: 11px;
-  background: rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.25); overflow: hidden;
+.dockbtn {
+  width: 54px; height: 54px; border-radius: 13px; border: 3px solid #7cb8e0;
+  background: #8fc4ea; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: filter .1s, transform .08s;   /* 纯 2D：不用阴影 */
 }
-#hpfill {
-  height: 100%; width: 100%;
-  background: linear-gradient(90deg, #ff5a5a, #ff8a5a);
-  transition: width .12s linear;
-}
-#hptext {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.8);
-}
-#xpwrap {
-  margin-top: 6px; height: 8px; border-radius: 4px;
-  background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.18); overflow: hidden;
-}
-#xpfill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffe27a, #ffd24a); transition: width .15s linear; }
+.dockbtn svg { width: 30px; height: 30px; }
+.dockbtn:hover { filter: brightness(1.1); }
+.dockbtn:active { filter: brightness(.82); transform: scale(.95); }
+/* 生物图鉴按钮：蜂蜜黄 */
+#dexBtn { background: #e9a825; border-color: #c1871a; }
 
-#bagBtn {
-  position: absolute; bottom: 22px; right: 22px;
-  width: 56px; height: 56px; border-radius: 14px; font-size: 26px;
-  background: rgba(20,40,28,.85); border: 2px solid rgba(255,255,255,.25);
-  color: #fff; cursor: pointer; transition: transform .1s, background .1s;
+/* 底部常驻快捷栏：仅一行 = 当前装备的卡（空位为灰色半透明圆角块，无描边；层级高于窗口） */
+#quickbar {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  pointer-events: auto; z-index: 45;
 }
-#bagBtn:hover { background: rgba(40,70,50,.95); transform: translateY(-2px); }
-#bagBtn:active { transform: scale(.94); }
+.quickrow { display: flex; gap: 8px; }
+.qslot { width: 54px; height: 54px; border-radius: 10px; background: rgba(150,160,158,.5); position: relative; }
+.qslot:hover { background: rgba(178,188,184,.6); }
 
-#hint {
-  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
-  font-size: 12px; color: rgba(255,255,255,.55); white-space: nowrap;
-}
-
-/* 背包面板 */
-#inventory {
-  position: absolute; top: 0; right: 0; height: 100%; width: 340px;
-  background: rgba(14,26,20,.96); border-left: 2px solid rgba(255,255,255,.15);
-  padding: 18px; overflow-y: auto; pointer-events: auto;
-  box-shadow: -8px 0 24px rgba(0,0,0,.4);
-}
-#inventory.hidden { display: none; }
-.inv-title { font-size: 20px; font-weight: 800; margin-bottom: 12px; color: #ffe27a; }
-.inv-section { font-size: 13px; color: #bcd; margin: 14px 0 8px; opacity: .85; }
-
-.slot-row { display: flex; gap: 10px; }
-.slot {
-  width: 56px; height: 56px; border-radius: 12px;
-  border: 2px solid rgba(255,255,255,.25); background: rgba(0,0,0,.3);
-  display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative;
-}
-.slot.sel { box-shadow: 0 0 0 3px #ffe27a; }
-.slot img { width: 40px; height: 40px; }
-.slot .rar, .card .rar {
-  position: absolute; bottom: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%;
-}
-
-.inv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+/* 卡牌：外框(同色偏深) + 内板(纯色) + 素材 */
 .card {
-  aspect-ratio: 1; border-radius: 12px; border: 2px solid rgba(255,255,255,.25);
-  background: rgba(0,0,0,.3); display: flex; flex-direction: column; align-items: center;
-  justify-content: center; cursor: pointer; position: relative; padding: 4px;
+  position: relative; width: 100%; height: 100%;
+  border-radius: 7%; padding: 9%; overflow: hidden;
 }
-.card:hover { background: rgba(255,255,255,.08); }
-.card img { width: 70%; height: 70%; object-fit: contain; }
-.card .nm { font-size: 10px; color: #ddd; margin-top: 2px; }
-.card .rar { bottom: 4px; right: 4px; }
-.empty { color: #889; font-size: 13px; grid-column: 1 / -1; padding: 18px 0; text-align: center; }
-.inv-hint { margin-top: 16px; font-size: 12px; color: #9ab; line-height: 1.5; }
+/* 外侧圆角由 .card 提供；内板圆角为 0 -> 描边外面是圆角、内侧是直角。
+   成立条件：外框圆角(8.5%) < 外框厚度(padding 14%)，于是圆角只削到描边上，够不到内板。 */
+.card-face {
+  position: relative; width: 100%; height: 100%; border-radius: 0;
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+}
+.card img.petal { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 
-/* 死亡 */
-#death {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,.55); pointer-events: none;
+/* 窗口：左下角的小蓝窗口（宽 = 6 个按钮宽 = 324px，高 = 1.4 × 宽 = 454px），纯 2D 无阴影 */
+.window {
+  position: absolute; left: 80px; bottom: 16px;
+  width: 324px; height: min(454px, calc(100vh - 32px));
+  background: #6fa8dc; border: 4px solid #5b95c8; border-radius: 18px;
+  display: flex; flex-direction: column; pointer-events: auto; z-index: 40;
 }
-#death.hidden { display: none; }
-.death-card {
-  text-align: center; padding: 30px 44px; border-radius: 18px;
-  background: rgba(40,12,12,.9); border: 2px solid rgba(255,120,120,.4);
+.win-head { position: relative; padding: 12px 54px 4px; }
+.win-title {
+  display: block; text-align: center; font-size: 22px; font-weight: 900; color: #fff; letter-spacing: .3px;
+  text-shadow:
+    0 2px 0 #1b3a55, 2px 0 0 #1b3a55, -2px 0 0 #1b3a55, 0 -2px 0 #1b3a55,
+    2px 2px 0 #1b3a55, -2px -2px 0 #1b3a55, 2px -2px 0 #1b3a55, -2px 2px 0 #1b3a55;
 }
-.death-title { font-size: 34px; font-weight: 900; color: #ff7a7a; }
-.death-sub { margin-top: 8px; color: #e9b3b3; font-size: 14px; }
-#death-timer { margin-top: 14px; color: #ffd; font-size: 13px; opacity: .8; }
+.win-count {
+  position: absolute; left: 16px; top: 15px; font-size: 12px; color: #eaf4fc;
+  text-shadow: 0 1px 0 #1b3a55;
+}
+/* 红底白叉圆角按钮（右上）：平铺 2D，无斜面阴影 */
+.win-close {
+  position: absolute; top: 9px; right: 10px;
+  width: 34px; height: 34px; border: 0; border-radius: 9px; background: #e05252;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.win-close svg { width: 18px; height: 18px; }
+.win-close:hover { background: #e86969; }
+.win-close:active { background: #cf4040; }
+/* 自绘滚动条：仅一根半透明灰色条，不用浏览器默认样式 */
+.win-body { padding: 10px 16px 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.win-body::-webkit-scrollbar { width: 8px; }
+.win-body::-webkit-scrollbar-track { background: transparent; }
+.win-body::-webkit-scrollbar-thumb { background: rgba(226,232,236,.5); border-radius: 8px; }
+.win-body::-webkit-scrollbar-thumb:hover { background: rgba(226,232,236,.7); }
+.win-body { scrollbar-width: thin; scrollbar-color: rgba(226,232,236,.5) transparent; }
 
-/* 图鉴按钮 */
-#dexBtn {
-  position: absolute; bottom: 22px; right: 90px;
-  width: 56px; height: 56px; border-radius: 14px; font-size: 26px;
-  background: rgba(20,40,28,.85); border: 2px solid rgba(255,255,255,.25);
-  color: #fff; cursor: pointer; transition: transform .1s, background .1s;
+/* 画廊：按稀有度分组 */
+.gallery { display: flex; flex-direction: column; gap: 16px; }
+.rar-divider { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+.rar-line { flex: 1; height: 2px; background: currentColor; opacity: .55; border-radius: 2px; }
+.rar-name {
+  font-size: 14px; font-weight: 800; padding: 1px 10px; border-radius: 8px;
+  background: rgba(255,255,255,.75); white-space: nowrap;
 }
-#dexBtn:hover { background: rgba(40,70,50,.95); transform: translateY(-2px); }
-#dexBtn:active { transform: scale(.94); }
+.rar-grid { display: grid; grid-template-columns: repeat(auto-fill, 58px); gap: 8px; }
+.cardcell { position: relative; width: 58px; height: 58px; border-radius: 12px; cursor: pointer; }
+.cardcell:hover { filter: brightness(1.1); }
 
-/* 即时物品栏（底部常驻，淡灰色卡槽） */
-#invBarWrap {
-  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-  pointer-events: auto; z-index: 20;
+/* 卡牌悬浮提示（像生物 nametag） */
+#tip {
+  position: fixed; left: 0; top: 0; z-index: 300; pointer-events: none;
+  background: rgba(9,20,26,.95); border: 2px solid #6fb0d8; border-radius: 10px;
+  padding: 8px 10px; min-width: 130px; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.55);
 }
-#invBar { display: flex; gap: 8px; padding: 8px; border-radius: 16px;
-  background: rgba(8,16,12,.55); border: 2px solid rgba(255,255,255,.12); }
-.invslot {
-  width: 50px; height: 50px; border-radius: 11px;
-  border: 2px solid rgba(255,255,255,.5);
-  background: rgba(205,210,206,.5);   /* 淡灰色卡槽 */
-  display: flex; align-items: center; justify-content: center; position: relative;
-}
-.invslot.filled { animation: slotIn .18s ease; }
-.invcard {
-  width: 100%; height: 100%; border-radius: 9px; border: 2px solid #fff;
-  background: rgba(0,0,0,.25); display: flex; align-items: center; justify-content: center;
-  cursor: grab; position: relative; transition: transform .08s;
-}
-.invcard:hover { transform: translateY(-2px); }
-.invcard img { width: 72%; height: 72%; object-fit: contain; pointer-events: none; }
-.invcard .rar, .slot .rar, .card .rar {
-  position: absolute; bottom: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%;
-}
-.invcard .nm, .card .nm { position: absolute; bottom: -14px; left: 0; right: 0;
-  font-size: 9px; color: #cfe; text-align: center; white-space: nowrap; }
-@keyframes slotIn { from { transform: scale(.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-
-/* 图鉴面板 */
-#dex {
-  position: absolute; top: 0; right: 0; height: 100%; width: 460px;
-  background: rgba(14,26,20,.97); border-left: 2px solid rgba(255,255,255,.15);
-  padding: 18px; overflow-y: auto; pointer-events: auto; z-index: 30;
-  box-shadow: -8px 0 24px rgba(0,0,0,.4);
-}
-#dex.hidden { display: none; }
-.dex-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
-.dex-count { font-size: 12px; color: #9ab; }
-.dex-body { display: flex; flex-direction: column; gap: 6px; }
-.dex-row { display: flex; align-items: center; gap: 10px; padding: 4px; border-radius: 8px; background: rgba(255,255,255,.03); }
-.dex-label { width: 92px; flex: 0 0 92px; display: flex; flex-direction: column; }
-.dex-name { font-size: 13px; font-weight: 700; color: #ffe27a; }
-.dex-tier { font-size: 10px; color: #9ab; }
-.dex-slots { display: flex; gap: 5px; flex: 1; flex-wrap: wrap; }
-.dex-cell {
-  width: 34px; height: 34px; border-radius: 7px; border: 1px solid rgba(255,255,255,.12);
-  background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; position: relative;
-}
-.dex-cell.got { border-color: rgba(120,220,120,.6); cursor: help; }
-.dex-cell img { width: 78%; height: 78%; object-fit: contain; }
-.dex-cell .dex-lv { position: absolute; bottom: -2px; right: 1px; font-size: 9px; color: #cfe; text-shadow: 0 1px 2px #000; }
-.dex-manual { margin-top: 16px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); }
-.dex-manual-title { font-size: 12px; color: #ffb; margin-bottom: 6px; }
-.dex-manual-item { font-size: 11px; color: #c9b79a; line-height: 1.6; }
+#tip .tip-name { font-size: 14px; font-weight: 800; }
+#tip .tip-rar { font-size: 12px; margin: 1px 0 6px; }
+#tip .tip-stats { display: grid; grid-template-columns: auto auto; gap: 2px 12px; font-size: 12px; }
+#tip .tip-stats span { color: #9fc7dd; }
+#tip .tip-stats b { text-align: right; }
+#tip .tip-kind { margin-top: 6px; font-size: 11px; color: #8fb4c6; }
 
 /* 拖拽幽灵 / 飞入动画 */
 .flyghost, #dragGhost {
   position: fixed; z-index: 200; pointer-events: none; width: 54px; height: 54px;
+  transform: translate(-50%, -50%);
 }
-.flyghost .inner, #dragGhost .inner {
-  width: 54px; height: 54px; transform: translate(-50%,-50%) scale(1.25);
-  border-radius: 10px; border: 2px solid #fff; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center;
-}
-.flyghost img, #dragGhost img { width: 78%; height: 78%; }
-#dragGhost .inner { animation: cardShake .55s ease-in-out infinite; }
+#dragGhost .card { animation: cardShake .55s ease-in-out infinite; }
 @keyframes cardShake { 0% { rotate: -9deg; } 50% { rotate: 9deg; } 100% { rotate: -9deg; } }
-
-/* 图鉴悬浮提示 */
-#dexTip {
-  position: fixed; z-index: 300; max-width: 280px; pointer-events: none;
-  background: rgba(8,16,12,.96); border: 1px solid rgba(255,255,255,.25);
-  border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #dfe; line-height: 1.55;
-}
-#dexTip.hidden { display: none; }
-.tip-name { font-size: 14px; font-weight: 800; color: #ffe27a; margin-bottom: 4px; }
-.tip-en { font-size: 11px; color: #9ab; font-weight: 400; }
-.tip-row { margin: 2px 0; }
-.tip-row b { color: #9effa0; }
 
 /* 加载 */
 #loading {

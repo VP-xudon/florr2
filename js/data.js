@@ -5,18 +5,24 @@
 //   2) 不臆造名称：名称缺失的项不进入游戏，并汇总到 NEEDS_MANUAL 交用户手填。
 'use strict';
 
-// florr 风格稀有度（颜色用于边框/光晕）
+// 稀有度（用户指定的精确配色，从低到高）：纯色底板，无渐变
 const RARITIES = {
-  common:    { name: I18N.t('Rarities/common/Name', 'Common'),    color: '#cfcfcf', weight: 64 },
-  unusual:   { name: I18N.t('Rarities/unusual/Name', 'Unusual'),   color: '#54c8ff', weight: 24 },
-  rare:      { name: I18N.t('Rarities/rare/Name', 'Rare'),      color: '#ffd74a', weight: 9  },
-  epic:      { name: I18N.t('Rarities/epic/Name', 'Epic'),      color: '#b154ff', weight: 3.2 },
-  legendary: { name: I18N.t('Rarities/legendary/Name', 'Legendary'), color: '#ff8a3d', weight: 1.1 },
-  mythic:    { name: I18N.t('Rarities/mythic/Name', 'Mythic'),    color: '#ff4d4d', weight: 0.32 },
-  ultra:     { name: I18N.t('Rarities/ultra/Name', 'Ultra'),     color: '#c8ff4d', weight: 0.07 },
-  super:     { name: I18N.t('Rarities/super/Name', 'Super'),     color: '#ff66cc', weight: 0.02 }
+  common:    { name: I18N.t('Rarities/common/Name', 'Common'),       color: '#7EEF6D', weight: 64    }, // 草绿
+  unusual:   { name: I18N.t('Rarities/unusual/Name', 'Unusual'),     color: '#FFE65D', weight: 24    }, // 淡黄
+  rare:      { name: I18N.t('Rarities/rare/Name', 'Rare'),           color: '#4D52E3', weight: 9     }, // 紫蓝
+  epic:      { name: I18N.t('Rarities/epic/Name', 'Epic'),           color: '#861FDE', weight: 3.2   }, // 紫
+  legendary: { name: I18N.t('Rarities/legendary/Name', 'Legendary'), color: '#DE1F1F', weight: 1.1   }, // 大红
+  mythic:    { name: I18N.t('Rarities/mythic/Name', 'Mythic'),       color: '#1FDBDE', weight: 0.32  }, // 天蓝
+  ultra:     { name: I18N.t('Rarities/ultra/Name', 'Ultra'),         color: '#FF2B75', weight: 0.07  }, // 粉红
+  super:     { name: I18N.t('Rarities/super/Name', 'Super'),         color: '#2BFFA3', weight: 0.02  }, // 荧光绿
+  eternal:   { name: I18N.t('Rarities/eternal/Name', 'Eternal'),     color: '#EEEEEE', weight: 0.004 }  // 苍白（super 上级）
 };
-const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super'];
+const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
+
+// ---------------- 可用花瓣白名单 ----------------
+// 当前只启用 Basic：其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
+const ENABLED_PETAL_SLUGS = new Set(['basic']);
+const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
 const FANMADE_PETAL_FROM = 95;   // 花瓣 1..94 真实；95..116 二创
@@ -58,6 +64,8 @@ function buildPetalTypes() {
     }
     const slug = (p.name && String(p.name).trim()) ? String(p.name).trim().toLowerCase().replace(/ /g, '_') : '';
     const name = I18N.t('Petals/' + slug + '/Name', (p.name && String(p.name).trim()) ? p.name : p.zh);
+    // 白名单：不在可用花瓣表中的一律视为冗余素材（文件保留，不加载；日后加 slug 即可启用）
+    if (!ENABLED_PETAL_SLUGS.has(slug)) { DISABLED_PETALS.push({ id, name }); continue; }
     const key = 'p' + id;   // 稳定 key，避免名称冲突
     const t = {
       id, key, name,

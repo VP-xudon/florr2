@@ -4,6 +4,25 @@
 // 世界放大后（瓦片 24→384），移动速度按相同比例放大，保持手感一致。
 const SPEED_SCALE = 5;
 
+// 花瓣物理参数
+// 采用「一阶指数逼近 + 滞后上限」而非二阶弹簧：
+//   二阶弹簧在人物高速运动时的稳态滞后 = v·c/k，很容易大到和轨道半径同量级，
+//   再叠加欠阻尼就是"稍微一走就乱斗/装上就抖几下"。一阶逼近在数学上单调收敛，绝不过冲。
+const PETAL_RATE     = 5.0;   // 吸附速率(1/s)：越小越松弛、跟随越慢
+const PETAL_MAX_LAG  = 0.40;  // 稳态最大滞后 = 轨道半径 × 该系数（拖到此为止，再拖就跟着走）
+const PETAL_LAG_RAMP = 0.6;   // 上场后，滞后上限由"整圈"平滑收敛到稳态值所需时间(s)
+const PETAL_REACH    = 36;    // 轨道半径 = this.r + PETAL_REACH（离人物更远）
+const PETAL_R        = 14;    // 花瓣碰撞半径（花瓣本身是实体）
+const PETAL_SPIN     = 1.375; // 整圈自转速度 rad/s（默认转速的 2.5 倍）
+
+// 通用出场 / 退场动画（所有实体统一遵守，时长 0.5s）
+//   出场：大小不变，仅渐显
+//   退场（死亡 / 被删除 / 卸下）：平滑放大到 1.5 倍，同时渐隐
+const FADE_T      = 0.5;
+const DEATH_SCALE = 1.5;
+function spawnFade(age) { return clamp(age / FADE_T, 0, 1); }                 // 出场：0 -> 1 的 alpha
+function deathFade(t01) { return { scale: 1 + (DEATH_SCALE - 1) * t01, alpha: 1 - t01 }; }
+
 // 绘制已预渲染的贴图（支持旋转/缩放/透明）
 function drawSprite(ctx, key, size, x, y, rot, scale, alpha) {
   const cv = SpriteStore.canvas(key, size);
@@ -25,6 +44,18 @@ function drawWhite(ctx, key, size, x, y, rot, scale, alpha) {
   if (rot) ctx.rotate(rot);
   if (scale && scale !== 1) ctx.scale(scale, scale);
   ctx.globalAlpha = alpha;
+  ctx.drawImage(cv, -size / 2, -size / 2, size, size);
+  ctx.restore();
+}
+
+// 绘制"花瓣实体"画布（已去字母、已收紧画布），支持旋转/缩放/透明
+function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
+  if (!cv) return;
+  ctx.save();
+  ctx.translate(x, y);
+  if (rot) ctx.rotate(rot);
+  if (scale && scale !== 1) ctx.scale(scale, scale);
+  if (alpha != null) ctx.globalAlpha = alpha;
   ctx.drawImage(cv, -size / 2, -size / 2, size, size);
   ctx.restore();
 }
@@ -54,7 +85,7 @@ class Player {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
     this.r = 22;
     this.facing = 0;
-    this.baseSpeed = 232 * SPEED_SCALE; this.speed = this.baseSpeed;
+    this.baseSpeed = 232 * SPEED_SCALE * 0.4; this.speed = this.baseSpeed;  // 人物移速 = 原来的 0.4 倍
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.damage = 0;
@@ -66,6 +97,9 @@ class Player {
     this.invuln = 0; this.flash = 0;
     this.dead = false; this.deathTimer = 0;
     this.breath = 0; this.moving = false;
+    this.spin = 0;              // 花瓣环绕角度
+    this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
+    this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
     this.name = 'Flower';
   }
@@ -80,7 +114,7 @@ class Player {
     this.damage = dmg;
   }
 
-  update(dt, dir, map) {
+  update(dt, dir, map, mobs) {
     if (this.dead) { this.deathTimer += dt; return; }
     const len = Math.hypot(dir.x, dir.y);
     let tx = 0, ty = 0;
@@ -97,77 +131,173 @@ class Player {
     this.invuln = Math.max(0, this.invuln - dt);
     this.flash = Math.max(0, this.flash - dt);
 
-    // 计算每片花瓣的世界坐标（用于绘制与碰撞）
-    this.petalWorld = [];
-    const step = TAU / this.slots.length;
-    for (let i = 0; i < this.slots.length; i++) {
-      const p = this.slots[i];
-      if (!p) continue;
-      const ang = this.facing + i * step + this.breath * 0.6;
-      const reach = this.r + 15 + (p.lunge > 0 ? p.lunge * 38 : 0) + Math.sin(this.breath * 3 + i) * 2;
-      this.petalWorld.push({
-        x: this.x + Math.cos(ang) * reach,
-        y: this.y + Math.sin(ang) * reach,
-        r: 14, index: i, ang
-      });
-    }
-    for (const p of this.slots) if (p && p.lunge > 0) p.lunge = Math.max(0, p.lunge - dt);
+    this.spin += PETAL_SPIN * dt;
+    this._syncPetals(dt, map, mobs);
   }
 
-  gainXp(n) {
-    this.xp += n;
-    while (this.xp >= this.xpNext) {
-      this.xp -= this.xpNext;
-      this.level++;
-      this.xpNext = Math.round(this.xpNext * 1.22 + 8);
-      this.maxHp += 12;
-      this.hp = this.maxHp;
+  // 花瓣是实体 -> 会撞墙、也会撞生物：
+  //   期望位置若在墙里，本帧位移会被 map.move 挡住（贴着墙继续挤）；
+  //   由于目标点随自转持续转动，转到没墙的一侧时花瓣就自然滑出/弹回去。
+  _resolvePetal(b, mx, my, map, mobs) {
+    const px = b.x, py = b.y;
+    if (map && typeof map.move === 'function') {
+      // move 内部含 recoverEmbedded（把陷进墙里的圆顶出来）+ 沿墙滑动
+      const res = map.move(px, py, mx, my, PETAL_R);
+      b.x = res.x; b.y = res.y;
+    } else {
+      b.x = px + mx; b.y = py + my;
+      if (map && typeof map.clampTo === 'function') {
+        const p = map.clampTo(b.x, b.y, PETAL_R);
+        b.x = p[0]; b.y = p[1];
+      }
     }
+    // 与生物：把花瓣挤出生物体外（单向，不推动生物）
+    if (mobs) {
+      for (const m of mobs) {
+        if (!m || m.dead) continue;
+        const dx = b.x - m.x, dy = b.y - m.y;
+        const d = Math.hypot(dx, dy);
+        const rr = PETAL_R + m.r;
+        if (d > 0 && d < rr) { b.x = m.x + (dx / d) * rr; b.y = m.y + (dy / d) * rr; }
+      }
+    }
+  }
+
+  // 花瓣 = 实体：每片都有"此刻应在的位置"(target) 与 "实际位置"，平滑吸附过去。
+  //   · 按「当前装备数量」平分一圈：2 片 180° 相对、3 片三角、5 片五角……（空槽不占位）
+  //   · 刚上场的花瓣初始位置就在人物中心，再慢慢"冒"到应在位置
+  //   · 人物跑起来时目标点跟着跑，花瓣会被甩在后面一小段距离，再平滑吸附（故意保留的缓冲感）
+  //   · 装备数量变化引起间距重排时，同样走这套吸附过程，绝不瞬移
+  _syncPetals(dt, map, mobs) {
+    const live = [];
+    for (let i = 0; i < this.slots.length; i++) if (this.slots[i]) live.push(i);
+    const n = live.length;
+
+    // 同步实体列表：同一张卡保留其运动状态；新出现的卡从人物中心出生
+    const bodies = [];
+    for (let k = 0; k < n; k++) {
+      const slotIndex = live[k];
+      const card = this.slots[slotIndex];
+      let body = null;
+      for (const b of this.petals) if (b.slotIndex === slotIndex && b.card === card) { body = b; break; }
+      if (!body) body = { slotIndex, card, x: this.x, y: this.y, age: 0 };
+      body.age += dt;
+      body.ord = k; body.n = n;
+      bodies.push(body);
+    }
+    // 本次已不在装备栏里的花瓣 -> 转为"退场幽灵"（卸下/删除 = 放大 + 渐隐）
+    for (const b of this.petals) {
+      let kept = false;
+      for (const nb of bodies) if (nb.slotIndex === b.slotIndex && nb.card === b.card) { kept = true; break; }
+      if (!kept) this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+    }
+    this.petals = bodies;
+    // 幽灵推进，超时即真正移除
+    for (const g of this.petalGhosts) g.age += dt;
+    this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
+
+    // 计算应在位置，并以一阶指数逼近走过去（帧率无关，且数学上单调 -> 绝不过冲/抖动）
+    const step = n > 0 ? TAU / n : 0;
+    const reach = this.r + PETAL_REACH;
+    const kf = 1 - Math.exp(-PETAL_RATE * dt);
+    for (const b of this.petals) {
+      const ang = this.spin + b.ord * step;
+      const tx = this.x + Math.cos(ang) * reach;
+      const ty = this.y + Math.sin(ang) * reach;
+
+      // 滞后上限：刚上场允许误差达整圈（于是能从人物中心慢慢"冒出来"），
+      // 之后随时间收敛到稳态上限；稳态下跑得再快也只拖这么多，既不会越拖越远，也不会回弹。
+      const settle = clamp(b.age / PETAL_LAG_RAMP, 0, 1);
+      const maxLag = reach * (settle * PETAL_MAX_LAG + (1 - settle));
+
+      let dx = tx - b.x, dy = ty - b.y;
+      const d = Math.hypot(dx, dy);
+      let mx, my;
+      if (d > maxLag && d > 0) {
+        // 已超出滞后上限：本帧补回超出部分，再叠加正常吸附步长
+        const k = (d - maxLag) + maxLag * kf;
+        mx = (dx / d) * k; my = (dy / d) * k;
+      } else {
+        mx = dx * kf; my = dy * kf;
+      }
+      // 单帧位移上限：避免被墙卡住时沿墙被拖着狂奔
+      const md = Math.hypot(mx, my), cap = Math.max(8, maxLag);
+      if (md > cap) { mx = (mx / md) * cap; my = (my / md) * cap; }
+      // 走碰撞管线：撞墙 / 撞生物
+      this._resolvePetal(b, mx, my, map, mobs);
+    }
+
+    // 供绘制与碰撞使用
+    this.petalWorld = this.petals.map((b) => ({ x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age }));
   }
 
   draw(ctx) {
     if (this.dead) return;
-    // 花瓣
+    // 花瓣实体：出场渐显（大小不变）
     for (const pp of this.petalWorld) {
       const p = this.slots[pp.index];
-      const size = 30;
-      const rot = pp.ang + Math.PI / 2;
-      // 稀有度光晕
-      ctx.save();
-      ctx.shadowColor = p.type.color || '#fff';
-      ctx.shadowBlur = 10;
-      drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, 1, 1);
-      ctx.restore();
-      if (p.lunge > 0) {
-        drawWhite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, 1, p.lunge * 3);
-      }
+      const size = 15;                            // 实体直径
+      // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
+      const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
+      const a = spawnFade(pp.age);                // 出场：仅渐显 0.5s
+      const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
+      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, 1, a);
+      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, 1, a);  // 回退
     }
-    // 身体（花心）
-    const bs = this.r * 2.4 * (1 + 0.04 * Math.sin(this.breath * 2));
-    const grad = ctx.createRadialGradient(this.x - bs * 0.12, this.y - bs * 0.12, bs * 0.1, this.x, this.y, bs * 0.6);
-    grad.addColorStop(0, '#fff7e6');
-    grad.addColorStop(1, '#f2d79a');
-    ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.arc(this.x, this.y, bs * 0.5, 0, TAU); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(150,110,40,0.5)'; ctx.stroke();
+    // 被卸下/移除的花瓣：留在原地放大到 1.5 倍并渐隐 0.5s
+    for (const g of this.petalGhosts) {
+      const d = deathFade(clamp(g.age / FADE_T, 0, 1));
+      const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
+      const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
+      if (cv) drawArt(ctx, cv, 15, g.x, g.y, rot, d.scale, d.alpha);
+      else drawSprite(ctx, 'petal' + g.card.type.svg, 15, g.x, g.y, rot, d.scale, d.alpha);
+    }
 
-    // 眼睛（朝向移动方向）
+    // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）
+    const R = this.r * 1.2;                 // 脸部半径
+    ctx.save();
+    // 脸
+    ctx.fillStyle = '#fae26a';            // 介于改前(#f7db45)与改后(#fce98e)之间
+    ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
+    ctx.lineWidth = Math.max(2, R * 0.085);
+    ctx.strokeStyle = '#dfbc4e';          // 描边：能看清，又不过分跳
+    ctx.stroke();
+    // 眼睛：黑色竖椭圆；白色按移动方向偏移（就是在"看"那个方向）
     const look = this.facing;
-    const ex = Math.cos(look) * bs * 0.16, ey = Math.sin(look) * bs * 0.16;
+    const erx = R * 0.138, ery = R * 0.2592;  // 眼睛整体 ×1.2（横竖同比例 -> 形状不变）
     for (const s of [-1, 1]) {
-      const ox = this.x + Math.cos(look + Math.PI / 2) * bs * 0.18 * s;
-      const oy = this.y + Math.sin(look + Math.PI / 2) * bs * 0.18 * s;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(ox, oy, bs * 0.13, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#222';
-      ctx.beginPath(); ctx.arc(ox + ex * 0.5, oy + ey * 0.5, bs * 0.07, 0, TAU); ctx.fill();
+      // 眼距：眼睛放大 20% 后，若中心距不变，两眼之间的"视觉缝隙"会被吃掉 0.046R。
+      // 这里把中心距由 ±0.2425R 拉到 ±0.275R，把缝隙补回来并略宽一点（仍保持形状不变）。
+      const ex = this.x + s * R * 0.275, ey = this.y - R * 0.20;
+      ctx.fillStyle = '#25252a';
+      ctx.beginPath(); ctx.ellipse(ex, ey, erx, ery, 0, 0, TAU); ctx.fill();
+      // 白色眼球：与黑眼椭圆同形状的缩小长圆形（同一长宽比），按移动方向偏移
+      const wk = 0.46;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex + Math.cos(look) * erx * 0.5,
+        ey + Math.sin(look) * ery * 0.42,
+        erx * wk, ery * wk, 0, 0, TAU
+      );
+      ctx.fill();
     }
+    // 嘴：固定的微笑弧（长度减半，并保持位于眼睛下方）
+    ctx.strokeStyle = '#25252a';
+    ctx.lineWidth = Math.max(2, R * 0.07);   // 变细
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    // 弧半径 0.25R -> 0.3125R：长度 ×1.25
+    // 弧心 y：0.30R -> 0.204R（上移 1/5 嘴宽；嘴宽 = 2·0.3125R·cos(0.22π) ≈ 0.482R，其 1/5 ≈ 0.0964R）
+    ctx.arc(this.x, this.y + R * 0.204, R * 0.3125, Math.PI * 0.22, Math.PI * 0.78);
+    ctx.stroke();
+    ctx.restore();
 
     if (this.flash > 0) {
       ctx.save();
       ctx.globalAlpha = clamp(this.flash / 0.18, 0, 1) * 0.85;
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(this.x, this.y, bs * 0.5, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
       ctx.restore();
     }
   }
@@ -186,6 +316,7 @@ class Mob {
     this.facing = rand(0, TAU); this.bob = rand(0, TAU);
     this.flash = 0; this.hitCd = 0; this.squash = 0;
     this.dead = false; this.deathTimer = 0;
+    this.age = 0;                       // 出场计时（渐显用）
     this.wanderA = rand(0, TAU); this.wanderT = 0;
     this.aggro = false;
     this.xpVal = 4 + type.tier * 4;
@@ -193,6 +324,7 @@ class Mob {
 
   update(dt, player, map) {
     if (this.dead) { this.deathTimer += dt; return; }
+    this.age += dt;
     this.flash = Math.max(0, this.flash - dt);
     this.hitCd = Math.max(0, this.hitCd - dt);
     this.squash = damp(this.squash, 0, 10, dt);
@@ -218,16 +350,17 @@ class Mob {
 
   draw(ctx) {
     let scale = 1 + this.squash * 0.4;
-    let alpha = 1;
+    let alpha = spawnFade(this.age);        // 出场：大小不变，渐显
     if (this.dead) {
-      const t = clamp(this.deathTimer / 0.5, 0, 1);
-      scale *= (1 - t);
-      alpha = 1 - t;
+      const d = deathFade(clamp(this.deathTimer / FADE_T, 0, 1));   // 退场：放大到 1.5 倍 + 渐隐
+      scale *= d.scale;
+      alpha = d.alpha;
     }
     const bob = 1 + Math.sin(this.bob * 3) * 0.05;
     const key = 'mob' + this.svg;
     if (this.flash > 0) {
-      drawWhite(ctx, key, this.drawSize, this.x, this.y, this.facing, scale * bob, clamp(this.flash / 0.14, 0, 1) * 0.9);
+      drawWhite(ctx, key, this.drawSize, this.x, this.y, this.facing, scale * bob,
+        spawnFade(this.age) * clamp(this.flash / 0.14, 0, 1) * 0.9);
     } else {
       drawSprite(ctx, key, this.drawSize, this.x, this.y, this.facing, scale * bob, alpha);
     }
@@ -267,13 +400,15 @@ class Card {
     this.color = RARITIES[rarity].color;
     this.angle = rand(0, TAU); this.bob = rand(0, TAU);
     this.r = 13; this.picked = false; this.done = false; this.pickT = 0;
+    this.age = 0;                     // 出场计时（渐显用）
     this.size = 30;
   }
   update(dt, player) {
+    this.age += dt;
     this.bob += dt; this.angle += dt * 1.6;
     if (this.picked) {
       this.pickT += dt;
-      const t = clamp(this.pickT / 0.25, 0, 1);
+      const t = clamp(this.pickT / FADE_T, 0, 1);   // 退场 0.5s
       this.x = lerp(this.x, player.x, t);
       this.y = lerp(this.y, player.y - 30, t);
       if (t >= 1) this.done = true;
@@ -289,19 +424,23 @@ class Card {
   }
   draw(ctx) {
     if (this.picked) {
-      const t = clamp(this.pickT / 0.25, 0, 1);
-      drawSprite(ctx, 'petal' + this.type.svg, this.size * (1 - t * 0.6),
-        this.x, this.y, this.angle, 1, 1 - t);
+      const d = deathFade(clamp(this.pickT / FADE_T, 0, 1));   // 退场：放大 + 渐隐
+      drawSprite(ctx, 'petal' + this.type.svg, this.size * d.scale,
+        this.x, this.y, this.angle, 1, d.alpha);
       return;
     }
     const bobY = Math.sin(this.bob * 2) * 3;
+    const a = spawnFade(this.age);                 // 出场：大小不变，渐显
     ctx.save();
     ctx.shadowColor = this.color; ctx.shadowBlur = 14;
-    drawSprite(ctx, 'petal' + this.type.svg, this.size, this.x, this.y + bobY, this.angle, 1, 1);
+    drawSprite(ctx, 'petal' + this.type.svg, this.size, this.x, this.y + bobY, this.angle, 1, a);
     ctx.restore();
     // 稀有度环
+    ctx.save();
+    ctx.globalAlpha = a;
     ctx.strokeStyle = this.color; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(this.x, this.y + bobY, this.r + 4, 0, TAU); ctx.stroke();
+    ctx.restore();
   }
 }
 
