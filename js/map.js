@@ -2,7 +2,7 @@
 'use strict';
 
 // 真实花园地图渲染时的世界像素尺寸（每格瓦片 = GARDEN_TILE 世界单位）。
-const GARDEN_TILE = 384;
+const GARDEN_TILE = 384 * 0.75;  // 288：瓦片/碰撞/地图整体缩至原 0.75
 
 function createMap(R) {
   const harmonics = [];

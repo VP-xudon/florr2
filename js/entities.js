@@ -9,11 +9,11 @@ const SPEED_SCALE = 5;
 //   二阶弹簧在人物高速运动时的稳态滞后 = v·c/k，很容易大到和轨道半径同量级，
 //   再叠加欠阻尼就是"稍微一走就乱斗/装上就抖几下"。一阶逼近在数学上单调收敛，绝不过冲。
 const PETAL_RATE     = 5.0;   // 吸附速率(1/s)：越小越松弛、跟随越慢
-const PETAL_MAX_LAG  = 0.40;  // 稳态最大滞后 = 轨道半径 × 该系数（拖到此为止，再拖就跟着走）
+const PETAL_MAX_LAG  = 0.45;  // 稳态最大滞后 = 轨道半径 × 该系数；上一版 0.9 太严重，降到 0.5 倍
 const PETAL_LAG_RAMP = 0.6;   // 上场后，滞后上限由"整圈"平滑收敛到稳态值所需时间(s)
-const PETAL_REACH    = 36;    // 轨道半径 = this.r + PETAL_REACH（离人物更远）
-const PETAL_R        = 14;    // 花瓣碰撞半径（花瓣本身是实体）
-const PETAL_SPIN     = 1.375; // 整圈自转速度 rad/s（默认转速的 2.5 倍）
+const PETAL_REACH    = 2;     // 花瓣中点到主角边缘的距离 = 主角直径(2r) -> reach = r + 2r
+const PETAL_R        = 14 * 0.9;  // 12.6：花瓣碰撞半径缩至原 0.9
+const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
 
 // 通用出场 / 退场动画（所有实体统一遵守，时长 0.5s）
 //   出场：大小不变，仅渐显
@@ -83,9 +83,9 @@ function moveEntity(entity, dt, map) {
 class Player {
   constructor() {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
-    this.r = 22;
+    this.r = 22 * 0.6;   // 主角半径 = 原来的 0.6 倍 (≈13.2)
     this.facing = 0;
-    this.baseSpeed = 232 * SPEED_SCALE * 0.4; this.speed = this.baseSpeed;  // 人物移速 = 原来的 0.4 倍
+    this.baseSpeed = 232 * SPEED_SCALE * 0.2; this.speed = this.baseSpeed;  // 人物移速 = 当前(0.4倍)再放慢一半 = 0.5 倍于当前
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.damage = 0;
@@ -119,8 +119,8 @@ class Player {
     const len = Math.hypot(dir.x, dir.y);
     let tx = 0, ty = 0;
     if (len > 0) { tx = dir.x / len * this.speed; ty = dir.y / len * this.speed; }
-    this.vx = damp(this.vx, tx, 12, dt);
-    this.vy = damp(this.vy, ty, 12, dt);
+    this.vx = damp(this.vx, tx, 2, dt);   // 移动加速/减速平滑（τ≈0.5s）：起停均有约 0.5s 过渡
+    this.vy = damp(this.vy, ty, 2, dt);
     moveEntity(this, dt, map);
     this.moving = len > 0;
     if (this.moving) {
@@ -138,19 +138,9 @@ class Player {
   // 花瓣是实体 -> 会撞墙、也会撞生物：
   //   期望位置若在墙里，本帧位移会被 map.move 挡住（贴着墙继续挤）；
   //   由于目标点随自转持续转动，转到没墙的一侧时花瓣就自然滑出/弹回去。
+  // 取消花瓣与墙体的碰撞：花瓣自由跟随主角，穿墙不卡（仍与生物单向挤出）
   _resolvePetal(b, mx, my, map, mobs) {
-    const px = b.x, py = b.y;
-    if (map && typeof map.move === 'function') {
-      // move 内部含 recoverEmbedded（把陷进墙里的圆顶出来）+ 沿墙滑动
-      const res = map.move(px, py, mx, my, PETAL_R);
-      b.x = res.x; b.y = res.y;
-    } else {
-      b.x = px + mx; b.y = py + my;
-      if (map && typeof map.clampTo === 'function') {
-        const p = map.clampTo(b.x, b.y, PETAL_R);
-        b.x = p[0]; b.y = p[1];
-      }
-    }
+    b.x += mx; b.y += my;
     // 与生物：把花瓣挤出生物体外（单向，不推动生物）
     if (mobs) {
       for (const m of mobs) {
@@ -198,7 +188,7 @@ class Player {
 
     // 计算应在位置，并以一阶指数逼近走过去（帧率无关，且数学上单调 -> 绝不过冲/抖动）
     const step = n > 0 ? TAU / n : 0;
-    const reach = this.r + PETAL_REACH;
+    const reach = this.r * (1 + PETAL_REACH) * 1.3;  // 花瓣与主角距离 +0.3 倍
     const kf = 1 - Math.exp(-PETAL_RATE * dt);
     for (const b of this.petals) {
       const ang = this.spin + b.ord * step;
@@ -236,7 +226,7 @@ class Player {
     // 花瓣实体：出场渐显（大小不变）
     for (const pp of this.petalWorld) {
       const p = this.slots[pp.index];
-      const size = 15;                            // 实体直径
+      const size = 15 * 0.9;                        // 13.5：花瓣视觉缩至原 0.9
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);                // 出场：仅渐显 0.5s
@@ -249,8 +239,8 @@ class Player {
       const d = deathFade(clamp(g.age / FADE_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-      if (cv) drawArt(ctx, cv, 15, g.x, g.y, rot, d.scale, d.alpha);
-      else drawSprite(ctx, 'petal' + g.card.type.svg, 15, g.x, g.y, rot, d.scale, d.alpha);
+      if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
+      else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
     }
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）
@@ -259,7 +249,7 @@ class Player {
     // 脸
     ctx.fillStyle = '#fae26a';            // 介于改前(#f7db45)与改后(#fce98e)之间
     ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
-    ctx.lineWidth = Math.max(2, R * 0.085);
+    ctx.lineWidth = R * 0.085;   // 等比缩放（去下限，保证描边随脸同步缩小）
     ctx.strokeStyle = '#dfbc4e';          // 描边：能看清，又不过分跳
     ctx.stroke();
     // 眼睛：黑色竖椭圆；白色按移动方向偏移（就是在"看"那个方向）
@@ -284,7 +274,7 @@ class Player {
     }
     // 嘴：固定的微笑弧（长度减半，并保持位于眼睛下方）
     ctx.strokeStyle = '#25252a';
-    ctx.lineWidth = Math.max(2, R * 0.07);   // 变细
+    ctx.lineWidth = R * 0.07;   // 等比缩放（去下限）
     ctx.lineCap = 'round';
     ctx.beginPath();
     // 弧半径 0.25R -> 0.3125R：长度 ×1.25

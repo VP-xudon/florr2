@@ -36,8 +36,22 @@ body {
   pointer-events: auto; z-index: 45;
 }
 .quickrow { display: flex; gap: 8px; }
-.qslot { width: 54px; height: 54px; border-radius: 10px; background: rgba(150,160,158,.5); position: relative; }
-.qslot:hover { background: rgba(178,188,184,.6); }
+/* 空卡槽：用 ::after 画“空 eternal 卡”灰白外观；装卡后 .card 绝对铺满 54px 完全覆盖，无痕迹 */
+.qslot { width: 54px; height: 54px; border-radius: 4px; position: relative; }
+.qslot::after {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  border-radius: 4px; background: #ededed; border: 3.4px solid #c3c3c3; box-sizing: border-box;
+}
+.qslot .card { position: absolute; inset: 0; z-index: 1; }
+.qslot:hover::after { background: #f6f6f6; }
+/* 卡牌数量角标：右上角，白字黑描边，轻微斜角（比例参见 pack.png，可微调） */
+.card-count {
+  position: absolute; top: 1px; right: 2px; z-index: 5;
+  font: 800 10.4px/1 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;  /* 随卡 0.8 倍 */
+  color: #fff; -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;
+  transform: rotate(30deg); transform-origin: center;
+  pointer-events: none; text-shadow: 0 0 1.5px #000;
+}
 
 /* 卡牌：外框(同色偏深) + 内板(纯色) + 素材 */
 .card {
@@ -52,33 +66,41 @@ body {
 }
 .card img.petal { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 
-/* 窗口：左下角的小蓝窗口（宽 = 6 个按钮宽 = 324px，高 = 1.4 × 宽 = 454px），纯 2D 无阴影 */
+/* 窗口：左下角背包窗口（宽 = 原 0.8 倍；主色 = 捕获.png 背包按钮棕，描边 = darken(0.18)） */
 .window {
   position: absolute; left: 80px; bottom: 16px;
-  width: 324px; height: min(454px, calc(100vh - 32px));
-  background: #6fa8dc; border: 4px solid #5b95c8; border-radius: 18px;
-  display: flex; flex-direction: column; pointer-events: auto; z-index: 40;
+  width: 259.2px;                          /* 背包宽度 = 原 0.8 倍 */
+  height: auto; min-height: 120px; max-height: 388.8px;   /* 纵向自适应：最多 1.5×宽，多了滚轮 */
+  background: #7bbcd6; border: 4px solid #4d8aa3; border-radius: 5.4px;  /* 同色系更舒服的蓝（调暗） */
+  display: flex; flex-direction: column; pointer-events: auto; z-index: 100;   /* 窗口置于最高图层 */
+  opacity: 1; transform: translateY(0);
+  transition: transform .5s ease, opacity .5s ease;   /* 打开从下方冒出 / 关闭滑回下方 0.5s */
 }
+/* 关闭态：完全滑回屏幕下方外并淡出（保持 flex 布局，仅覆盖全局 .hidden 的 display:none） */
+.window.hidden { display: flex !important; opacity: 0; transform: translateY(100%); pointer-events: none; }
+
+/* 信息栏（卡牌/生物半透明信息）：0.2s 渐显渐隐 */
+#tip, .tip { transition: opacity .2s ease; z-index: 200; }   /* 信息栏位于窗口之上 */
+#tip.hidden, .tip.hidden { display: block !important; opacity: 0; pointer-events: none; }
 .win-head { position: relative; padding: 12px 54px 4px; }
 .win-title {
-  display: block; text-align: center; font-size: 22px; font-weight: 900; color: #fff; letter-spacing: .3px;
-  text-shadow:
-    0 2px 0 #1b3a55, 2px 0 0 #1b3a55, -2px 0 0 #1b3a55, 0 -2px 0 #1b3a55,
-    2px 2px 0 #1b3a55, -2px -2px 0 #1b3a55, 2px -2px 0 #1b3a55, -2px 2px 0 #1b3a55;
+  display: block; text-align: center; font-size: 7.3px; font-weight: 800; color: #fff; letter-spacing: .3px;
+  text-shadow: 0 1px 0 #1b3a55;
 }
 .win-count {
   position: absolute; left: 16px; top: 15px; font-size: 12px; color: #eaf4fc;
   text-shadow: 0 1px 0 #1b3a55;
 }
-/* 红底白叉圆角按钮（右上）：平铺 2D，无斜面阴影 */
+/* 关闭按钮：原 1/4 大小（边长半、面积 1/4），棕红底 + 深棕红描边，纯 2D 无伪 3D */
 .win-close {
-  position: absolute; top: 9px; right: 10px;
-  width: 34px; height: 34px; border: 0; border-radius: 9px; background: #e05252;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 6px; right: 8px;
+  width: 17px; height: 17px; border: 2px solid #5c241a; border-radius: 2.7px;
+  background: #a8432f; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
 }
-.win-close svg { width: 18px; height: 18px; }
-.win-close:hover { background: #e86969; }
-.win-close:active { background: #cf4040; }
+.win-close svg { width: 11px; height: 11px; }
+.win-close:hover { background: #bb4d36; }
+.win-close:active { background: #8f3826; }
 /* 自绘滚动条：仅一根半透明灰色条，不用浏览器默认样式 */
 .win-body { padding: 10px 16px 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .win-body::-webkit-scrollbar { width: 8px; }
@@ -88,16 +110,18 @@ body {
 .win-body { scrollbar-width: thin; scrollbar-color: rgba(226,232,236,.5) transparent; }
 
 /* 画廊：按稀有度分组 */
-.gallery { display: flex; flex-direction: column; gap: 16px; }
-.rar-divider { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
-.rar-line { flex: 1; height: 2px; background: currentColor; opacity: .55; border-radius: 2px; }
+.gallery { display: flex; flex-direction: column; gap: 12px; }
+/* 背包内部卡牌 = 原 0.8 倍 */
+.bag-grid { display: grid; grid-template-columns: repeat(auto-fill, 46.4px); gap: 6px; }
+.rar-divider { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.rar-line { flex: 1; height: 2px; border-radius: 2px; }   /* 背景色由 JS 设：对应稀有度描边略深色 */
 .rar-name {
-  font-size: 14px; font-weight: 800; padding: 1px 10px; border-radius: 8px;
-  background: rgba(255,255,255,.75); white-space: nowrap;
+  font-size: 12px; font-weight: 800; padding: 1px 8px; border-radius: 6px;
+  background: transparent; white-space: nowrap;
+  -webkit-text-stroke: 1px #000; paint-order: stroke fill;   /* 稀有度色字 + 黑描边 */
 }
-.rar-grid { display: grid; grid-template-columns: repeat(auto-fill, 58px); gap: 8px; }
-.cardcell { position: relative; width: 58px; height: 58px; border-radius: 12px; cursor: pointer; }
-.cardcell:hover { filter: brightness(1.1); }
+.rar-grid { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.cardcell { position: relative; width: 46.4px; height: 46.4px; border-radius: 10px; cursor: pointer; }
 
 /* 卡牌悬浮提示（像生物 nametag） */
 #tip {
@@ -113,8 +137,13 @@ body {
 #tip .tip-kind { margin-top: 6px; font-size: 11px; color: #8fb4c6; }
 
 /* 拖拽幽灵 / 飞入动画 */
-.flyghost, #dragGhost {
+.flyghost {
   position: fixed; z-index: 200; pointer-events: none; width: 54px; height: 54px;
+  transform: translate(-50%, -50%);
+}
+/* 拖拽中的卡 = 卡槽中卡牌的 1.3 倍（54 * 1.3 = 70.2px），摇晃动画保持不变 */
+#dragGhost {
+  position: fixed; z-index: 200; pointer-events: none; width: 70.2px; height: 70.2px;
   transform: translate(-50%, -50%);
 }
 #dragGhost .card { animation: cardShake .55s ease-in-out infinite; }

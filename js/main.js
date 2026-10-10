@@ -5,6 +5,10 @@ const ASSET_LIST = [];
 for (const p of PETAL_TYPES) ASSET_LIST.push(['petal' + p.svg, 'assets/petals/' + p.svg + '.svg']);
 for (const m of MOB_TYPES) ASSET_LIST.push(['mob' + m.svg, 'assets/mobs/' + m.svg + '.svg']);
 
+// 调试模式：?mode=debug 开启开发者模式（背包卡牌显示 ∞，怎么拿都拿不空）
+const _params = new URLSearchParams(location.search);
+window.__debug = _params.get('mode') === 'debug';
+
 async function boot() {
   let game = null;
   try {
@@ -21,6 +25,7 @@ async function boot() {
     game = new Game(canvas);
     game.init();
     game.start();
+    game.syncInventory();   // 初始渲染卡槽（花朵下方快捷栏常驻显示）
     window.__game = game;   // 供 UI 取玩家数据（如物品栏落点）
   } catch (e) {
     console.error('[boot] 初始化失败：', e);

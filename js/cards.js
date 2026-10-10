@@ -177,6 +177,13 @@ const CardRenderer = (function () {
       face.appendChild(img);
     }
     el.appendChild(face);
+    // 数量角标（背包/堆叠用）：黑描边白字，见 .card-count
+    if (o.count != null) {
+      const cnt = document.createElement('div');
+      cnt.className = 'card-count';
+      cnt.textContent = (o.count === Infinity) ? '∞' : (o.count > 0 ? ('x' + o.count) : '');   // ∞ 或 x2（参见 pack.png）
+      el.appendChild(cnt);
+    }
     return el;
   }
 

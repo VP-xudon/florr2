@@ -10,6 +10,16 @@
 //   6) 清理右键残留：卡牌只响应鼠标左键。
 'use strict';
 
+// 同色偏深（与 cards.js 内部 darken 同算法；cards.js 将其包在 IIFE 内不可全局引用，这里本地补一份供 _rarGroup 使用）
+function darken(color, amt) {
+  const hex = (color || '#888888').replace('#', '');
+  const h = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+  const n = parseInt(h, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const f = (v) => Math.max(0, Math.round(v * (1 - amt)));
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
+}
+
 const UI = {
   root: null,
   refs: {},
@@ -20,8 +30,10 @@ const UI = {
   onGalleryCardClick: null,
   onDrop: null,
   _drag: null,
-  _invBuilt: false,   // 画廊内容静态：只构建一次
+  _invBuilt: false,   // 画廊内容静态：只构建一次（现已改为每次重建以反映数量）
   _dexBuilt: false,
+  _gc: null,          // 画廊卡数量（key = type.key|rarity）
+  onCloseAll: null,   // 拖拽开始时关闭所有窗口
 
   init() {
     const root = document.createElement('div');
@@ -55,7 +67,9 @@ const UI = {
             <svg viewBox="0 0 16 16"><path d="M4 4 12 12 M12 4 4 12" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
           </button>
         </div>
-        <div class="win-body"><div id="invGallery" class="gallery"></div></div>
+        <div class="win-body">
+          <div id="invGallery" class="gallery"></div>
+        </div>
       </div>
 
       <!-- 图鉴窗口（同一矢量风格） -->
@@ -133,39 +147,79 @@ const UI = {
     }
   },
 
-  // ---------------- 背包窗口：所有花瓣 × 全部稀有度 ----------------
-  // 每个稀有度一组；组内按名称字典序、桌面图标式自动换行；组间分割线标稀有度名（对应颜色）。
+  // ---------------- 背包窗口 = 全部花瓣画廊（每张卡带数量角标） ----------------
+  // 调试模式 ?mode=debug：全部显示 ∞，怎么拿都拿不空；否则每种默认 2 张。
   renderInventory() {
-    if (this._invBuilt) return;          // 画廊内容静态：只构建一次，避免每次拖放重建 900+ 卡
     const g = this.refs.invGallery;
     g.innerHTML = '';
     const rarName = (r) => I18N.t('Rarities/' + r + '/Name', r);
     const petals = PETAL_TYPES.slice().sort((a, b) => a.name.localeCompare(b.name));
     for (const rar of RARITY_ORDER) {
       const col = (RARITIES[rar] && RARITIES[rar].color) || '#fff';
-      g.appendChild(this._rarGroup(rarName(rar), col, petals, rar));
+      const grp = this._rarGroup(rarName(rar), col, petals, rar);
+      if (grp) g.appendChild(grp);   // 该等级一张都没有则不显示分割线
     }
-    this._invBuilt = true;
   },
 
-  // 生成一个「稀有度分组」：分割线 + 卡片网格
+  // 画廊卡数量（调试=∞，普通=2）；拿空(<=0)后该卡不再渲染
+  _galleryCount(key) {
+    if (!this._gc) this._gc = {};
+    if (!(key in this._gc)) this._gc[key] = window.__debug ? Infinity : 2;
+    return this._gc[key];
+  },
+  _decGallery(card) {
+    const key = card.type.key + '|' + card.rarity;
+    if (window.__debug) return;
+    if (!this._gc) this._gc = {};
+    if (this._gc[key] === undefined) this._gc[key] = 2;
+    this._gc[key] -= 1;
+  },
+  // 取消拖拽（回退背包）时恢复数量（+1）；调试模式恒 ∞ 不变
+  _incGallery(card) {
+    const key = card.type.key + '|' + card.rarity;
+    if (window.__debug) return;
+    if (!this._gc) this._gc = {};
+    if (this._gc[key] === undefined) this._gc[key] = 2;
+    this._gc[key] += 1;
+  },
+  // 拾取掉落：对应卡牌数量 +1（进背包 = all petals）。调试模式恒 ∞，不加不减。
+  addGalleryCount(type, rarity) {
+    const key = type.key + '|' + rarity;
+    if (!this._gc) this._gc = {};
+    if (this._gc[key] === undefined) this._gc[key] = window.__debug ? Infinity : 2;
+    if (this._gc[key] !== Infinity) this._gc[key] += 1;
+    // 背包开着才实时刷新（关着则下次打开自然读新值，避免无谓重建 900+ 卡）
+    if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
+  },
+
+  // 生成一个「稀有度分组」：该等级一张卡都没有则不显示分割线；否则展示分割条 + 等级名字 + 卡片网格（带数量）
   _rarGroup(name, color, petals, rarity) {
+    const items = petals.filter(p => this._galleryCount(p.key + '|' + rarity) > 0);
+    if (items.length === 0) return null;   // 该等级一张都没有 -> 不显示分割线
     const group = document.createElement('div');
     group.className = 'rar-group';
     group.style.color = color;
     const div = document.createElement('div');
     div.className = 'rar-divider';
-    div.innerHTML = `<span class="rar-line"></span><span class="rar-name">${name}</span><span class="rar-line"></span>`;
+    const lineCol = '#3c5d6b';   // 统一略深描线色（不随稀有度变化，只有中心字母是稀有度色）
+    div.innerHTML =
+      `<span class="rar-line" style="background:${lineCol}"></span>` +
+      `<span class="rar-name" style="color:${color}">${name}</span>` +
+      `<span class="rar-line" style="background:${lineCol}"></span>`;
     group.appendChild(div);
     const grid = document.createElement('div');
     grid.className = 'rar-grid';
-    for (const p of petals) {
+    for (const p of items) {
+      const key = p.key + '|' + rarity;
       const cell = document.createElement('div');
       cell.className = 'cardcell';
-      cell.appendChild(CardRenderer.createCard({ rarity, svg: p.svg }));
+      cell.appendChild(CardRenderer.createCard({ rarity, svg: p.svg, count: this._galleryCount(key) }));
       const card = { type: p, rarity };
       this._bindCard(cell, card, { type: 'gallery', index: -1 },
-        () => { if (this.onGalleryCardClick) this.onGalleryCardClick(card); });
+        () => {
+          const ok = this.onGalleryCardClick ? this.onGalleryCardClick(card) : false;
+          if (ok) { this._decGallery(card); this.renderInventory(); }
+        });
       this._bindTip(cell, p, rarity);
       grid.appendChild(cell);
     }
@@ -209,12 +263,12 @@ const UI = {
   },
 
   // ---------------- 卡牌悬浮提示（像生物 nametag） ----------------
+  // ---------------- 卡牌悬浮提示：固定显示在卡牌正上方居中（不跟随鼠标） ----------------
   _bindTip(el, type, rarity) {
-    el.addEventListener('mouseenter', (e) => this._showTip(type, rarity, e));
-    el.addEventListener('mousemove', (e) => this._moveTip(e));
+    el.addEventListener('mouseenter', () => this._showTip(type, rarity, el));
     el.addEventListener('mouseleave', () => this._hideTip());
   },
-  _showTip(type, rarity, e) {
+  _showTip(type, rarity, el) {
     const col = (RARITIES[rarity] && RARITIES[rarity].color) || '#fff';
     const rn = I18N.t('Rarities/' + rarity + '/Name', rarity);
     this.refs.tip.innerHTML =
@@ -227,15 +281,14 @@ const UI = {
       `</div>` +
       (type.kind ? `<div class="tip-kind">${type.kind}</div>` : '');
     this.refs.tip.classList.remove('hidden');
-    this._moveTip(e);
-  },
-  _moveTip(e) {
-    const tip = this.refs.tip, pad = 14;
-    let x = e.clientX + pad, y = e.clientY + pad;
-    const r = tip.getBoundingClientRect();
-    if (x + r.width > innerWidth) x = e.clientX - r.width - pad;
-    if (y + r.height > innerHeight) y = e.clientY - r.height - pad;
-    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    // 固定定位：卡牌正上方居中
+    const r = el.getBoundingClientRect();
+    const tr = this.refs.tip.getBoundingClientRect();
+    let x = r.left + r.width / 2 - tr.width / 2;
+    let y = r.top - tr.height - 8;
+    if (y < 0) y = r.bottom + 8;   // 顶部放不下则移到卡牌下方
+    this.refs.tip.style.left = x + 'px';
+    this.refs.tip.style.top = y + 'px';
   },
   _hideTip() { if (this.refs.tip) this.refs.tip.classList.add('hidden'); },
 
@@ -258,6 +311,15 @@ const UI = {
           dragging = true;
           this._hideTip();
           this._createGhost(card, e);
+          this._closeAllWindows();                 // 手上有拖动卡 -> 关闭所有小窗口
+          if (from.type === 'gallery') {
+            // 从背包拿起即扣数量（立刻少一个），并重建画廊让源格即时更新
+            this._decGallery(card);
+            this.renderInventory();
+          } else {
+            // 卡槽卡：保留空框占位（visibility 隐藏，不破坏 qslot 布局）
+            srcEl.style.visibility = 'hidden';
+          }
         }
       }
       if (dragging) this._moveGhost(e);
@@ -265,16 +327,60 @@ const UI = {
     const up = (e) => {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
-      if (dragging) {
-        const target = this._dropTargetAt(e.clientX, e.clientY);
-        this._removeGhost();
-        if (this.onDrop) this.onDrop({ card, from }, target);
-      } else if (onClick) {
-        this._clickAnimate(card, from, srcEl, onClick);
+      if (!dragging) { if (onClick) this._clickAnimate(card, from, srcEl, onClick); return; }
+      const target = this._dropTargetAt(e.clientX, e.clientY);
+      const handled = this.onDrop ? !!this.onDrop({ card, from }, target) : false;
+      const ghost = this._drag;
+      if (handled) {
+        // 装入卡槽：飞向目标槽（DOM 可能已重建，用 index 重新查；否则飞向玩家中心）
+        let r = (target && target.el && target.el.isConnected) ? target.el.getBoundingClientRect() : null;
+        if (!r && target && target.type === 'slot' && this.refs.slotRow.children[target.index]) {
+          r = this.refs.slotRow.children[target.index].getBoundingClientRect();
+        }
+        const tx = r ? r.left + r.width / 2 : innerWidth / 2;
+        const ty = r ? r.top + r.height / 2 : innerHeight / 2;
+        this._flyGhostTo(ghost, tx, ty, { dur: 0.22, endScale: 54 / 70.2, fade: true }, () => this._removeGhost());
+      } else {
+        // 未装入任何卡槽 -> 回退背包（gallery 飞向背包按钮并恢复数量；slot 飞回玩家中心归位）
+        if (from.type === 'gallery') this._incGallery(card);
+        this._restoreAfterCancel(from);
+        const bag = this.refs.bagBtn.getBoundingClientRect();
+        const tx = (from.type === 'gallery') ? bag.left + bag.width / 2 : innerWidth / 2;
+        const ty = (from.type === 'gallery') ? bag.top + bag.height / 2 : innerHeight / 2;
+        this._flyGhostTo(ghost, tx, ty, { dur: 0.5, endScale: 0.05, fade: true }, () => this._removeGhost());
       }
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
+  },
+
+  // 取消拖拽后恢复源区域显示（装卡槽失败/回退背包时调用）
+  _restoreAfterCancel(from) {
+    const g = window.__game;
+    if (from.type === 'slot' || from.type === 'inv') { if (g) this.renderInvBar(g.player); }
+    else { this.renderInventory(); }
+  },
+
+  // 拖拽开始：关闭所有小窗口（背包/图鉴）
+  _closeAllWindows() {
+    if (this.onCloseAll) this.onCloseAll();
+    else { this.refs.inv.classList.add('hidden'); this.refs.dex.classList.add('hidden'); }
+  },
+
+  // 放下后的平滑动画：位置 / 缩放 / 透明度全部过渡（装卡槽快速变小；回退背包 0.5s 飞速缩小）
+  _flyGhostTo(ghost, toX, toY, opts, done) {
+    if (!ghost) { if (done) done(); return; }
+    const o = opts || {};
+    const dur = (o.dur != null) ? o.dur : 0.22;
+    const endScale = (o.endScale != null) ? o.endScale : 54 / 70.2;
+    ghost.style.transition = `left ${dur}s ease, top ${dur}s ease, transform ${dur}s ease, opacity ${dur}s ease`;
+    requestAnimationFrame(() => {
+      ghost.style.left = toX + 'px';
+      ghost.style.top = toY + 'px';
+      ghost.style.transform = `translate(-50%,-50%) scale(${endScale})`;
+      ghost.style.opacity = '0';
+    });
+    setTimeout(() => { if (done) done(); }, dur * 1000 + 30);
   },
 
   _clickAnimate(card, from, srcEl, onClick) {
@@ -314,7 +420,7 @@ const UI = {
   _ghostEl(card) {
     const g = document.createElement('div');
     g.className = 'flyghost';
-    g.appendChild(CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg, size: 54 }));
+    g.appendChild(CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg }));   // 100% 填满容器：拖拽=1.3×，飞入=1×
     return g;
   },
   _createGhost(card, e) {
@@ -333,12 +439,21 @@ const UI = {
   },
   _removeGhost() { if (this._drag) { this._drag.remove(); this._drag = null; } },
 
+  // 判定：鼠标下的卡槽，且拖拽卡(1.3×)覆盖该槽面积 ≥ 50% 才算"装入"，否则回退背包
   _dropTargetAt(x, y) {
     const el = document.elementFromPoint(x, y);
-    if (!el) return { type: 'flower' };
+    if (!el) return null;
     const d = el.closest('[data-drop]');
-    if (d) return { type: d.dataset.drop, index: parseInt(d.dataset.idx, 10) };
-    return { type: 'flower' };
+    if (!d) return null;
+    const ghost = this._drag;
+    const gw = ghost ? ghost.offsetWidth : 54, gh = ghost ? ghost.offsetHeight : 54;
+    const r = d.getBoundingClientRect();
+    const ix = Math.max(0, Math.min(x + gw / 2, r.right) - Math.max(x - gw / 2, r.left));
+    const iy = Math.max(0, Math.min(y + gh / 2, r.bottom) - Math.max(y - gh / 2, r.top));
+    if (ix * iy / (gw * gh) >= 0.5) {
+      return { type: d.dataset.drop, index: parseInt(d.dataset.idx, 10), el: d };
+    }
+    return null;   // 覆盖不足 50% 或未命中任何卡槽 -> 不装入，回退背包
   },
 
   // ---------------- 小地图 ----------------

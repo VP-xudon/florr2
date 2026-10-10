@@ -1,7 +1,21 @@
 // game.js — 核心循环与系统编排
 'use strict';
 
-const WORLD_R = 1500;
+const WORLD_R = 1500 * 0.75;  // 1125：地图/世界缩至原 0.75（主角不变）
+
+// 背包堆叠：同类（类型+稀有度）合并为 { type, rarity, count }；种类槽上限 max
+function addStack(arr, card, max) {
+  for (const s of arr) if (s.type === card.type && s.rarity === card.rarity) { s.count++; return true; }
+  if (arr.length >= max) return false;
+  arr.push({ type: card.type, rarity: card.rarity, count: 1 });
+  return true;
+}
+// 从堆叠取一张：数量-1，归零则移除该堆叠（UI 端 FLIP 平滑补位）
+function takeOne(arr, i) {
+  const s = arr[i]; if (!s) return false;
+  if (--s.count <= 0) arr.splice(i, 1);
+  return true;
+}
 
 class Game {
   constructor(canvas) {
@@ -56,6 +70,7 @@ class Game {
     UI.onGalleryCardClick = (card) =>                       // 点击画廊卡 -> 装备到空槽；槽满则替换 1 号槽
       this.addGalleryCard(card.type, card.rarity, { type: 'flower' }) ||
       this.addGalleryCard(card.type, card.rarity, { type: 'slot', index: 0 });
+    UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
 
     // 玩家与初始装备
@@ -142,9 +157,9 @@ class Game {
     for (const d of this.dmgTexts) d.update(dt);
     this.dmgTexts = this.dmgTexts.filter(d => d.life > 0);
 
-    // 相机
-    this.camera.x = damp(this.camera.x, p.x, 8, dt);
-    this.camera.y = damp(this.camera.y, p.y, 8, dt);
+    // 相机锁定玩家：主角永远固定在屏幕中心（地图相对滚动，手感不变；震动 shake 仍叠加）
+    this.camera.x = p.x;
+    this.camera.y = p.y;
     this.shake = Math.max(0, this.shake - dt * 30);
 
     this.updateHUD();
@@ -242,6 +257,12 @@ class Game {
     if (UI.isDexVisible()) UI.renderDex(this);
   }
 
+  // 拖拽开始时关闭所有小窗口（背包/图鉴）
+  closeAllWindows() {
+    UI.setBagVisible(false);
+    UI.setDexVisible(false);
+  }
+
   // ---------- 物品栏模型 ----------
   firstEmptySlot() { return this.player.slots.findIndex(s => !s); }
 
@@ -261,7 +282,7 @@ class Game {
       return false;
     }
     if (target.type === 'bag') {
-      if (p.backpack.length < p.maxBackpack) { p.backpack.push(card); this.renderInventory(); return true; }
+      if (addStack(p.backpack, card, p.maxBackpack)) { this.renderInventory(); return true; }
       return false;
     }
     if (target.type === 'flower') {
@@ -275,21 +296,15 @@ class Game {
   _recycle(card) {
     const p = this.player;
     if (p.invBar.length < p.maxInvBar) p.invBar.push(card);
-    else if (p.backpack.length < p.maxBackpack) p.backpack.push(card);
-    else this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
+    else if (!addStack(p.backpack, card, p.maxBackpack)) {
+      this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
+    }
   }
 
-  // 拾取卡片：优先进物品栏，其次进背包；物品栏满则挤掉最旧的一张
+  // 拾取掉落：卡牌进入「背包」（=全部花瓣画廊 all petals），数量 +1；调试模式恒为 ∞
+  // 背包就是 inventory 的 all-petals 部分，后续掉落直接累计到这里
   pickupCard(type, rarity) {
-    const p = this.player;
-    if (p.invBar.length < p.maxInvBar) { p.invBar.push({ type, rarity }); return true; }
-    if (p.backpack.length < p.maxBackpack) { p.backpack.push({ type, rarity }); return true; }
-    const squeezed = p.invBar.shift();          // 挤掉：顶出最左（最早）一张
-    p.invBar.push({ type, rarity });
-    if (squeezed) {
-      if (p.backpack.length < p.maxBackpack) p.backpack.push(squeezed);
-      else this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), squeezed.type, squeezed.rarity));
-    }
+    if (typeof UI !== 'undefined' && UI.addGalleryCount) UI.addGalleryCount(type, rarity);
     return true;
   }
 
@@ -305,20 +320,22 @@ class Game {
   }
   moveBagToSlot(bagIndex, slotIndex) {
     const p = this.player;
-    if (bagIndex < 0 || bagIndex >= p.backpack.length) return false;
-    const card = p.backpack[bagIndex];
+    const stack = p.backpack[bagIndex];
+    if (!stack) return false;
+    const card = { type: stack.type, rarity: stack.rarity };
+    takeOne(p.backpack, bagIndex);              // 消耗一张，归零移除并补位
     const old = p.slots[slotIndex];
     p.slots[slotIndex] = card;
-    p.backpack.splice(bagIndex, 1);
-    if (old) { if (p.invBar.length < p.maxInvBar) p.invBar.push(old); else p.backpack.push(old); }
+    if (old) { if (p.invBar.length < p.maxInvBar) p.invBar.push(old); else addStack(p.backpack, old, p.maxBackpack); }
     p.recompute(); this.renderInventory(); return true;
   }
   moveBagToInv(bagIndex) {
     const p = this.player;
     if (p.invBar.length >= p.maxInvBar) return false;   // 物品栏无空槽 -> 无反应
-    if (bagIndex < 0 || bagIndex >= p.backpack.length) return false;
-    const card = p.backpack.splice(bagIndex, 1)[0];
-    p.invBar.push(card);
+    const stack = p.backpack[bagIndex];
+    if (!stack) return false;
+    p.invBar.push({ type: stack.type, rarity: stack.rarity });
+    takeOne(p.backpack, bagIndex);
     this.renderInventory(); return true;
   }
   moveInvToInv(from, to) {
@@ -332,10 +349,9 @@ class Game {
   }
   moveInvToBag(invIndex) {
     const p = this.player;
-    if (p.backpack.length >= p.maxBackpack) return false;
     if (invIndex < 0 || invIndex >= p.invBar.length) return false;
     const card = p.invBar.splice(invIndex, 1)[0];
-    p.backpack.push(card);
+    if (!addStack(p.backpack, card, p.maxBackpack)) { p.invBar.push(card); return false; }
     this.renderInventory(); return true;
   }
   moveSlotToInv(slotIndex) {
@@ -343,8 +359,9 @@ class Game {
     const card = p.slots[slotIndex];
     if (!card) return false;
     if (p.invBar.length < p.maxInvBar) p.invBar.push(card);
-    else if (p.backpack.length < p.maxBackpack) p.backpack.push(card);
-    else { this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity)); }
+    else if (!addStack(p.backpack, card, p.maxBackpack)) {
+      this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
+    }
     p.slots[slotIndex] = null; p.recompute(); this.renderInventory(); return true;
   }
   moveSlotToSlot(from, to) {
