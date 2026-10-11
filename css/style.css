@@ -137,9 +137,9 @@ body {
   position: fixed; z-index: 200; pointer-events: none; width: 54px; height: 54px;
   transform: translate(-50%, -50%);
 }
-/* 拖拽中的卡 = 卡槽中卡牌(54px) × 1.3 × 0.6 = 42.12px（整体缩小到原来的 0.6 倍），摇晃动画保持不变 */
+/* 拖拽中的卡 = 卡槽中卡牌(54px) × 1.3 × 0.6 × 1.2 = 50.54px，摇晃动画保持不变 */
 #dragGhost {
-  position: fixed; z-index: 200; pointer-events: none; width: 42.12px; height: 42.12px;
+  position: fixed; z-index: 200; pointer-events: none; width: 50.54px; height: 50.54px;
   transform: translate(-50%, -50%);
 }
 /* 加载 */

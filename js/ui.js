@@ -34,9 +34,12 @@ function roundRectPath(ctx, x, y, w, h, r) {
 
 // 卡牌数据悬浮框整体缩放（相对 info.png 基准尺寸）
 const TIP_SCALE = 0.6;
-// 拖拽幽灵尺寸（卡槽卡 54px × 1.3 × 0.6）与"飞入卡槽"时的目标缩放
-const GHOST_SIZE = 54 * 1.3 * 0.6;          // 42.12
+// 拖拽幽灵尺寸（卡槽卡 54px × 1.3 × 0.6 × 1.2）与"飞入卡槽"时的目标缩放
+const GHOST_SIZE = 54 * 1.3 * 0.6 * 1.2;   // 50.54
 const GHOST_TO_SLOT = 54 / GHOST_SIZE;      // 飞进卡槽时放大回 54px
+// 跟随速率(1/s)：指数逼近系数 = 1-exp(-DRAG_FOLLOW*dt)，越大越紧跟指针（55 ≈ 每帧补上 60% 差距）
+const DRAG_FOLLOW = 55;
+const DRAG_PICK_MS = 200;                   // 拿起时"长出"的放大时长
 
 const UI = {
   root: null,
@@ -375,19 +378,26 @@ const UI = {
         const W = L.W * S, H = L.H * S;
         const pad = 10 * S;
         // 目标位置：卡牌正上方居中；顶部放不下则改到下方；再夹进视口
-        const r = t.anchor && t.anchor.isConnected ? t.anchor.getBoundingClientRect() : null;
-        let tx = r ? (r.left + r.width / 2 - W / 2) : (innerWidth / 2 - W / 2);
-        let ty = r ? (r.top - H - 8) : (innerHeight / 2 - H / 2);
-        if (ty < 4) ty = (r ? r.bottom + 8 : 8);
-        tx = Math.max(4, Math.min(tx, innerWidth - W - 4));
-        ty = Math.max(4, Math.min(ty, innerHeight - H - 4));
-        // 首次出现直接落位；相邻卡之间移动时把框平移过去（不淡出再淡入）
-        if (!this._tipSlide || !this._tipPos) this._tipPos = { x: tx, y: ty };
-        else {
-          this._tipPos.x += (tx - this._tipPos.x) * 0.4;
-          this._tipPos.y += (ty - this._tipPos.y) * 0.4;
-        }
-        const x = this._tipPos.x, y = this._tipPos.y;
+    // 锚点元素会被重渲染销毁（点击装备 -> renderInvBar 重建卡槽），此时必须沿用
+    // 最后一次有效矩形原地渐隐；旧实现回退到屏幕中心 —— 而主角永远在屏幕中心，
+    // 于是悬浮框"飞到主角身上"再消失。
+    if (t.anchor && t.anchor.isConnected) this._tipLastRect = t.anchor.getBoundingClientRect();
+    const r = this._tipLastRect || null;
+    if (r) {
+      let tx = r.left + r.width / 2 - W / 2;
+      let ty = r.top - H - 8;
+      if (ty < 4) ty = r.bottom + 8;
+      tx = Math.max(4, Math.min(tx, innerWidth - W - 4));
+      ty = Math.max(4, Math.min(ty, innerHeight - H - 4));
+      // 首次出现直接落位；相邻卡之间移动时把框平移过去；正在渐隐时保持原位不动
+      if (!this._tipSlide || !this._tipPos) this._tipPos = { x: tx, y: ty };
+      else if (this._tipOn) {
+        this._tipPos.x += (tx - this._tipPos.x) * 0.4;
+        this._tipPos.y += (ty - this._tipPos.y) * 0.4;
+      }
+    }
+    if (!this._tipPos) this._tipPos = { x: innerWidth / 2 - W / 2, y: innerHeight / 2 - H / 2 };
+    const x = this._tipPos.x, y = this._tipPos.y;
 
         ctx.save();
         ctx.globalAlpha = alpha;
@@ -482,7 +492,8 @@ const UI = {
       this.refs.overlay = cv;
           this._tipAlpha = 0;
           this._tipPos = null;      // 悬浮框当前位置（相邻卡之间平移用）
-          this._tipSlide = false;   // 是否处于"卡与卡之间平移"
+              this._tipLastRect = null; // 锚点最后一次有效矩形：锚点被重建后据此原地渐隐
+              this._tipSlide = false;   // 是否处于"卡与卡之间平移"
           this._tipHideAt = 0;      // 上次隐藏时刻（120ms 宽限期内移动到新卡则不淡出）
       const resize = () => {
         const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -632,6 +643,11 @@ const UI = {
     const o = opts || {};
     const dur = (o.dur != null) ? o.dur : 0.22;
     const endScale = (o.endScale != null) ? o.endScale : GHOST_TO_SLOT;
+    // 交还给 CSS 过渡前先停掉 JS 跟踪循环，并把幽灵落到当前插值位置（避免动画起点跳一下）
+    this._stopDragLoop();
+    this._dragTarget = null;
+    ghost.style.left = (this._dragCur ? this._dragCur.x : parseFloat(ghost.style.left)) + 'px';
+    ghost.style.top = (this._dragCur ? this._dragCur.y : parseFloat(ghost.style.top)) + 'px';
     ghost.style.transition = `left ${dur}s ease, top ${dur}s ease, transform ${dur}s ease, opacity ${dur}s ease`;
     requestAnimationFrame(() => {
       ghost.style.left = toX + 'px';
@@ -725,38 +741,66 @@ const UI = {
     g.appendChild(CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg }));   // 100% 填满容器：拖拽=1.3×，飞入=1×
     return g;
   },
-  // 拿起：幽灵从「源卡牌位置」长出来，0.2s 平滑移动+放大到指针位置（过渡期间不跟随鼠标）
+  // 拿起：幽灵从「源卡牌位置」长出来并放大（0.2s），位置由跟踪循环每帧逼近指针
   _createGhost(card, e, srcEl) {
     const g = this._ghostEl(card);
     g.id = 'dragGhost';
     g.classList.add('dragging');
-    const dur = 0.2;
-    // 起点 = 源卡牌中心（缩放 1×），终点 = 指针位置（缩放 1.3×）
-    let x = e.clientX, y = e.clientY, scale = 1.3;
+    // 起点 = 源卡牌中心，终点 = 指针位置（缩放 1 -> 1.3）
+    let x = e.clientX, y = e.clientY;
     const r = (srcEl && srcEl.getBoundingClientRect) ? srcEl.getBoundingClientRect() : null;
-    if (r && r.width > 0) { x = r.left + r.width / 2; y = r.top + r.height / 2; scale = 1; }
+    if (r && r.width > 0) { x = r.left + r.width / 2; y = r.top + r.height / 2; }
+    g.style.transition = 'none';          // 位置完全交给 JS 跟踪，绝不再让 CSS transition 拖后腿
     g.style.left = x + 'px';
     g.style.top = y + 'px';
-    g.style.transform = `translate(-50%,-50%) scale(${scale})`;
-    g.style.transition = 'none';
+    g.style.transform = 'translate(-50%,-50%) scale(1)';
     document.body.appendChild(g);
     this._drag = g;
-    this._dragFrom = performance.now();
-    // 必须先落位再于下一帧切transition，才能得到 0.2s 的连贯过渡
-    requestAnimationFrame(() => {
-      g.style.transition = `left ${dur}s ease, top ${dur}s ease, transform ${dur}s ease`;
-      g.style.left = e.clientX + 'px';
-      g.style.top = e.clientY + 'px';
-      g.style.transform = 'translate(-50%,-50%) scale(1.3)';
-    });
+    this._dragCur = { x: x, y: y };
+    this._dragTarget = { x: e.clientX, y: e.clientY };
+    this._dragStart = performance.now();
+    this._dragLast = 0;
+    this._startDragLoop();
+  },
+  // 跟踪算法：mousemove 只更新"目标点"，实际位置在 rAF 里按指数逼近（帧率无关）。
+  // 好处：① 事件合并/丢帧时目标始终是最新指针位置，不会越拖越偏；
+  //      ② 没有 CSS transition 参与，快速甩动时不会出现橡皮筋式的滞后。
+  _startDragLoop() {
+    if (this._dragRaf) return;
+    const step = (ts) => {
+      const g = this._drag;
+      if (!g || !this._dragTarget) { this._dragRaf = 0; return; }
+      const dt = Math.min(0.05, this._dragLast ? (ts - this._dragLast) / 1000 : 0.016);
+      this._dragLast = ts;
+      const cur = this._dragCur;
+      const a = 1 - Math.exp(-DRAG_FOLLOW * dt);
+      cur.x += (this._dragTarget.x - cur.x) * a;
+      cur.y += (this._dragTarget.y - cur.y) * a;
+      // 差距极小时直接吸附到目标，避免残留 0.01px 的漂移抖动
+      if (Math.abs(this._dragTarget.x - cur.x) < 0.3) cur.x = this._dragTarget.x;
+      if (Math.abs(this._dragTarget.y - cur.y) < 0.3) cur.y = this._dragTarget.y;
+      // 拿起时 0.2s 内由 1 倍放大到 1.3 倍（与位置跟踪互不干扰）
+      const k = 1 + 0.3 * Math.min(1, (ts - this._dragStart) / DRAG_PICK_MS);
+      g.style.left = cur.x + 'px';
+      g.style.top = cur.y + 'px';
+      g.style.transform = 'translate(-50%,-50%) scale(' + k.toFixed(3) + ')';
+      this._dragRaf = requestAnimationFrame(step);
+    };
+    this._dragRaf = requestAnimationFrame(step);
+  },
+  _stopDragLoop() {
+    if (this._dragRaf) { cancelAnimationFrame(this._dragRaf); this._dragRaf = 0; }
   },
   _moveGhost(e) {
-    if (!this._drag) return;
-    if (performance.now() - (this._dragFrom || 0) < 200) return;   // 0.2s 过渡动画期间不跟手
-    this._drag.style.left = e.clientX + 'px';
-    this._drag.style.top = e.clientY + 'px';
+    if (!this._drag || !this._dragTarget) return;
+    this._dragTarget.x = e.clientX;      // 只更新目标点，由 rAF 循环去追
+    this._dragTarget.y = e.clientY;
   },
-  _removeGhost() { if (this._drag) { this._drag.remove(); this._drag = null; } },
+  _removeGhost() {
+    this._stopDragLoop();
+    this._dragTarget = null; this._dragCur = null;
+    if (this._drag) { this._drag.remove(); this._drag = null; }
+  },
 
   // 判定落点：直接用各 [data-drop] 元素的矩形做几何命中（不依赖 elementFromPoint，
   // 避免被覆盖层/正在滑出的窗口/canvas 命中差异干扰），且拖拽卡(1.3×)覆盖该槽面积 ≥ 50% 才算"装入"
