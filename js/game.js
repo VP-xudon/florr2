@@ -3,6 +3,24 @@
 
 const WORLD_R = 1500 * 0.75;  // 1125：地图/世界缩至原 0.75（主角不变）
 
+// 物理键位 -> 逻辑动作。用 e.code 而非 e.key：e.key 会被输入法吞成 'Process'、
+// 且受键盘布局影响；这里每个物理键各占一个标记，方向键之间互不干扰，
+// 按住空格/Shift 时四个方向（含右方向）依然能任意组合。
+const KEY_ACTION = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  Space: 'mode1',                        // reach
+  ShiftLeft: 'mode2', ShiftRight: 'mode2' // detect
+};
+// 兜底：个别环境 e.code 缺失/异常时，用 e.key 再判一次（左右 Shift、空格、方向键、WASD）
+const KEY_ALIAS = {
+  w: 'up', arrowup: 'up', s: 'down', arrowdown: 'down',
+  a: 'left', arrowleft: 'left', d: 'right', arrowright: 'right',
+  ' ': 'mode1', shift: 'mode2'
+};
+
 // 背包堆叠：同类（类型+稀有度）合并为 { type, rarity, count }；种类槽上限 max
 function addStack(arr, card, max) {
   for (const s of arr) if (s.type === card.type && s.rarity === card.rarity) { s.count++; return true; }
@@ -47,14 +65,25 @@ class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
-    // 输入
+    // 输入：按「物理键位」(e.code) 注册，与输入法/键盘布局无关。
+    // 每个物理键占一个独立标记，因此方向键之间、以及方向键与空格/Shift 之间可以任意组合，
+    // 不会出现"按住 Shift 后右方向键和其他方向键组合失效"。
     window.addEventListener('keydown', (e) => {
+      const act = KEY_ACTION[e.code] || KEY_ALIAS[e.key.toLowerCase()];
+      if (act) {
+        this.keys[act] = true;
+        if (e.code === 'Space' || e.key === ' ') e.preventDefault();   // 只拦空格（整页滚动）
+      }
       const k = e.key.toLowerCase();
-      this.keys[k] = true;
       if (k === 'b' || k === 'tab') { e.preventDefault(); this.toggleBag(); }
       if (k === 'v') { e.preventDefault(); this.toggleDex(); }
     });
-    window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('keyup', (e) => {
+      const act = KEY_ACTION[e.code] || KEY_ALIAS[e.key.toLowerCase()];
+      if (act) this.keys[act] = false;
+    });
+    // 失焦时清空按键：避免切窗后"松手了仍在移动 / 模式卡住"
+    window.addEventListener('blur', () => { this.keys = {}; });
 
     // 游戏是一个统一的"窗口"：屏蔽 Ctrl+滚轮 触发的浏览器整页缩放（避免不同元素被单独放大）
     window.addEventListener('wheel', (e) => {
@@ -67,9 +96,10 @@ class Game {
     UI.onSlotClick = (i) => this.moveSlotToInv(i);          // 点击已装备花瓣 -> 卸下到物品栏
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
     UI.onBagCardClick = (i) => this.moveBagToInv(i);        // 点击背包卡 -> 进物品栏（无空槽则无反应）
-    UI.onGalleryCardClick = (card) =>                       // 点击画廊卡 -> 装备到空槽；槽满则替换 1 号槽
-      this.addGalleryCard(card.type, card.rarity, { type: 'flower' }) ||
-      this.addGalleryCard(card.type, card.rarity, { type: 'slot', index: 0 });
+    UI.onGalleryCardClick = (card) => {                    // 点击画廊卡 -> 仅当有空槽时装备；满槽无反应
+      const emptyIdx = this.firstEmptySlot();
+      return (emptyIdx >= 0) ? this.addGalleryCard(card.type, card.rarity, { type: 'slot', index: emptyIdx }) : false;
+    };
     UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
 
@@ -116,6 +146,7 @@ class Game {
   }
 
   toggleBag() {
+    UI.setDexVisible(false);            // 同一时刻只允许一个窗口
     UI.setBagVisible(!UI.isBagVisible());
     if (UI.isBagVisible()) this.renderInventory();
   }
@@ -137,6 +168,8 @@ class Game {
   update(dt) {
     const p = this.player;
     const dir = this._readDir();
+    // 模式控制：空格 = mode1 -> reach（花瓣距离×2 + 生气眼），Shift = mode2 -> detect（距离×0.3 + 伤心眼）
+    p.mode = this.keys['mode1'] ? 'reach' : (this.keys['mode2'] ? 'detect' : 'normal');
     p.update(dt, dir, this.map, this.mobs);   // 传入生物列表：花瓣会与生物碰撞
 
     // 卡片（拾取 / 入栏）——无战斗时已不掉落，但保留拖拽到世界时的回收
@@ -168,10 +201,10 @@ class Game {
   _readDir() {
     let dx = 0, dy = 0;
     const k = this.keys;
-    if (k['w'] || k['arrowup']) dy -= 1;
-    if (k['s'] || k['arrowdown']) dy += 1;
-    if (k['a'] || k['arrowleft']) dx -= 1;
-    if (k['d'] || k['arrowright']) dx += 1;
+    if (k['up']) dy -= 1;
+    if (k['down']) dy += 1;
+    if (k['left']) dx -= 1;
+    if (k['right']) dx += 1;
     return { x: dx, y: dy };
   }
 
@@ -253,6 +286,7 @@ class Game {
   isDefeated(mobId, level) { return !!(this.dex[mobId] && this.dex[mobId].has(level)); }
 
   toggleDex() {
+    UI.setBagVisible(false);            // 同一时刻只允许一个窗口
     UI.setDexVisible(!UI.isDexVisible());
     if (UI.isDexVisible()) UI.renderDex(this);
   }
@@ -274,7 +308,8 @@ class Game {
     if (target.type === 'slot') {
       const old = p.slots[target.index];
       p.slots[target.index] = card;
-      if (old) this._recycle(old);
+      // 旧卡不吞掉：回背包画廊（数量 +1）并从卡槽位置播放飞回背包动画
+      if (old) this._slotCardToBag(target.index, old, true);
       p.recompute(); this.renderInventory(); return true;
     }
     if (target.type === 'inv') {
@@ -292,13 +327,12 @@ class Game {
     }
     return false;
   }
-  // 把被替换下来的卡回收：物品栏 -> 背包 -> 掉到地上
-  _recycle(card) {
-    const p = this.player;
-    if (p.invBar.length < p.maxInvBar) p.invBar.push(card);
-    else if (!addStack(p.backpack, card, p.maxBackpack)) {
-      this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
-    }
+  // 卡槽里被替换下来的卡统一处理：回「背包画廊」(数量 +1)
+  // animate=true 时额外从卡槽位置播放飞回背包动画（替换场景；点击卸下时幽灵已在飞，不重复播放）
+  _slotCardToBag(slotIndex, card, animate) {
+    if (typeof UI !== 'undefined' && UI.addGalleryCount) UI.addGalleryCount(card.type, card.rarity);
+    if (animate && typeof UI !== 'undefined' && UI.flySlotCardToBag) UI.flySlotCardToBag(slotIndex, card);
+    this.renderInventory();
   }
 
   // 拾取掉落：卡牌进入「背包」（=全部花瓣画廊 all petals），数量 +1；调试模式恒为 ∞
@@ -315,7 +349,8 @@ class Game {
     const old = p.slots[slotIndex];
     p.slots[slotIndex] = card;
     p.invBar.splice(invIndex, 1);
-    if (old) { if (p.invBar.length < p.maxInvBar) p.invBar.push(old); else p.backpack.push(old); }
+    // 旧卡飞回背包（数量 +1），不被吞掉
+    if (old) this._slotCardToBag(slotIndex, old, true);
     p.recompute(); this.renderInventory(); return true;
   }
   moveBagToSlot(bagIndex, slotIndex) {
@@ -326,7 +361,8 @@ class Game {
     takeOne(p.backpack, bagIndex);              // 消耗一张，归零移除并补位
     const old = p.slots[slotIndex];
     p.slots[slotIndex] = card;
-    if (old) { if (p.invBar.length < p.maxInvBar) p.invBar.push(old); else addStack(p.backpack, old, p.maxBackpack); }
+    // 旧卡飞回背包（数量 +1），不被吞掉
+    if (old) this._slotCardToBag(slotIndex, old, true);
     p.recompute(); this.renderInventory(); return true;
   }
   moveBagToInv(bagIndex) {
@@ -358,15 +394,18 @@ class Game {
     const p = this.player;
     const card = p.slots[slotIndex];
     if (!card) return false;
-    if (p.invBar.length < p.maxInvBar) p.invBar.push(card);
-    else if (!addStack(p.backpack, card, p.maxBackpack)) {
-      this.cards.push(new Card(p.x + rand(-30, 30), p.y + rand(-30, 30), card.type, card.rarity));
-    }
-    p.slots[slotIndex] = null; p.recompute(); this.renderInventory(); return true;
+    p.slots[slotIndex] = null;
+    p.recompute();
+    // 卸下回"背包画廊"（_gc）：该卡会在背包窗口重新出现，而不是丢进未渲染的物品栏被吞掉
+    // 点击卸下时拖拽幽灵已在飞回背包，故 animate=false 避免重复播放动画
+    this._slotCardToBag(slotIndex, card, false);
+    this.renderInventory(); return true;
   }
   moveSlotToSlot(from, to) {
     const p = this.player;
-    if (from === to) return false;
+    // 拖回原卡槽：数据本来就没变，但卡面在按下时被 visibility:hidden 了，
+    // 必须重渲染让卡面重新出现，否则看起来"卡消失了"（要等下一次刷新才显示）。
+    if (from === to) { this.renderInventory(); return true; }
     const a = p.slots[from], b = p.slots[to];
     p.slots[from] = b; p.slots[to] = a;
     p.recompute(); this.renderInventory(); return true;
@@ -385,7 +424,12 @@ class Game {
   // 拖拽落点分发
   dispatchDrop(drag, target) {
     const from = drag.from;
-    if (!target || !from) return false;
+    if (!from) return false;
+    if (!target) {
+      // 拖到空白处：背包卡留在背包（回退）；卡槽卡卸下回背包
+      if (from.type === 'slot') return this.moveSlotToInv(from.index);
+      return false;
+    }
     if (from.type === 'gallery') return this.addGalleryCard(drag.card.type, drag.card.rarity, target);
     if (target.type === 'slot') {
       if (from.type === 'inv') return this.moveInvToSlot(from.index, target.index);
@@ -426,5 +470,12 @@ class Game {
 
 function makePetal(typeKey, rarity) {
   const type = PETAL_TYPES.find(t => t.key === typeKey) || PETAL_TYPES[0];
-  return { type, rarity, lunge: 0 };
+  // 应用稀有度倍率（仅Basic有rarityMultipliers表）
+  let dmg = type.dmg, hp = type.hp;
+  if (type.rarityMultipliers && type.rarityMultipliers[rarity]) {
+    const mult = type.rarityMultipliers[rarity];
+    dmg = type.dmg * (mult.dmg || 1);
+    hp = type.hp * (mult.hp || 1);
+  }
+  return { type, rarity, lunge: 0, dmg, hp };
 }

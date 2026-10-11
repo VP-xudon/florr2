@@ -102,6 +102,9 @@ class Player {
     this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
     this.name = 'Flower';
+    // 模式状态：空格=reach、Shift=detect
+    this.mode = 'normal';        // 'normal' | 'reach' | 'detect'
+    this.modeT = 0;              // 模式过渡进度 0->1（0.15s）
   }
 
   recompute() {
@@ -119,8 +122,9 @@ class Player {
     const len = Math.hypot(dir.x, dir.y);
     let tx = 0, ty = 0;
     if (len > 0) { tx = dir.x / len * this.speed; ty = dir.y / len * this.speed; }
-    this.vx = damp(this.vx, tx, 2, dt);   // 移动加速/减速平滑（τ≈0.5s）：起停均有约 0.5s 过渡
-    this.vy = damp(this.vy, ty, 2, dt);
+    const rate = (len > 0) ? 9 : 4;   // 加速到默认速度约 0.3s（rate 9）；松开方向键沿用约 0.5s 减速（rate 4）
+    this.vx = damp(this.vx, tx, rate, dt);
+    this.vy = damp(this.vy, ty, rate, dt);
     moveEntity(this, dt, map);
     this.moving = len > 0;
     if (this.moving) {
@@ -132,6 +136,10 @@ class Player {
     this.flash = Math.max(0, this.flash - dt);
 
     this.spin += PETAL_SPIN * dt;
+    // 模式过渡动画：0.15s平滑过渡
+    const targetT = (this.mode === 'normal') ? 0 : 1;
+    const modeRate = 1 / 0.15;  // 0.15秒完成过渡
+    this.modeT = damp(this.modeT, targetT, modeRate, dt);
     this._syncPetals(dt, map, mobs);
   }
 
@@ -188,7 +196,11 @@ class Player {
 
     // 计算应在位置，并以一阶指数逼近走过去（帧率无关，且数学上单调 -> 绝不过冲/抖动）
     const step = n > 0 ? TAU / n : 0;
-    const reach = this.r * (1 + PETAL_REACH) * 1.3;  // 花瓣与主角距离 +0.3 倍
+    // 花瓣距离：reach模式×2，detect模式×0.3，normal×1
+    let reachMult = 1;
+    if (this.mode === 'reach') reachMult = 1 + this.modeT;        // 1 -> 2
+    else if (this.mode === 'detect') reachMult = 1 - 0.7 * this.modeT;  // 1 -> 0.3
+    const reach = this.r * (1 + PETAL_REACH) * 1.105 * reachMult;
     const kf = 1 - Math.exp(-PETAL_RATE * dt);
     for (const b of this.petals) {
       const ang = this.spin + b.ord * step;
@@ -234,9 +246,11 @@ class Player {
       if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, 1, a);
       else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, 1, a);  // 回退
     }
-    // 被卸下/移除的花瓣：留在原地放大到 1.5 倍并渐隐 0.5s
+    // 被卸下/移除的花瓣：留在原地放大 1.12 倍并渐隐 0.5s
     for (const g of this.petalGhosts) {
-      const d = deathFade(clamp(g.age / FADE_T, 0, 1));
+      const size = 15 * 0.9;                         // 与在场花瓣同尺寸（原来漏定义 -> 抛错，导致主角脸整帧不画）
+      const t01 = clamp(g.age / FADE_T, 0, 1);
+      const d = { scale: 1 + 0.12 * t01, alpha: 1 - t01 };   // 卸下花瓣：仅轻微放大+渐隐，避免放大到 1.5 倍盖住主角
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
       if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
@@ -252,16 +266,21 @@ class Player {
     ctx.lineWidth = R * 0.085;   // 等比缩放（去下限，保证描边随脸同步缩小）
     ctx.strokeStyle = '#dfbc4e';          // 描边：能看清，又不过分跳
     ctx.stroke();
-    // 眼睛：黑色竖椭圆；白色按移动方向偏移（就是在"看"那个方向）
+    // 眼睛：黑色竖椭圆；reach/detect 时用「斜切顶边」重塑眼睛轮廓（不是叠加小三角）
     const look = this.facing;
-    const erx = R * 0.138, ery = R * 0.2592;  // 眼睛整体 ×1.2（横竖同比例 -> 形状不变）
+    const erx = R * 0.138, ery = R * 0.2592;
+    // 斜率 k：顶边沿眼宽方向的落差；reach = 外高内低(生气)，detect = 内高外低(伤心)
+    const eyeK = 0.45 * this.modeT;                        // 0 -> 0.45，随过渡平滑增长
+    const base = (this.mode === 'detect' ? 1 : -1) * eyeK; // 未进入模式(modeT=0)时为 0，不改变形状
     for (const s of [-1, 1]) {
-      // 眼距：眼睛放大 20% 后，若中心距不变，两眼之间的"视觉缝隙"会被吃掉 0.046R。
-      // 这里把中心距由 ±0.2425R 拉到 ±0.275R，把缝隙补回来并略宽一点（仍保持形状不变）。
+      // 外侧方向：s=+1 右眼外侧在 +x，s=-1 左眼外侧在 -x
       const ex = this.x + s * R * 0.275, ey = this.y - R * 0.20;
+      ctx.save();
+      ctx.beginPath(); ctx.ellipse(ex, ey, erx, ery, 0, 0, TAU);
+      ctx.clip();                                   // 之后的绘制都被裁剪在眼睛椭圆内
       ctx.fillStyle = '#25252a';
-      ctx.beginPath(); ctx.ellipse(ex, ey, erx, ery, 0, 0, TAU); ctx.fill();
-      // 白色眼球：与黑眼椭圆同形状的缩小长圆形（同一长宽比），按移动方向偏移
+      ctx.fillRect(ex - erx, ey - ery, erx * 2, ery * 2);
+      // 白色眼球：与黑眼椭圆同形状的缩小长圆形，按移动方向偏移
       const wk = 0.46;
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
@@ -271,15 +290,32 @@ class Player {
         erx * wk, ery * wk, 0, 0, TAU
       );
       ctx.fill();
+      if (this.modeT > 0.001) {
+        // 用面部色盖掉「倾斜顶边」以上的部分 -> 只削掉上缘，保留下方，轮廓成为斜顶（生气眼 / 伤心眼）
+        // 注意方向：多边形必须在斜线「上方」，否则会把整只眼睛连同下方一起擦掉（眼睛消失且回不来）
+        const k = base * s;      // 每只眼各自朝自己的外侧抬起
+        const top = ey - ery, big = R * 2;
+        ctx.fillStyle = '#fae26a';
+        ctx.beginPath();
+        ctx.moveTo(ex - big, top - k * big - big);    // 上边界（比斜线再高 big）
+        ctx.lineTo(ex + big, top + k * big - big);
+        ctx.lineTo(ex + big, top + k * big);           // 斜线右端
+        ctx.lineTo(ex - big, top - k * big);           // 斜线左端
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
     }
-    // 嘴：固定的微笑弧（长度减半，并保持位于眼睛下方）
+    // 嘴：在同一位置做几何形变（微笑 -> 直线 -> 哭脸），不做旋转，避免嘴巴位置漂移
+    // 两端点固定在原圆弧端点 (±0.2408R, y+0.4032R)，只让「鼓起方向」翻转
     ctx.strokeStyle = '#25252a';
-    ctx.lineWidth = R * 0.07;   // 等比缩放（去下限）
+    ctx.lineWidth = R * 0.07;
     ctx.lineCap = 'round';
+    const mHw = R * 0.2408, mY = this.y + R * 0.4032;
+    const bulge = R * 0.1133 * (1 - 2 * this.modeT);   // 正=向下鼓(笑)，0=直线，负=向上鼓(哭)
     ctx.beginPath();
-    // 弧半径 0.25R -> 0.3125R：长度 ×1.25
-    // 弧心 y：0.30R -> 0.204R（上移 1/5 嘴宽；嘴宽 = 2·0.3125R·cos(0.22π) ≈ 0.482R，其 1/5 ≈ 0.0964R）
-    ctx.arc(this.x, this.y + R * 0.204, R * 0.3125, Math.PI * 0.22, Math.PI * 0.78);
+    ctx.moveTo(this.x - mHw, mY);
+    ctx.quadraticCurveTo(this.x, mY + 2 * bulge, this.x + mHw, mY);
     ctx.stroke();
     ctx.restore();
 

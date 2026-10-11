@@ -18,7 +18,18 @@ window.REGISTRY = {
    "stats": {
     "dmg": 10.0,
     "hp": 10.0,
-    "spd": 0
+    "spd": 2.5
+   },
+   "rarityMultipliers": {
+    "common": {"dmg": 1, "hp": 1},
+    "unusual": {"dmg": 3, "hp": 3},
+    "rare": {"dmg": 9, "hp": 9},
+    "epic": {"dmg": 27, "hp": 27},
+    "legendary": {"dmg": 81, "hp": 81},
+    "mythic": {"dmg": 243, "hp": 243},
+    "ultra": {"dmg": 729, "hp": 729},
+    "super": {"dmg": 2187, "hp": 2187},
+    "eternal": {"dmg": 6561, "hp": 6561}
    },
    "wiki": {
     "common": {

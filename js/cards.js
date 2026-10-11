@@ -154,38 +154,127 @@ const CardRenderer = (function () {
     return null;
   }
 
-  // DOM 卡牌：外框(深) + 内板(纯色) + 素材。
-  // opts: { rarity, svg, size }
-  function createCard(opts) {
-    const o = opts || {};
-    const rarity = o.rarity || 'common';
-    const base = rarityColor(rarity);
-    const el = document.createElement('div');
-    el.className = 'card';
-    if (o.size) { el.style.width = o.size + 'px'; el.style.height = o.size + 'px'; }
-    el.style.background = darken(base, 0.18);   // 外框：同色偏深（描边颜色浅一些）
-    const face = document.createElement('div');
-    face.className = 'card-face';
-    face.style.background = base;               // 内板：纯色
-    if (o.svg) {
-      const img = document.createElement('img');
-      img.className = 'petal';
-      img.loading = 'lazy';
-      img.draggable = false;
-      img.src = `assets/petals/${o.svg}.svg`;   // 先显示原素材
-      asset(o.svg).then((u) => { if (u) img.src = u; });  // 拿到收紧画布后的素材再替换
-      face.appendChild(img);
+  // ---- 卡牌 = 一张 <canvas>：外框/内板/素材/数量角标全部由 JS 绘制 ----
+  // 不再产生任何 DOM 文字或 <img>/<svg> 节点：卡面即像素，天然不可被选中。
+  // opts: { rarity, svg, count, pad, radius }
+  //   pad    = 描边厚度占卡面比例（卡槽/幽灵 0.09，背包卡 0.0756）
+  //   radius = 外框圆角比例（卡槽/幽灵 0.07，背包卡 0.0588）
+  const FONT = '"Ubuntu", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  const _imgCache = {};   // url -> HTMLImageElement
+  const _imgWait = {};    // url -> [等待该素材的 canvas]
+  function imgFor(cv, url) {
+    if (!_imgCache[url]) {
+      const im = new Image();
+      im.onload = () => { for (const c of (_imgWait[url] || [])) paint(c); };
+      im.src = url;
+      _imgCache[url] = im;
     }
-    el.appendChild(face);
-    // 数量角标（背包/堆叠用）：黑描边白字，见 .card-count
-    if (o.count != null) {
-      const cnt = document.createElement('div');
-      cnt.className = 'card-count';
-      cnt.textContent = (o.count === Infinity) ? '∞' : (o.count > 0 ? ('x' + o.count) : '');   // ∞ 或 x2（参见 pack.png）
-      el.appendChild(cnt);
-    }
-    return el;
+    (_imgWait[url] = _imgWait[url] || []).push(cv);
+    return _imgCache[url];
   }
 
-  return { createCard, darken, rarityColor, artCanvas };
+  function roundRectPath(ctx, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // 数量角标：右上角，白字黑描边，倾斜 30°（与原 .card-count 观感一致）
+  function drawCount(ctx, W, H, count) {
+    const txt = (count === Infinity) ? '∞' : (count > 0 ? ('x' + count) : '');
+    if (!txt) return;
+    const s = Math.min(W, H);
+    const fs = 10.4 * (s / 44);            // 原 10.4px 是 44px 卡面的字号，按尺寸等比缩放
+    ctx.save();
+    ctx.translate(W - 0.15 * s, 0.11 * s);
+    ctx.rotate(30 * Math.PI / 180);
+    ctx.font = `800 ${fs}px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = fs * 0.115;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(txt, 0, 0);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(txt, 0, 0);
+    ctx.restore();
+  }
+
+  function drawCard(cv, st) {
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    if (!W || !H) return;
+    const s = Math.min(W, H);
+    const base = rarityColor(st.rarity);
+    ctx.clearRect(0, 0, W, H);
+    // 外框：同色偏深，圆角
+    roundRectPath(ctx, 0, 0, W, H, (st.radius != null ? st.radius : 0.07) * s);
+    ctx.fillStyle = darken(base, 0.18);
+    ctx.fill();
+    // 内板：纯色，直角（描边外圆角、内板直角，与原样式一致）
+    const p = (st.pad != null ? st.pad : 0.09) * s;
+    const iw = W - p * 2, ih = H - p * 2;
+    if (iw > 0 && ih > 0) {
+      ctx.fillStyle = base;
+      ctx.fillRect(p, p, iw, ih);
+      // 素材：contain 塞进内板
+      const im = st.img;
+      if (im && im.complete && im.naturalWidth > 0 && im.naturalHeight > 0) {
+        const k = Math.min(iw / im.naturalWidth, ih / im.naturalHeight);
+        const dw = im.naturalWidth * k, dh = im.naturalHeight * k;
+        ctx.drawImage(im, p + (iw - dw) / 2, p + (ih - dh) / 2, dw, dh);
+      }
+    }
+    if (st.count != null) drawCount(ctx, W, H, st.count);
+  }
+
+  // 画布尺寸跟随元素布局（CSS 决定显示尺寸，这里只同步后备缓冲区）
+  function paint(cv) {
+    const st = cv._card;
+    if (!st || !cv.isConnected) return;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return;                       // 尚未布局完成，等下一帧
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    drawCard(cv, st);
+  }
+
+  function createCard(opts) {
+    const o = opts || {};
+    const cv = document.createElement('canvas');
+    cv.className = 'card';
+    if (o.size) { cv.style.width = o.size + 'px'; cv.style.height = o.size + 'px'; }
+    cv._card = {
+      rarity: o.rarity || 'common',
+      count: (o.count != null) ? o.count : null,
+      pad: o.pad, radius: o.radius,
+      img: null
+    };
+    if (o.svg) {
+      // 先画纯色卡面，素材就绪后自动重绘（与原来 img 异步替换同一观感）
+      asset(o.svg).then((u) => { if (u) { cv._card.img = imgFor(cv, u); paint(cv); } });
+    }
+    // 入 DOM 后才有 clientWidth：下一帧首次绘制；之后跟随布局变化重绘
+    requestAnimationFrame(() => paint(cv));
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => paint(cv));
+      ro.observe(cv);
+      cv._ro = ro;
+    }
+    return cv;
+  }
+
+  // 重绘所有已生成的卡（窗口尺寸/dpr 变化后调用）
+  function repaintAll(root) {
+    const list = (root || document).querySelectorAll('canvas.card');
+    for (const cv of list) paint(cv);
+  }
+
+  return { createCard, darken, rarityColor, artCanvas, repaintAll, FONT };
 })();

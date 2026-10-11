@@ -69,11 +69,13 @@ function buildPetalTypes() {
     const key = 'p' + id;   // 稳定 key，避免名称冲突
     const t = {
       id, key, name,
+      slug,                                    // 供 I18N 查 Description（Petals/<slug>/Description）
       zh: p.zh || '',
       svg: id,                                  // assets/petals/<id>.svg
       dmg: (p.stats && p.stats.dmg) || 0,
       hp: (p.stats && p.stats.hp) || 0,
       spd: (p.stats && p.stats.spd) || 0,
+      rarityMultipliers: p.rarityMultipliers || null,  // 稀有度倍率表（仅Basic有）
       kind: p.kind || 'misc',
       identified: true,
       wiki: p.wiki || null

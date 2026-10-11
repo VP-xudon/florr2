@@ -384,12 +384,19 @@ function createGardenMap(data) {
 
     solid = new Uint8Array(W * H);
     solidQuad = new Uint8Array(FW * FH);
+    // 四分之一格（角块）判定：扫描该象限内全部 Q×Q 个细网格采样，只要有一个落在碰撞体内就算实心。
+    // 旧实现只取象限正中一个采样点，细斜边/窄边的碰撞体会被整块漏判 -> 小地图上显示成"可走的白块"，
+    // 与实际碰撞不符（看着能走，走过去被挡）。
+    const Q = N >> 1;                 // 每象限 Q×Q 个采样（N=48 -> 24×24）
     for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
       let occupied = false;
       for (let qy = 0; qy < 2; qy++) for (let qx = 0; qx < 2; qx++) {
-        const gx = tx * N + ((qx * 2 + 1) * N >> 2);
-        const gy = ty * N + ((qy * 2 + 1) * N >> 2);
-        const blocked = g[gy * gw + gx];
+        const x0 = tx * N + qx * Q, y0 = ty * N + qy * Q;
+        let blocked = 0;
+        for (let sy = y0; sy < y0 + Q && !blocked; sy++) {
+          const row = sy * gw;
+          for (let sx = x0; sx < x0 + Q; sx++) if (g[row + sx]) { blocked = 1; break; }
+        }
         solidQuad[(ty * 2 + qy) * FW + tx * 2 + qx] = blocked;
         occupied = occupied || !!blocked;
       }
@@ -458,7 +465,7 @@ function createGardenMap(data) {
       if (!img || !img.complete) continue;          // 贴图未就绪：暂留绿底
       const cv = SpriteStore.canvasFlip(key, tile, flags);
       if (!cv) continue;
-      ctx.drawImage(cv, tx * tile - half, ty * tile - half, tile, tile);
+      ctx.drawImage(cv, tx * tile - half - 0.5, ty * tile - half - 0.5, tile + 1, tile + 1);  // 重叠 1px：消除相机浮点平移造成的瓦片缝隙
     }
     }
     }
