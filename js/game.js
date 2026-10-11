@@ -75,8 +75,11 @@ class Game {
         if (e.code === 'Space' || e.key === ' ') e.preventDefault();   // 只拦空格（整页滚动）
       }
       const k = e.key.toLowerCase();
-      if (k === 'b' || k === 'tab') { e.preventDefault(); this.toggleBag(); }
+      if (k === 'b' || k === 'z' || k === 'tab') { e.preventDefault(); this.toggleBag(); }
       if (k === 'v') { e.preventDefault(); this.toggleDex(); }
+      if (k === 'r') { e.preventDefault(); this.swapSlotRows(); }
+      const d = '12345'.indexOf(e.key);
+      if (d >= 0) { e.preventDefault(); this.swapSlotColumn(d); }
     });
     window.addEventListener('keyup', (e) => {
       const act = KEY_ACTION[e.code] || KEY_ALIAS[e.key.toLowerCase()];
@@ -95,10 +98,11 @@ class Game {
     UI.onDexToggle = () => this.toggleDex();
     UI.onSlotClick = (i) => this.moveSlotToInv(i);          // 点击已装备花瓣 -> 卸下到物品栏
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
+    UI.onSubClick = (i) => this.swapSlotColumn(i);          // 点击副槽卡 -> 与主槽同列互换
     UI.onBagCardClick = (i) => this.moveBagToInv(i);        // 点击背包卡 -> 进物品栏（无空槽则无反应）
-    UI.onGalleryCardClick = (card) => {                    // 点击画廊卡 -> 仅当有空槽时装备；满槽无反应
-      const emptyIdx = this.firstEmptySlot();
-      return (emptyIdx >= 0) ? this.addGalleryCard(card.type, card.rarity, { type: 'slot', index: emptyIdx }) : false;
+    UI.onGalleryCardClick = (card) => {                    // 点击画廊卡 -> 仅当有空槽时装备（含副槽）；满槽无反应
+      const t = this.firstEmptyAny();
+      return t ? this.addGalleryCard(card.type, card.rarity, { type: t.row, index: t.index }) : false;
     };
     UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
@@ -118,6 +122,7 @@ class Game {
     p.hp = p.maxHp = 100; p.xp = 0; p.level = 1; p.xpNext = 24;
     p.dead = false; p.deathTimer = 0; p.invuln = 0; p.flash = 0;
     p.slots = [null, null, null, null, null];
+    p.subSlots = [null, null, null, null, null];
     p.invBar = full ? [] : p.invBar;
     p.backpack = full ? [] : p.backpack;
     // 初始花瓣：基础 + 攻击型
@@ -299,6 +304,81 @@ class Game {
 
   // ---------- 物品栏模型 ----------
   firstEmptySlot() { return this.player.slots.findIndex(s => !s); }
+  // 空槽计算包含副槽：主槽满则落到副槽（临时存储）
+  firstEmptyAny() {
+    const p = this.player;
+    const s = p.slots.findIndex(x => !x);
+    if (s >= 0) return { row: 'slot', index: s };
+    const t = p.subSlots.findIndex(x => !x);
+    if (t >= 0) return { row: 'subslot', index: t };
+    return null;
+  }
+
+  // R 键：整排互换主槽 / 副槽（显式垂直交换动画，只动被交换的卡）
+  swapSlotRows() {
+    const p = this.player;
+    const t = p.slots; p.slots = p.subSlots; p.subSlots = t;
+    p.recompute(); this.renderInventory();
+    if (typeof UI !== 'undefined' && UI.animateRowSwap) UI.animateRowSwap(null);
+    return true;
+  }
+  // 数字键 / 点击副槽：单列互换（主槽 i <-> 副槽 i）
+  swapSlotColumn(i) {
+    const p = this.player;
+    if (i < 0 || i >= p.slots.length) return false;
+    const t = p.slots[i]; p.slots[i] = p.subSlots[i]; p.subSlots[i] = t;
+    p.recompute(); this.renderInventory();
+    if (typeof UI !== 'undefined' && UI.animateRowSwap) UI.animateRowSwap([i]);
+    return true;
+  }
+  // 任意主槽/副槽位置互换（拖拽跨行）
+  moveSlotCard(mainIndex, subIndex) {
+    const p = this.player;
+    if (mainIndex < 0 || mainIndex >= p.slots.length) return false;
+    if (subIndex < 0 || subIndex >= p.subSlots.length) return false;
+    const t = p.slots[mainIndex]; p.slots[mainIndex] = p.subSlots[subIndex]; p.subSlots[subIndex] = t;
+    p.recompute(); this.renderInventory(); return true;
+  }
+  moveInvToSub(invIndex, subIndex) {
+    const p = this.player;
+    if (invIndex < 0 || invIndex >= p.invBar.length) return false;
+    if (subIndex < 0 || subIndex >= p.subSlots.length) return false;
+    const card = p.invBar[invIndex];
+    const old = p.subSlots[subIndex];
+    p.subSlots[subIndex] = card;
+    p.invBar.splice(invIndex, 1);
+    if (old) this._slotCardToBag(subIndex, old, false, 'sub');
+    this.renderInventory(); return true;
+  }
+  moveBagToSub(bagIndex, subIndex) {
+    const p = this.player;
+    if (subIndex < 0 || subIndex >= p.subSlots.length) return false;
+    const stack = p.backpack[bagIndex];
+    if (!stack) return false;
+    const card = { type: stack.type, rarity: stack.rarity };
+    takeOne(p.backpack, bagIndex);
+    const old = p.subSlots[subIndex];
+    p.subSlots[subIndex] = card;
+    if (old) this._slotCardToBag(subIndex, old, false, 'sub');
+    this.renderInventory(); return true;
+  }
+  moveSubToSub(from, to) {
+    const p = this.player;
+    if (from === to) { this.renderInventory(); return true; }
+    if (from < 0 || from >= p.subSlots.length || to < 0 || to >= p.subSlots.length) return false;
+    const a = p.subSlots[from], b = p.subSlots[to];
+    p.subSlots[from] = b; p.subSlots[to] = a;
+    this.renderInventory(); return true;
+  }
+  moveSubToBag(subIndex) {
+    const p = this.player;
+    if (subIndex < 0 || subIndex >= p.subSlots.length) return false;
+    const card = p.subSlots[subIndex];
+    if (!card) return false;
+    p.subSlots[subIndex] = null;
+    this._slotCardToBag(subIndex, card, false);
+    this.renderInventory(); return true;
+  }
 
   // 管理员画廊：把一张「新的」花瓣卡放入目标（物品栏 / 卡槽 / 背包 / 花朵）
   addGalleryCard(type, rarity, target) {
@@ -311,6 +391,13 @@ class Game {
       // 旧卡不吞掉：回背包画廊（数量 +1）并从卡槽位置播放飞回背包动画
       if (old) this._slotCardToBag(target.index, old, true);
       p.recompute(); this.renderInventory(); return true;
+    }
+    if (target.type === 'subslot') {
+      const old = p.subSlots[target.index];
+      p.subSlots[target.index] = card;
+      // 旧卡不吞掉：回背包画廊（数量 +1）；副槽替换不播飞回动画（避免误导性的"飞回去"）
+      if (old) this._slotCardToBag(target.index, old, false, 'sub');
+      this.renderInventory(); return true;   // 副槽不参与装备，无需 recompute
     }
     if (target.type === 'inv') {
       if (p.invBar.length < p.maxInvBar) { p.invBar.push(card); this.renderInventory(); return true; }
@@ -329,9 +416,9 @@ class Game {
   }
   // 卡槽里被替换下来的卡统一处理：回「背包画廊」(数量 +1)
   // animate=true 时额外从卡槽位置播放飞回背包动画（替换场景；点击卸下时幽灵已在飞，不重复播放）
-  _slotCardToBag(slotIndex, card, animate) {
+  _slotCardToBag(slotIndex, card, animate, row) {
     if (typeof UI !== 'undefined' && UI.addGalleryCount) UI.addGalleryCount(card.type, card.rarity);
-    if (animate && typeof UI !== 'undefined' && UI.flySlotCardToBag) UI.flySlotCardToBag(slotIndex, card);
+    if (animate && typeof UI !== 'undefined' && UI.flySlotCardToBag) UI.flySlotCardToBag(slotIndex, card, row);
     this.renderInventory();
   }
 
@@ -411,14 +498,16 @@ class Game {
     p.recompute(); this.renderInventory(); return true;
   }
   equipFirstEmptyFromInv(invIndex) {
-    const s = this.firstEmptySlot();
-    if (s < 0) return false;
-    return this.moveInvToSlot(invIndex, s);
+    const t = this.firstEmptyAny();
+    if (!t) return false;
+    return (t.row === 'slot') ? this.moveInvToSlot(invIndex, t.index)
+                              : this.moveInvToSub(invIndex, t.index);
   }
   equipFirstEmptyFromBag(bagIndex) {
-    const s = this.firstEmptySlot();
-    if (s < 0) return false;
-    return this.moveBagToSlot(bagIndex, s);
+    const t = this.firstEmptyAny();
+    if (!t) return false;
+    return (t.row === 'slot') ? this.moveBagToSlot(bagIndex, t.index)
+                              : this.moveBagToSub(bagIndex, t.index);
   }
 
   // 拖拽落点分发
@@ -435,6 +524,13 @@ class Game {
       if (from.type === 'inv') return this.moveInvToSlot(from.index, target.index);
       if (from.type === 'bag') return this.moveBagToSlot(from.index, target.index);
       if (from.type === 'slot') return this.moveSlotToSlot(from.index, target.index);
+      if (from.type === 'subslot') return this.moveSlotCard(target.index, from.index);
+    }
+    if (target.type === 'subslot') {
+      if (from.type === 'inv') return this.moveInvToSub(from.index, target.index);
+      if (from.type === 'bag') return this.moveBagToSub(from.index, target.index);
+      if (from.type === 'slot') return this.moveSlotCard(from.index, target.index);
+      if (from.type === 'subslot') return this.moveSubToSub(from.index, target.index);
     }
     if (target.type === 'inv') {
       if (from.type === 'inv') return this.moveInvToInv(from.index, target.index);

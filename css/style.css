@@ -20,28 +20,38 @@ body {
 #pname { color: #cfe8c0; font-weight: 500; font-size: 15px; }
 #hint { position: absolute; bottom: 10px; right: 16px; font-size: 12px; color: rgba(255,255,255,.55); }
 
-/* 左下角图标列：淡蓝底 + 白色矢量图形（层级高于窗口） */
+/* 左下角图标列：使用 assets/ui 真实矢量化按钮贴图（层级高于窗口） */
 #dockBtns {
   position: absolute; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px;
   pointer-events: auto; z-index: 45;
 }
 .dockbtn {
-  width: 54px; height: 54px; border-radius: 13px; border: 3px solid #7cb8e0;
-  background: #8fc4ea; cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: filter .1s, transform .08s;   /* 纯 2D：不用阴影 */
+  padding: 0; border: none; background: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: filter .1s, transform .08s;
 }
-.dockbtn svg { width: 30px; height: 30px; }
+.dockbtn img { width: 100%; height: 100%; display: block; pointer-events: none; }
 .dockbtn:hover { filter: brightness(1.1); }
 .dockbtn:active { filter: brightness(.82); transform: scale(.95); }
-/* 生物图鉴按钮：蜂蜜黄 */
-#dexBtn { background: #e9a825; border-color: #c1871a; }
+/* 背包按钮：原 54px × 0.85 × 1.2 */
+#bagBtn { width: 55.2px; height: 55.2px; }
+/* 生物图鉴按钮：移到左上角（玩家名下方），btn-bee 贴图，原 54px × 0.5 × 1.2 */
+#dexBtn {
+  position: absolute; left: 16px; top: 44px; z-index: 45;
+  width: 32.4px; height: 32.4px;
+}
 
 /* 底部常驻快捷栏：仅一行 = 当前装备的卡（空位为灰色半透明圆角块，无描边；层级高于窗口） */
 #quickbar {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center;
   pointer-events: auto; z-index: 45;
 }
 .quickrow { display: flex; gap: 8px; }
+/* 主槽行：整体 0.9 倍（zoom 同步缩放描边/圆角/间距等所有子元素） */
+#slotRow { zoom: 0.9; }
+/* 副槽行：整体 0.75 倍（临时存储），位于主槽正下方 */
+#subRow { zoom: 0.75; margin-top: 10px; }
 /* 空卡槽：用 ::after 画“空 eternal 卡”灰白外观；装卡后 .card 绝对铺满 54px 完全覆盖，无痕迹 */
 .qslot { width: 54px; height: 54px; border-radius: 4px; position: relative; }
 .qslot::after {
@@ -50,6 +60,13 @@ body {
 }
 .qslot .card { position: absolute; inset: 0; z-index: 1; }
 .qslot:hover::after { background: #f6f6f6; }
+/* 副槽格子正下方的数字快捷键提示（在 0.75 zoom 容器内，随行同步缩放） */
+.qslot .qnum {
+  position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%);
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 2.2px #000; paint-order: stroke fill;
+  white-space: nowrap; line-height: 1; pointer-events: none; z-index: 2;
+}
 /* 卡牌：纯 canvas 绘制（外框/内板/素材/数量角标全在 JS 里画）
    CSS 只负责布局尺寸与外角裁剪，卡面本身没有任何 DOM 文字/图片节点。 */
 .card {
@@ -98,16 +115,15 @@ body {
   position: absolute; left: 16px; top: 15px; font-size: 12px; font-weight: 800; color: #eaf4fc;
   -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;  /* 纯色黑描边 */
 }
-/* 关闭按钮：原 1/4 大小（边长半、面积 1/4），棕红底 + 深棕红描边，纯 2D 无伪 3D */
+/* 关闭按钮：统一使用 btn-close.svg 真实矢量化贴图，尺寸不变（17px） */
 .win-close {
   position: absolute; top: 6px; right: 8px;
-  width: 17px; height: 17px; border: 2px solid #a8432f; border-radius: 5.4px;  /* 圆角增加1倍 = 2.7×2 */
-  background: #d4625a; cursor: pointer;
+  width: 17px; height: 17px; padding: 0; border: none; background: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
-.win-close svg { width: 11px; height: 11px; }
-.win-close:hover { background: #e87168; }
-.win-close:active { background: #b84e47; }
+.win-close img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.win-close:hover { filter: brightness(1.1); }
+.win-close:active { filter: brightness(.85); }
 /* 自绘滚动条：仅一根半透明灰色条，不用浏览器默认样式 */
 .win-body { padding: 10px 16px 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .win-body::-webkit-scrollbar { width: 8px; }

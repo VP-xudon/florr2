@@ -5,12 +5,14 @@
 const SPEED_SCALE = 5;
 
 // 花瓣物理参数
-// 采用「一阶指数逼近 + 滞后上限」而非二阶弹簧：
-//   二阶弹簧在人物高速运动时的稳态滞后 = v·c/k，很容易大到和轨道半径同量级，
-//   再叠加欠阻尼就是"稍微一走就乱斗/装上就抖几下"。一阶逼近在数学上单调收敛，绝不过冲。
-const PETAL_RATE     = 5.0;   // 吸附速率(1/s)：越小越松弛、跟随越慢
-const PETAL_MAX_LAG  = 0.45;  // 稳态最大滞后 = 轨道半径 × 该系数；上一版 0.9 太严重，降到 0.5 倍
-const PETAL_LAG_RAMP = 0.6;   // 上场后，滞后上限由"整圈"平滑收敛到稳态值所需时间(s)
+// 采用「欠阻尼弹簧」：加速度 = K·(目标-位置) - D·速度
+//   · 回复力与距离成正比、速度无上限 —— 越远拉得越快，磁力吸附感
+//   · 稳态跟随滞后 = v·D/K（与旧一阶逼近 v/PETAL_RATE 相同，奔跑观感不变）
+//   · 轻微欠阻尼：模式切换/急转向时花瓣先甩出一小段惯性再收敛，绝不瞬移
+const PETAL_SPRING_K  = 250;    // 回复刚度(1/s²)：越大吸附越干脆
+const PETAL_SPRING_D  = 15.2;   // 阻尼(1/s)：D/K ≈ 0.06s，几乎跟手；ζ≈0.48 回弹明显可见
+const PETAL_MAX_SPEED = 2600;   // 安全速度上限（正常游玩永远碰不到，仅防积分爆炸）
+const PETAL_DETECT    = 0.5;    // detect 模式收缩系数：轨道半径 ×0.5
 const PETAL_REACH    = 2;     // 花瓣中点到主角边缘的距离 = 主角直径(2r) -> reach = r + 2r
 const PETAL_R        = 14 * 0.9;  // 12.6：花瓣碰撞半径缩至原 0.9
 const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
@@ -89,7 +91,8 @@ class Player {
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.damage = 0;
-    this.slots = [null, null, null, null, null];   // 花朵花瓣（卡槽，已装备）
+    this.slots = [null, null, null, null, null];   // 花朵花瓣（主槽，已装备）
+    this.subSlots = [null, null, null, null, null]; // 副槽（临时存储，不参与装备）
     this.invBar = [];                              // 即时物品栏（底部常驻淡灰卡槽）
     this.backpack = [];                            // 背包库存（仅在背包面板可见）
     this.maxInvBar = 8;
@@ -194,39 +197,28 @@ class Player {
     for (const g of this.petalGhosts) g.age += dt;
     this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
 
-    // 计算应在位置，并以一阶指数逼近走过去（帧率无关，且数学上单调 -> 绝不过冲/抖动）
+    // 计算应在位置，用欠阻尼弹簧吸附过去（帧率无关；目标突变时平滑追赶，绝不瞬移）
     const step = n > 0 ? TAU / n : 0;
-    // 花瓣距离：reach模式×2，detect模式×0.3，normal×1
+    // 花瓣距离：reach模式×2，detect模式×0.5，normal×1
     let reachMult = 1;
-    if (this.mode === 'reach') reachMult = 1 + this.modeT;        // 1 -> 2
-    else if (this.mode === 'detect') reachMult = 1 - 0.7 * this.modeT;  // 1 -> 0.3
+    if (this.mode === 'reach') reachMult = 1 + this.modeT;              // 1 -> 2
+    else if (this.mode === 'detect') reachMult = 1 - (1 - PETAL_DETECT) * this.modeT;  // 1 -> 0.5
     const reach = this.r * (1 + PETAL_REACH) * 1.105 * reachMult;
-    const kf = 1 - Math.exp(-PETAL_RATE * dt);
+    const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     for (const b of this.petals) {
       const ang = this.spin + b.ord * step;
       const tx = this.x + Math.cos(ang) * reach;
       const ty = this.y + Math.sin(ang) * reach;
 
-      // 滞后上限：刚上场允许误差达整圈（于是能从人物中心慢慢"冒出来"），
-      // 之后随时间收敛到稳态上限；稳态下跑得再快也只拖这么多，既不会越拖越远，也不会回弹。
-      const settle = clamp(b.age / PETAL_LAG_RAMP, 0, 1);
-      const maxLag = reach * (settle * PETAL_MAX_LAG + (1 - settle));
-
-      let dx = tx - b.x, dy = ty - b.y;
-      const d = Math.hypot(dx, dy);
-      let mx, my;
-      if (d > maxLag && d > 0) {
-        // 已超出滞后上限：本帧补回超出部分，再叠加正常吸附步长
-        const k = (d - maxLag) + maxLag * kf;
-        mx = (dx / d) * k; my = (dy / d) * k;
-      } else {
-        mx = dx * kf; my = dy * kf;
-      }
-      // 单帧位移上限：避免被墙卡住时沿墙被拖着狂奔
-      const md = Math.hypot(mx, my), cap = Math.max(8, maxLag);
-      if (md > cap) { mx = (mx / md) * cap; my = (my / md) * cap; }
-      // 走碰撞管线：撞墙 / 撞生物
-      this._resolvePetal(b, mx, my, map, mobs);
+      // 欠阻尼弹簧：速度带惯性，离目标越远加速越大；
+      // 模式切换 / 数量重排 / 急转向都表现为"甩一下再归位"的自然追赶
+      if (b.vx == null) { b.vx = 0; b.vy = 0; }
+      b.vx += (PETAL_SPRING_K * (tx - b.x) - PETAL_SPRING_D * b.vx) * dtc;
+      b.vy += (PETAL_SPRING_K * (ty - b.y) - PETAL_SPRING_D * b.vy) * dtc;
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > PETAL_MAX_SPEED) { const s = PETAL_MAX_SPEED / sp; b.vx *= s; b.vy *= s; }
+      // 走碰撞管线：撞生物时被挤出，速度保留（下一帧弹簧自动修正）
+      this._resolvePetal(b, b.vx * dtc, b.vy * dtc, map, mobs);
     }
 
     // 供绘制与碰撞使用

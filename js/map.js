@@ -433,7 +433,9 @@ function createGardenMap(data) {
         c.closePath();
       }
     }
-    c.fill();
+    // evenodd：Tiled 多边形绕向不统一，nonzero 规则会因绕向相抵在墙体内部
+    // 留下孔洞（小地图上的白色散点）；evenodd 只看嵌套层数，绕向无关
+    c.fill('evenodd');
     _mmCv = cv; _mmPx = px;
     return cv;
   }
