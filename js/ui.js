@@ -137,6 +137,9 @@ const UI = {
     // 兜底：窗口失焦/右键菜单时，清掉可能残留的拖拽幽灵
     window.addEventListener('blur', () => this._removeGhost());
     root.addEventListener('contextmenu', (e) => { this._removeGhost(); e.preventDefault(); });
+    // 任何元素发生滚动（含背包窗口内容 .win-body）-> 悬浮栏立刻渐隐，
+    // 绝不能跟着内容一起滑走（scroll 不冒泡，用捕获阶段监听）
+    window.addEventListener('scroll', () => { if (this._tipOn) this._hideTip(); }, true);
   },
 
   // HUD 不再含等级/经验/血量（战斗系统已移除）
@@ -381,17 +384,29 @@ const UI = {
     // 锚点元素会被重渲染销毁（点击装备 -> renderInvBar 重建卡槽），此时必须沿用
     // 最后一次有效矩形原地渐隐；旧实现回退到屏幕中心 —— 而主角永远在屏幕中心，
     // 于是悬浮框"飞到主角身上"再消失。
-    if (t.anchor && t.anchor.isConnected) this._tipLastRect = t.anchor.getBoundingClientRect();
+    if (this._tipOn && t.anchor && t.anchor.isConnected) {
+      const ar = t.anchor.getBoundingClientRect();
+      const last = this._tipLastRect;
+      // 只有"同一个元素"发生位移才算内容在滚动/重排 —— 换到另一张卡时矩形当然不同，
+      // 那是一次正常的悬浮切换，不能误判成移动（否则悬浮栏会只闪一下就再也不出现）。
+      const sameAnchor = (this._tipAnchor === t.anchor);
+      if (sameAnchor && last && (Math.abs(ar.left - last.left) > 0.5 || Math.abs(ar.top - last.top) > 0.5)) {
+        this._hideTip();          // 锚点开始移动（滚动/重排/缩放）-> 立刻渐隐
+      } else {
+        this._tipAnchor = t.anchor;
+        this._tipLastRect = ar;
+      }
+    }
     const r = this._tipLastRect || null;
-    if (r) {
+    if (this._tipOn && r) {
       let tx = r.left + r.width / 2 - W / 2;
       let ty = r.top - H - 8;
       if (ty < 4) ty = r.bottom + 8;
       tx = Math.max(4, Math.min(tx, innerWidth - W - 4));
       ty = Math.max(4, Math.min(ty, innerHeight - H - 4));
-      // 首次出现直接落位；相邻卡之间移动时把框平移过去；正在渐隐时保持原位不动
+      // 首次出现直接落位；相邻卡之间移动时把框平移过去
       if (!this._tipSlide || !this._tipPos) this._tipPos = { x: tx, y: ty };
-      else if (this._tipOn) {
+      else {
         this._tipPos.x += (tx - this._tipPos.x) * 0.4;
         this._tipPos.y += (ty - this._tipPos.y) * 0.4;
       }
@@ -493,6 +508,7 @@ const UI = {
           this._tipAlpha = 0;
           this._tipPos = null;      // 悬浮框当前位置（相邻卡之间平移用）
               this._tipLastRect = null; // 锚点最后一次有效矩形：锚点被重建后据此原地渐隐
+    this._tipAnchor = null;  // 上一次记录的锚点元素（用于区分"换卡"与"元素移动"）
               this._tipSlide = false;   // 是否处于"卡与卡之间平移"
           this._tipHideAt = 0;      // 上次隐藏时刻（120ms 宽限期内移动到新卡则不淡出）
       const resize = () => {
@@ -825,7 +841,8 @@ const UI = {
   },
 
   // ---------------- 小地图 ----------------
-  // 画在游戏主画布上；按"能不能走"显示黑白形状（精确到四分之一格）。
+  // 画在游戏主画布上。优先直接 blit「按真实碰撞多边形栅格化」的小地图位图：
+  // 细斜边、窄边、圆弧都是真实轮廓，与实际碰撞完全一致（不再用四分之一格采样近似）。
   drawMinimap(ctx, rect, map, player, mobs) {
     const S = rect.size, x0 = rect.x, y0 = rect.y;
     const half = map.R || (map.width * (map.tile || 1)) / 2;
@@ -833,7 +850,13 @@ const UI = {
     ctx.save();
     ctx.fillStyle = 'rgba(8,12,9,0.55)';
     ctx.fillRect(x0 - 5, y0 - 5, S + 10, S + 10);
-    if (map.solidQuad && map.FW && map.FH) {
+    const mm = (typeof map.minimapCanvas === 'function')
+      ? map.minimapCanvas(Math.round(S * Math.min(2, window.devicePixelRatio || 1))) : null;
+    if (mm) {
+      ctx.fillStyle = '#d7ddcf';
+      ctx.fillRect(x0, y0, S, S);
+      ctx.drawImage(mm, x0, y0, S, S);
+    } else if (map.solidQuad && map.FW && map.FH) {
       const W = map.width, H = map.height;
       ctx.fillStyle = '#d7ddcf';
       ctx.fillRect(x0, y0, S, S);

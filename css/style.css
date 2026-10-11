@@ -87,12 +87,12 @@ body {
 }
 .win-head { position: relative; padding: 12px 54px 4px; }
 .win-title {
-  display: block; text-align: center; font-size: 15px; font-weight: 800; color: #fff; letter-spacing: .3px;
-  -webkit-text-stroke: 1.5px #000; paint-order: stroke fill;  /* 纯色黑描边，非渐变 */
+  display: block; text-align: center; font-size: 15px; font-weight: 900; color: #fff; letter-spacing: .3px;
+  -webkit-text-stroke: 2.25px #000; paint-order: stroke fill;  /* 黑描边加粗 0.5 倍：1.5 -> 2.25px */
 }
 .win-subtitle {
-  display: block; text-align: center; font-size: 10.8px; font-weight: 800; color: #e8f2fa; margin-top: 2px;
-  -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;  /* 比稀有度字稍大(9.6->10.8)，描边同宽1.2px */
+  display: block; text-align: center; font-size: 10.8px; font-weight: 900; color: #e8f2fa; margin-top: 2px;
+  -webkit-text-stroke: 1.8px #000; paint-order: stroke fill;    /* 黑描边加粗 0.5 倍：1.2 -> 1.8px */
 }
 .win-count {
   position: absolute; left: 16px; top: 15px; font-size: 12px; font-weight: 800; color: #eaf4fc;

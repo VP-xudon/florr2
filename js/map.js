@@ -198,6 +198,7 @@ function createGardenMap(data) {
   let grid = null, GW = 0, GH = 0, ss = 0;   // 细网格（GW×GH，单位 ss 世界像素）
   let collisionTiles = null;
   const SUB = 48;                            // 碰撞对象的逐瓦片采样分辨率
+  let _mmCv = null, _mmPx = 0;               // 小地图位图缓存（按真实碰撞多边形绘制）
 
   function isSolid(tx, ty) {                 // 整格（兼容/小地图）
     if (tx < 0 || ty < 0 || tx >= W || ty >= H) return true;  // 地图外视为墙
@@ -403,6 +404,38 @@ function createGardenMap(data) {
       solid[ty * W + tx] = occupied ? 1 : 0;
     }
     grid = g; GW = gw; GH = gh; ss = s; collisionTiles = exactTiles;
+    _mmCv = null;                             // 碰撞体重建后小地图缓存失效
+  }
+
+  // 小地图位图：直接按「真实碰撞多边形」精确栅格化（细斜边/窄边/圆弧都是真实轮廓），
+  // 只构建一次并按尺寸缓存；旧实现用四分之一格采样近似，角块形状与真实碰撞对不上。
+  function minimapCanvas(px) {
+    px = Math.max(32, Math.round(px || 256));
+    if (_mmCv && _mmPx === px) return _mmCv;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = px;
+    const c = cv.getContext('2d');
+    const k = px / (W * tile);                // 世界像素 -> 画布像素（画布左上角 = 世界左上角）
+    c.fillStyle = '#d7ddcf';                   // 可走底色
+    c.fillRect(0, 0, px, px);
+    c.fillStyle = '#11130f';                   // 碰撞体
+    c.beginPath();
+    for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+      const polys = collisionTiles && collisionTiles[ty * W + tx];
+      if (!polys || !polys.length) continue;
+      const ox = tx * tile, oy = ty * tile;    // 顶点在瓦片内的归一化坐标 0..1
+      for (const poly of polys) {
+        for (let i = 0; i < poly.length; i++) {
+          const cx = (ox + poly[i][0] * tile) * k;
+          const cy = (oy + poly[i][1] * tile) * k;
+          if (i === 0) c.moveTo(cx, cy); else c.lineTo(cx, cy);
+        }
+        c.closePath();
+      }
+    }
+    c.fill();
+    _mmCv = cv; _mmPx = px;
+    return cv;
   }
 
   function isInside(x, y) { return Math.abs(x) <= half && Math.abs(y) <= half; }
@@ -432,6 +465,7 @@ function createGardenMap(data) {
     R: half, half, tile, width: W, height: H, size: data.size, solid, solidQuad, FW, FH, poly,
     isSolid, solidAtPoint, collide, move: moveCircle, isInside, randomPoint, spawnPointAwayFrom,
     clampTo: (x, y, r) => collide(x, y, r || 22),
+    minimapCanvas,
     buildCollision
     };
     }
