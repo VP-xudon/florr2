@@ -187,7 +187,7 @@ const CardRenderer = (function () {
 
   // 数量角标：右上角，白字黑描边，倾斜 30°（与原 .card-count 观感一致）
   function drawCount(ctx, W, H, count) {
-    const txt = (count === Infinity) ? '∞' : (count > 0 ? ('x' + count) : '');
+    const txt = (count === Infinity) ? '∞' : (count > 0 ? ('x' + fmtNum(count)) : '');
     if (!txt) return;
     const s = Math.min(W, H);
     const fs = 10.4 * (s / 44);            // 原 10.4px 是 44px 卡面的字号，按尺寸等比缩放
@@ -203,6 +203,21 @@ const CardRenderer = (function () {
     ctx.fillStyle = '#fff';
     ctx.fillText(txt, 0, 0);
     ctx.restore();
+  }
+
+  // 数量角标：改为 DOM 文本（.card-count），不再画在 canvas 上。
+  // 原因：canvas 会被自身边界裁掉，数量文字（尤其 x10 / ∞ 这种）显示不全；
+  // DOM 元素可以自由溢出卡牌框框边界。字号/描边在 paint() 里按卡面尺寸同步。
+  function syncCount(cv, st) {
+    const el = cv._countEl;
+    if (!el) return;
+    const txt = (st.count === Infinity) ? '∞' : (st.count > 0 ? ('x' + fmtNum(st.count)) : '');
+    if (!txt) { el.textContent = ''; el.style.display = 'none'; return; }
+    const fs = Math.max(7, cv.clientWidth * 0.236);     // 10.4px @ 44px 卡面，等比缩放
+    el.textContent = txt;
+    el.style.display = '';
+    el.style.fontSize = fs.toFixed(2) + 'px';
+    el.style.webkitTextStrokeWidth = (fs * 0.115).toFixed(2) + 'px';
   }
 
   function drawCard(cv, st) {
@@ -230,7 +245,8 @@ const CardRenderer = (function () {
         ctx.drawImage(im, p + (iw - dw) / 2, p + (ih - dh) / 2, dw, dh);
       }
     }
-    if (st.count != null) drawCount(ctx, W, H, st.count);
+    // 数量角标由 DOM（.card-count）负责，这里只同步文本与字号
+    syncCount(cv, st);
   }
 
   // 画布尺寸跟随元素布局（CSS 决定显示尺寸，这里只同步后备缓冲区）

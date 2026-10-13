@@ -178,6 +178,19 @@ function transformTiledPoint(x, y, flags) {
   return [x, y];
 }
 
+// 统一多边形绕向（一律顺时针，即面积为负）。
+// 为什么要做：Tiled 对象组的绕向并不统一。若直接用 nonzero 规则，绕向相反的相邻多边形会互相
+// 抵消，在墙体内部留下孔洞；而若用 evenodd 规则，重叠对象又会被"挖空"（环绕数为 2 -> 不填充）。
+// 本工程全部 7 个多对象瓦片（grate_* / hut_* / castle_tri_0 / cellar_door）都是「并集」形状
+// （L 形、十字格栅、门框），没有一个需要挖洞 —— 所以统一绕向后用 nonzero，重叠即取并集。
+function normalizeWinding(poly) {
+  let area = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    area += poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+  }
+  return area > 0 ? poly.slice().reverse() : poly;
+}
+
 function pointInPolygon(x, y, polygon) {
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -198,7 +211,7 @@ function createGardenMap(data) {
   let grid = null, GW = 0, GH = 0, ss = 0;   // 细网格（GW×GH，单位 ss 世界像素）
   let collisionTiles = null;
   const SUB = 48;                            // 碰撞对象的逐瓦片采样分辨率
-  let _mmCv = null, _mmPx = 0;               // 小地图位图缓存（按真实碰撞多边形绘制）
+  const _mmCache = new Map();                 // 小地图位图缓存（px -> canvas，多级尺寸）
 
   function isSolid(tx, ty) {                 // 整格（兼容/小地图）
     if (tx < 0 || ty < 0 || tx >= W || ty >= H) return true;  // 地图外视为墙
@@ -362,7 +375,8 @@ function createGardenMap(data) {
         let template = templates.get(key);
         if (!template) {
           const mask = new Uint8Array(N * N);
-          const transformedShapes = shapes.map((polygon) => polygon.map(([px, py]) => transformTiledPoint(px, py, flags)));
+          const transformedShapes = shapes.map((polygon) =>
+            normalizeWinding(polygon.map(([px, py]) => transformTiledPoint(px, py, flags))));
           for (let sy = 0; sy < N; sy++) {
             for (let sx = 0; sx < N; sx++) {
               const [px, py] = transformTiledPoint((sx + 0.5) / N, (sy + 0.5) / N, flags);
@@ -404,14 +418,16 @@ function createGardenMap(data) {
       solid[ty * W + tx] = occupied ? 1 : 0;
     }
     grid = g; GW = gw; GH = gh; ss = s; collisionTiles = exactTiles;
-    _mmCv = null;                             // 碰撞体重建后小地图缓存失效
+    _mmCache.clear();                         // 碰撞体重建后小地图缓存失效
   }
 
-  // 小地图位图：直接按「真实碰撞多边形」精确栅格化（细斜边/窄边/圆弧都是真实轮廓），
-  // 只构建一次并按尺寸缓存；旧实现用四分之一格采样近似，角块形状与真实碰撞对不上。
+  // 小地图位图：直接按「真实碰撞多边形」精确栅格化（细斜边/窄边/圆弧都是真实轮廓）。
+  // 改为「多级尺寸缓存」：UI 端按"显示尺寸×dpr 取整到 48 的倍数"请求，动画期间只有寥寥几个值，
+  // 每个值只构建一次。早期只缓存单个尺寸，动画期间每帧都换尺寸 -> 每帧重建全图 -> 按 M 严重卡顿。
   function minimapCanvas(px) {
     px = Math.max(32, Math.round(px || 256));
-    if (_mmCv && _mmPx === px) return _mmCv;
+    const hit = _mmCache.get(px);
+    if (hit) return hit;
     const cv = document.createElement('canvas');
     cv.width = cv.height = px;
     const c = cv.getContext('2d');
@@ -433,11 +449,48 @@ function createGardenMap(data) {
         c.closePath();
       }
     }
-    // evenodd：Tiled 多边形绕向不统一，nonzero 规则会因绕向相抵在墙体内部
-    // 留下孔洞（小地图上的白色散点）；evenodd 只看嵌套层数，绕向无关
-    c.fill('evenodd');
-    _mmCv = cv; _mmPx = px;
+    // nonzero + 统一绕向：重叠的碰撞对象取并集。
+    // （早先用 evenodd，重叠区域环绕数为 2 会被判成"空心"——grate/hut 这类多对象瓦片的
+    //   交叉处就这样在墙里挖出白色空腔。现已改为绕向归一化 + nonzero。）
+    c.fill('nonzero');
+    _mmCache.set(px, cv);
+    if (_mmCache.size > 8) _mmCache.delete(_mmCache.keys().next().value);   // 限制缓存规模
     return cv;
+  }
+
+  // 实时矢量绘制碰撞几何（小地图"局部模式"用）：只遍历视图范围内的瓦片，按当前缩放直接画路径，
+  // 任意尺寸/dpr 都锐利，不依赖任何预渲染图片（这正是"小档模糊"的解法）。
+  // rect = { x0, y0, size }：世界坐标下的正方形区域（x0/y0 为左上角，size 为边长）。
+  function drawCollisionRegion(ctx, rect, scale, color) {
+    // 防御：任何一个量为 NaN/Infinity 都会让下面的循环一次都不执行（静默画不出东西 -> 小地图一片白）
+    if (!isFinite(rect.x0) || !isFinite(rect.y0) || !isFinite(rect.size) || !(scale > 0)) return 0;
+    const tx0 = Math.max(0, Math.floor((rect.x0 + half) / tile));
+    const ty0 = Math.max(0, Math.floor((rect.y0 + half) / tile));
+    const tx1 = Math.min(W - 1, Math.floor((rect.x0 + rect.size + half) / tile));
+    const ty1 = Math.min(H - 1, Math.floor((rect.y0 + rect.size + half) / tile));
+    if (tx1 < tx0 || ty1 < ty0) return 0;
+    ctx.beginPath();
+    let n = 0;
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+      const polys = collisionTiles && collisionTiles[ty * W + tx];
+      if (!polys || !polys.length) continue;
+      // 注意坐标空间：tx*tile 是「地图左上角为原点」的空间(0..W*tile)，
+      // 而 rect.x0/rect.y0 是「世界」空间(-half..+half)。必须先 +half 统一，否则会差出
+      // 一整个 half（约 10 倍视野），多边形全部画到屏幕外 -> 小地图一片白。
+      const ox = tx * tile - (rect.x0 + half), oy = ty * tile - (rect.y0 + half);
+      for (const poly of polys) {
+        for (let i = 0; i < poly.length; i++) {
+          const cx = (ox + poly[i][0] * tile) * scale;
+          const cy = (oy + poly[i][1] * tile) * scale;
+          if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+        }
+        ctx.closePath();
+        n++;
+      }
+    }
+    ctx.fillStyle = color || '#11130f';
+    ctx.fill('nonzero');   // 与 minimapCanvas 一致：统一绕向后重叠对象取并集，不会挖出空腔
+    return n;   // 实际画出的碰撞体数量：0 表示视野内没有墙（调用方可回退到位图，保证不会一片白）
   }
 
   function isInside(x, y) { return Math.abs(x) <= half && Math.abs(y) <= half; }
@@ -467,7 +520,7 @@ function createGardenMap(data) {
     R: half, half, tile, width: W, height: H, size: data.size, solid, solidQuad, FW, FH, poly,
     isSolid, solidAtPoint, collide, move: moveCircle, isInside, randomPoint, spawnPointAwayFrom,
     clampTo: (x, y, r) => collide(x, y, r || 22),
-    minimapCanvas,
+    minimapCanvas, drawCollisionRegion,
     buildCollision
     };
     }

@@ -78,7 +78,8 @@ class Game {
       if (k === 'b' || k === 'z' || k === 'tab') { e.preventDefault(); this.toggleBag(); }
       if (k === 'v') { e.preventDefault(); this.toggleDex(); }
       if (k === 'r') { e.preventDefault(); this.swapSlotRows(); }
-      const d = '12345'.indexOf(e.key);
+      if (k === 'm') { e.preventDefault(); if (UI.cycleMinimapMode) UI.cycleMinimapMode(); }
+      const d = '1234567890'.indexOf(e.key);   // 1-9 -> 第1~9槽，0 -> 第10槽
       if (d >= 0) { e.preventDefault(); this.swapSlotColumn(d); }
     });
     window.addEventListener('keyup', (e) => {
@@ -96,13 +97,19 @@ class Game {
     // UI 由 ui.js 动态生成；绑定回调
     UI.onBagToggle = () => this.toggleBag();
     UI.onDexToggle = () => this.toggleDex();
-    UI.onSlotClick = (i) => this.moveSlotToInv(i);          // 点击已装备花瓣 -> 卸下到物品栏
+    UI.onSlotClick = (i) => this.swapSlotColumn(i);         // 点击主槽卡 -> 与副槽同列互换（不再飞回背包）
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
     UI.onSubClick = (i) => this.swapSlotColumn(i);          // 点击副槽卡 -> 与主槽同列互换
     UI.onBagCardClick = (i) => this.moveBagToInv(i);        // 点击背包卡 -> 进物品栏（无空槽则无反应）
-    UI.onGalleryCardClick = (card) => {                    // 点击画廊卡 -> 仅当有空槽时装备（含副槽）；满槽无反应
-      const t = this.firstEmptyAny();
-      return t ? this.addGalleryCard(card.type, card.rarity, { type: t.row, index: t.index }) : false;
+    UI.onGalleryCardClick = (card, target) => {            // 点击画廊卡 -> 装备到空槽（含副槽）；满槽无反应
+      // target 由 UI 的飞行动画预先确定并回传（保证"飞向哪格就装进哪格"）；
+      // 没有回传时才现场检索：主槽优先、从左到右，主槽满则副槽。
+      const t = target || this.firstEmptyAny();
+      if (!t) return false;
+      // 注意字段名：firstEmptyAny() 给的是 {row,index}，而 addGalleryCard/dispatchDrop 认的是
+      // {type,index}。不归一化的话 target.type 为 undefined，会穿过所有分支返回 false ——
+      // 表现就是"卡飞进空槽后消失被吞、槽位却仍然空着，还能继续放、继续吞"。
+      return this.addGalleryCard(card.type, card.rarity, t.type ? t : { type: t.row, index: t.index });
     };
     UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
@@ -121,8 +128,8 @@ class Game {
     p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;
     p.hp = p.maxHp = 100; p.xp = 0; p.level = 1; p.xpNext = 24;
     p.dead = false; p.deathTimer = 0; p.invuln = 0; p.flash = 0;
-    p.slots = [null, null, null, null, null];
-    p.subSlots = [null, null, null, null, null];
+    p.slots = emptySlots();
+    p.subSlots = emptySlots();
     p.invBar = full ? [] : p.invBar;
     p.backpack = full ? [] : p.backpack;
     // 初始花瓣：基础 + 攻击型
@@ -273,9 +280,7 @@ class Game {
   }
 
   _drawMinimap() {
-    const size = 160;
-    const rect = { x: this.W - size - 12, y: 12, size };
-    UI.drawMinimap(this.ctx, rect, this.map, this.player, this.mobs);
+    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, this.mobs);
   }
 
   // ---------- HUD / 背包 ----------
@@ -515,8 +520,10 @@ class Game {
     const from = drag.from;
     if (!from) return false;
     if (!target) {
-      // 拖到空白处：背包卡留在背包（回退）；卡槽卡卸下回背包
+      // 拖到空白处：卡槽卡 / 副槽卡都卸下回背包画廊；背包卡留在背包（回退）
+      // 早先这里漏了 subslot 分支 -> 副槽卡拖到空白处毫无反应，表现为"无法从副槽拖出花瓣"
       if (from.type === 'slot') return this.moveSlotToInv(from.index);
+      if (from.type === 'subslot') return this.moveSubToBag(from.index);
       return false;
     }
     if (from.type === 'gallery') return this.addGalleryCard(drag.card.type, drag.card.rarity, target);
@@ -540,6 +547,7 @@ class Game {
     if (target.type === 'bag') {
       if (from.type === 'inv') return this.moveInvToBag(from.index);
       if (from.type === 'slot') return this.moveSlotToInv(from.index);
+      if (from.type === 'subslot') return this.moveSubToBag(from.index);   // 副槽也能拖回背包
     }
     if (target.type === 'flower') {
       if (from.type === 'inv') return this.equipFirstEmptyFromInv(from.index);

@@ -43,7 +43,7 @@ body {
 
 /* 底部常驻快捷栏：仅一行 = 当前装备的卡（空位为灰色半透明圆角块，无描边；层级高于窗口） */
 #quickbar {
-  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center;
   pointer-events: auto; z-index: 45;
 }
@@ -52,16 +52,25 @@ body {
 #slotRow { zoom: 0.9; }
 /* 副槽行：整体 0.75 倍（临时存储），位于主槽正下方 */
 #subRow { zoom: 0.75; margin-top: 10px; }
-/* 空卡槽：用 ::after 画“空 eternal 卡”灰白外观；装卡后 .card 绝对铺满 54px 完全覆盖，无痕迹 */
+/* [R] 提示：绝对定位，故不参与副槽行的居中计算；
+   位于第二行第一个卡槽的【正左边】，并相对该卡槽上下居中 */
+.subwrap { position: relative; }
+.qkey {
+  position: absolute; top: 50%; right: calc(100% + 10px); transform: translateY(-50%);
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12.5px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 1.83px #000; paint-order: stroke fill;
+  white-space: nowrap; line-height: 1; pointer-events: none;
+}
+/* 空卡槽：用 .qinner::after 画"空 eternal 卡"灰白外观；装卡后 .card 绝对铺满完全覆盖，无痕迹 */
 .qslot { width: 54px; height: 54px; border-radius: 4px; position: relative; }
-.qslot::after {
+.qinner { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.qinner::after {
   content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
   border-radius: 4px; background: #ededed; border: 3.4px solid #c3c3c3; box-sizing: border-box;
 }
 .qslot .card { position: absolute; inset: 0; z-index: 1; }
-.qslot:hover::after { background: #f6f6f6; }
-/* 副槽格子正下方的数字快捷键提示（在 0.75 zoom 容器内，随行同步缩放） */
-.qslot .qnum {
+/* 副槽格子正下方的数字快捷键提示（放在 .qinner 内，随副槽缩放同步缩放） */
+.qinner .qnum {
   position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%);
   font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 15px; font-weight: 800;
   color: #fff; -webkit-text-stroke: 2.2px #000; paint-order: stroke fill;
@@ -157,6 +166,13 @@ body {
 #dragGhost {
   position: fixed; z-index: 200; pointer-events: none; width: 50.54px; height: 50.54px;
   transform: translate(-50%, -50%);
+}
+/* 小地图名：样式与副槽 [1][2] 相同（Ubuntu 800 + 黑描边），始终居中在小地图正下方 */
+#mmName {
+  position: fixed; left: 0; top: 0; transform: translateX(-50%);
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 11.25px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 1.65px #000; paint-order: stroke fill;
+  white-space: nowrap; line-height: 1; pointer-events: none; z-index: 46;
 }
 /* 加载 */
 #loading {

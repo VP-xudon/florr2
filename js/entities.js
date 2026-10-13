@@ -91,8 +91,8 @@ class Player {
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.damage = 0;
-    this.slots = [null, null, null, null, null];   // 花朵花瓣（主槽，已装备）
-    this.subSlots = [null, null, null, null, null]; // 副槽（临时存储，不参与装备）
+    this.slots = emptySlots();      // 花朵花瓣（主槽，已装备）
+    this.subSlots = emptySlots();   // 副槽（临时存储，不参与装备）
     this.invBar = [];                              // 即时物品栏（底部常驻淡灰卡槽）
     this.backpack = [];                            // 背包库存（仅在背包面板可见）
     this.maxInvBar = 8;
@@ -396,9 +396,9 @@ class Mob {
       ctx.font = 'bold ' + Math.max(10, Math.round(h * 2.2)) + 'px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-      ctx.strokeText('Lv' + this.level, this.x, hy + h / 2);
+      ctx.strokeText('Lv' + fmtNum(this.level), this.x, hy + h / 2);
       ctx.fillStyle = '#ffe27a';
-      ctx.fillText('Lv' + this.level, this.x, hy + h / 2);
+      ctx.fillText('Lv' + fmtNum(this.level), this.x, hy + h / 2);
       // 生物中文名（更直观）
       if (this.zh) {
         ctx.font = '11px sans-serif';

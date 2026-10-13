@@ -30,13 +30,18 @@ async function boot() {
   } catch (e) {
     console.error('[boot] 初始化失败：', e);
   } finally {
-    // 立即隐藏加载界面，绝不让资源加载阻塞游戏
-    if (window.GARDEN_DATA) UI.hideLoading();
+    // 注意：不在这里撤 loading —— 必须等全部资源加载完成后再撤（见下方 await）
   }
 
-  // 资源在后台加载（带超时，互不阻塞）；加载完成后无需重绘（drawSprite 会按需取图）
-  Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s)))
-    .catch(() => {});
+  // 资源在后台加载（带超时，互不阻塞）；【全部完成后再撤 loading 蒙版】
+  // 加 12s 兜底超时：万一某张素材挂了也不会让 loading 永远挡着画面。
+  try {
+    await Promise.race([
+      Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s))),
+      new Promise((res) => setTimeout(res, 12000))
+    ]);
+  } catch (e) { /* 单个素材失败不影响其他 */ }
+  if (window.GARDEN_DATA) UI.hideLoading();
 }
 
 // 脚本已置于 body 末尾，DOM 就绪即可启动（不依赖 window.load 等待全部子资源）

@@ -40,6 +40,82 @@ const GHOST_TO_SLOT = 54 / GHOST_SIZE;      // 飞进卡槽时放大回 54px
 // 跟随速率(1/s)：指数逼近系数 = 1-exp(-DRAG_FOLLOW*dt)，越大越紧跟指针（55 ≈ 每帧补上 60% 差距）
 const DRAG_FOLLOW = 55;
 const DRAG_PICK_MS = 200;                   // 拿起时"长出"的放大时长
+const SWAP_DUR = '0.5s';                    // 主/副槽行互换动画时长
+
+// ================= 通用补间动画播放器 =================
+// 所有 UI 动画（卡槽互换、幽灵飞入、飞回背包…）都走这里：
+//   · 多个动画可在不同元素上【同时】播放，互不打断（同一元素上新动画会替换旧的）；
+//   · 单一 rAF 循环驱动全部活跃动画，帧率无关；
+//   · from/to 可以是任意含数值字段的对象，按字段逐个插值；
+//   · apply(el, state) 由调用方给出；默认实现把元素按「中心点 + 视觉尺寸」精确落位
+//     （左上角 = 中心 - 尺寸/2，缩放用 transform-origin:0 0 的 scale，基准尺寸 base），
+//     因此起点/终点都与目标严格同心，不会出现"到位后还斜一点"的残留偏移。
+const Anim = {
+  _acts: [],
+  _raf: 0,
+  ease: {
+    linear: (t) => t,
+    out: (t) => 1 - Math.pow(1 - t, 3),
+    inOut: (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2)
+  },
+  // 精确落位：把元素中心摆到 (s.x, s.y)、视觉尺寸放到 (s.w, s.h)
+  place(el, s, base) {
+    const b = base || el._animBase || el.offsetWidth || 50.54;
+    el.style.transformOrigin = '0 0';
+    el.style.left = (s.x - s.w / 2) + 'px';
+    el.style.top = (s.y - s.h / 2) + 'px';
+    el.style.transform = 'scale(' + (s.w / b).toFixed(4) + ')';
+    if (s.a != null) el.style.opacity = String(s.a);
+  },
+  play(el, o) {
+    if (!el || !o) return null;
+    Anim.stop(el);
+    const a = {
+      el, from: o.from, to: o.to, dur: Math.max(0.001, o.dur || 0.3),
+      ease: o.ease || Anim.ease.inOut, apply: o.apply, onDone: o.onDone,
+      base: o.base, t: 0, aborted: false
+    };
+    el._anim = a;
+    Anim._acts.push(a);
+    Anim._start();
+    return a;
+  },
+  stop(el) {
+    if (!el) return;
+    const i = Anim._acts.findIndex((x) => x.el === el);
+    if (i >= 0) Anim._acts.splice(i, 1);
+    if (el._anim) { el._anim.aborted = true; el._anim = null; }
+  },
+  _start() {
+    if (Anim._raf) return;
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      for (let i = Anim._acts.length - 1; i >= 0; i--) {
+        const a = Anim._acts[i];
+        a.t += dt;
+        const k = Math.min(1, a.t / a.dur);
+        const e = a.ease(k);
+        const st = {};
+        for (const key in a.to) {
+          const f = (a.from && a.from[key] != null) ? a.from[key] : a.to[key];
+          st[key] = f + (a.to[key] - f) * e;
+        }
+        if (a.apply) a.apply(a.el, st);
+        else Anim.place(a.el, st, a.base);
+        if (k >= 1) {
+          Anim._acts.splice(i, 1);
+          a.el._anim = null;
+          if (a.onDone && !a.aborted) a.onDone(a.el);
+        }
+      }
+      Anim._raf = Anim._acts.length ? requestAnimationFrame(step) : 0;
+    };
+    Anim._raf = requestAnimationFrame(step);
+  }
+};
+
 
 const UI = {
   root: null,
@@ -54,6 +130,7 @@ const UI = {
   _invBuilt: false,   // 画廊内容静态：只构建一次（现已改为每次重建以反映数量）
   _dexBuilt: false,
   _gc: null,          // 画廊卡数量（key = type.key|rarity）
+  _rowsVer: 0,        // 卡槽行版本号：renderInvBar 重建 / 窗口尺寸变化时 +1（失效矩形缓存）
   _tip: null,         // 当前悬浮框数据（canvas 绘制）
   _tipOn: false,
   _tipAlpha: 0,
@@ -82,7 +159,11 @@ const UI = {
       <!-- 底部常驻快捷栏：上行 = 当前装备的卡（主槽），下行 = 副槽（临时存储，按 R 整排互换） -->
       <div id="quickbar">
         <div id="slotRow" class="quickrow"></div>
-        <div id="subRow" class="quickrow"></div>
+        <!-- [R] 提示用绝对定位挂在 .subwrap 上，不参与副槽行的居中计算 -->
+        <div class="subwrap">
+          <div id="subRow" class="quickrow"></div>
+          <div class="qkey">[R]</div>
+        </div>
       </div>
 
       <!-- 背包窗口：所有花瓣 × 全部稀有度 -->
@@ -126,6 +207,7 @@ const UI = {
       loading: $('loading')
     };
     this._initOverlay();   // 悬浮框 / 卡牌覆盖层：纯 canvas
+    this._mmInit();        // 小地图三档模式 + 地图名标签
 
     this.refs.bagBtn.addEventListener('click', () => { if (this.onBagToggle) this.onBagToggle(); });
     this.refs.dexBtn.addEventListener('click', () => { if (this.onDexToggle) this.onDexToggle(); });
@@ -163,35 +245,72 @@ const UI = {
 
   // ---------------- 底部常驻快捷栏：上行主槽（装备）+ 下行副槽（临时存储） ----------------
   // 行尺寸用 CSS zoom 整体缩放（0.9 / 0.75），描边、圆角、字体等所有子元素同步缩放。
-  // 卡槽格子完全静态，不参与任何动画/变换，只作为对齐辅助；
-  // 渲染就是"直接更新两行状态"，不做任何来历推断；唯一的动画是
-  // R/数字键互换时的显式垂直交换动画（animateRowSwap，只动被交换的列）。
+  // 卡槽格子完全静态，不参与任何动画/变换，只作为对齐辅助。
+  //
+  // 【重要】采用「增量更新」而不是 innerHTML 清空重建：
+  //   .qslot 元素本身永远复用，只有卡牌内容变化时才替换内部的 .card。
+  //   旧实现每次 renderInvBar 都 main.innerHTML=''，会把正在播放入换动画的 .card 一起销毁，
+  //   于是连续切换多个栏位时，只有最后一次动画能播完（前面的元素已经没了）。
   renderInvBar(p) {
-    const main = this.refs.slotRow, sub = this.refs.subRow;
-    main.innerHTML = ''; sub.innerHTML = '';
-    const makeCell = (pet, drop, i, isSub) => {
-      const box = document.createElement('div');
-      box.className = 'qslot';
-      box.dataset.drop = drop; box.dataset.idx = i;
-      if (pet) {
-        const cardEl = CardRenderer.createCard({ rarity: pet.rarity, svg: pet.type.svg });
-        box.appendChild(cardEl);
-        this._bindCard(cardEl, pet, { type: drop, index: i },
-          () => { if (isSub) { if (this.onSubClick) this.onSubClick(i); }
-                  else if (this.onSlotClick) this.onSlotClick(i); });
-        this._bindTip(cardEl, pet.type, pet.rarity);
-      }
-      if (isSub) {
-        // 副槽格子正下方的数字快捷键提示（随行缩放同步缩放）
-        const num = document.createElement('div');
-        num.className = 'qnum';
-        num.textContent = '[' + (i + 1) + ']';
-        box.appendChild(num);
-      }
-      return box;
-    };
-    for (let i = 0; i < p.slots.length; i++) main.appendChild(makeCell(p.slots[i], 'slot', i, false));
-    for (let i = 0; i < p.subSlots.length; i++) sub.appendChild(makeCell(p.subSlots[i], 'subslot', i, true));
+    this._rowsVer++;                       // 行结构可能变化：失效卡槽矩形缓存
+    this._renderRow(this.refs.slotRow, p.slots, 'slot', false);
+    this._renderRow(this.refs.subRow, p.subSlots, 'subslot', true);
+  },
+  // 增量渲染一行：格子数量不够就补、多出来就删；内容没变的格子原样保留（动画不被打断）。
+  _renderRow(rowEl, cards, drop, isSub) {
+    while (rowEl.children.length < cards.length) {
+      rowEl.appendChild(this._makeCell(drop, rowEl.children.length, isSub));
+    }
+    while (rowEl.children.length > cards.length) rowEl.lastElementChild.remove();
+    for (let i = 0; i < cards.length; i++) {
+      this._updateCell(rowEl.children[i], cards[i], drop, i, isSub);
+    }
+  },
+  _makeCell(drop, i, isSub) {
+    const box = document.createElement('div');
+    box.className = 'qslot';
+    box.dataset.drop = drop; box.dataset.idx = i;
+    const inner = document.createElement('div');
+    inner.className = 'qinner';
+    if (isSub) {
+      // 副槽格子正下方的数字快捷键提示（放在 .qinner 内，随副槽缩放同步缩放）
+      const num = document.createElement('div');
+      num.className = 'qnum';
+      num.textContent = '[' + ((i + 1) % 10) + ']';   // 第 10 个显示 [0] 而非 [10]
+      inner.appendChild(num);
+    }
+    box.appendChild(inner);
+    box._cardKey = '\u0000none';           // 强制首次一定建卡面
+    return box;
+  },
+  // 只在该格卡牌确实变化时才换 .card；否则整个格子（含进行中的动画）原封不动
+  _updateCell(box, card, drop, i, isSub) {
+    const inner = box.firstElementChild;
+    if (!inner) return;
+    const num = inner.querySelector('.qnum');
+    if (num) num.textContent = '[' + ((i + 1) % 10) + ']';
+    const key = card ? (card.type.key + '|' + card.rarity) : '';
+    if (box._cardKey === key) {
+      // key 没变 -> 保留现有 DOM（关键：进行中的动画不被打断）。
+      // 但必须把可见性复位：拖拽/点击时 _beginPointer 会把源卡临时设成 visibility:hidden，
+      // 若在这里直接返回，那张卡就再也显示不出来了 —— 表现为
+      //   ① 把卡拖出再放回原槽，该槽变空槽；
+      //   ② 主/副槽互换「同属性」花瓣时吞掉一张（两边 key 相同，双双被跳过）。
+      const keep = inner.querySelector('.card');
+      if (keep) keep.style.visibility = '';
+      return;
+    }
+    box._cardKey = key;
+    const old = inner.querySelector('.card');
+    if (old) old.remove();                 // 旧卡面连同其事件监听一起移除
+    if (!card) return;
+    const cardEl = CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg });
+    cardEl.style.visibility = '';
+    inner.appendChild(cardEl);
+    this._bindCard(cardEl, card, { type: drop, index: i },
+      () => { if (isSub) { if (this.onSubClick) this.onSubClick(i); }
+              else if (this.onSlotClick) this.onSlotClick(i); });
+    this._bindTip(cardEl, card.type, card.rarity);
   },
   // 显式垂直交换动画：cols=null 整排互换；否则只动指定列。
   // 不记录卡的初始行数——交换后主槽卡一定来自同列副槽、反之亦然，矩形由固定卡槽直接给出。
@@ -205,23 +324,35 @@ const UI = {
     for (const i of list) {
       const mb = main.children[i], sb = sub.children[i];
       if (!mb || !sb) continue;
-      const mr = mb.getBoundingClientRect(), sr = sb.getBoundingClientRect();
+      // 用 .qinner 的视觉矩形（副槽被 scale 缩小，布局矩形与视觉矩形不一致）
+      const mr = (mb.querySelector('.qinner') || mb).getBoundingClientRect();
+      const sr = (sb.querySelector('.qinner') || sb).getBoundingClientRect();
       const mc = mb.querySelector('.card'), sc = sb.querySelector('.card');
-      if (mc) this._flipVertical(mc, sr, mr, zs);   // 主槽卡来自副槽：从副槽矩形出发落回
-      if (sc) this._flipVertical(sc, mr, sr, zm);   // 副槽卡来自主槽
+      // zoom 传"卡片所在行"（即目标行）的缩放：旧实现传反了，位移量会多出约 20%
+      if (mc) this._flipVertical(mc, sr, mr, zm);   // 主槽卡：从副槽视觉矩形出发落回主槽
+      if (sc) this._flipVertical(sc, mr, sr, zs);   // 副槽卡：从主槽视觉矩形出发落回副槽
     }
   },
-  // 卡面从 fromRect 垂直平移+缩放出发，过渡到其原位（toRect）：只含 y 与缩放，无左右分量
+  // 卡面从 fromRect 平滑回到其原位（toRect）：按两行「实测矩形」算出斜向位移 + 等比缩放。
+  // 上下两行 zoom 不同（0.9 / 0.75）-> 卡槽并不对齐，必须同时补 X 与 Y；只动 Y 会让横向差
+  // 直接跳过去（旧实现抖动/跳动的来源）。终点严格回到 transform:''（即本槽原位），
+  // 因此到位后绝不会有残留偏移。多列可同时播放（各自元素独立）。
   _flipVertical(cardEl, fromRect, toRect, zoom) {
-    const dy = (fromRect.top + fromRect.height / 2) - (toRect.top + toRect.height / 2);
+    const dx = ((fromRect.left + fromRect.width / 2) - (toRect.left + toRect.width / 2)) / zoom;
+    const dy = ((fromRect.top + fromRect.height / 2) - (toRect.top + toRect.height / 2)) / zoom;
     const s = (toRect.width > 0) ? fromRect.width / toRect.width : 1;
-    if (Math.abs(dy) < 1 && Math.abs(s - 1) < 0.01) return;
-    cardEl.style.transition = 'none';
-    cardEl.style.transform = `translate(0px, ${(dy / zoom).toFixed(2)}px) scale(${s.toFixed(3)})`;
-    requestAnimationFrame(() => {
-      cardEl.style.transition = 'transform .3s cubic-bezier(.25,.9,.35,1.04)';
-      cardEl.style.transform = '';
-      cardEl.addEventListener('transitionend', () => { cardEl.style.transition = ''; }, { once: true });
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(s - 1) < 0.01) return;
+    Anim.play(cardEl, {
+      from: { dx, dy, s },
+      to: { dx: 0, dy: 0, s: 1 },
+      dur: 0.5,                       // 0.5s
+      ease: Anim.ease.out,            // 起步快、收尾缓：同样 0.5s 但观感更利落，不拖沓
+      apply: (el, st) => {
+        el.style.transition = 'none';
+        el.style.transform =
+          `translate(${st.dx.toFixed(2)}px, ${st.dy.toFixed(2)}px) scale(${st.s.toFixed(4)})`;
+      },
+      onDone: (el) => { el.style.transform = ''; }
     });
   },
 
@@ -341,7 +472,7 @@ const UI = {
       body.appendChild(this._rarGroup(title, '#0d3a52', petals, 'common'));
       total += petals.length;
     }
-    this.refs.dexCount.textContent = I18N.tf('ui.dexCount', { n: total, m: total }, 'Petals: {n}');
+    this.refs.dexCount.textContent = I18N.tf('ui.dexCount', { n: fmtNum(total), m: fmtNum(total) }, 'Petals: {n}');
     this._dexBuilt = true;
   },
 
@@ -418,7 +549,7 @@ const UI = {
         const F = CardRenderer.FONT;
         const measure = (size, str) => { ctx.font = `${W_ALL} ${size}px ${F}`; return ctx.measureText(str).width; };
         const desc = String(t.desc || '');
-        const reload = t.spd > 0 ? (t.spd + 's') : '';
+        const reload = t.spd > 0 ? (fmtNum(t.spd) + 's') : '';
         const titleW = measure(FS_TITLE, t.name);
         const rarW = measure(FS_RAR, t.rarityName);
         const reloadW = reload ? measure(FS_RELOAD, reload) : 0;
@@ -553,7 +684,7 @@ const UI = {
             if (t.spd > 0) {
               const cy = y + L.reloadY * S;
               const icon = L.ICON * S, gap = 6 * S;
-              text(t.spd + 's', rx - icon - gap, cy, L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
+              text(fmtNum(t.spd) + 's', rx - icon - gap, cy, L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
               // 图标：270° 圆环 + 端点箭头（静态，不旋转）
               const icx = rx - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34, rad = icon * 0.42;
               ctx.save();
@@ -593,8 +724,8 @@ const UI = {
           text(label, bx, y + refY * S, L.FS_STAT, L.W_ALL, color);
           text(String(val), bx + lw + 6 * S, y + refY * S, L.FS_STAT, L.W_ALL, '#ffffff');
         };
-        statLine('Health:', '#7fe08a', t.hp, L.healthY);
-        statLine('Damage:', '#ff6b6b', t.dmg, L.dmgY);
+        statLine('Health:', '#7fe08a', fmtNum(t.hp), L.healthY);
+        statLine('Damage:', '#ff6b6b', fmtNum(t.dmg), L.dmgY);
         ctx.restore();
       },
 
@@ -621,6 +752,7 @@ const UI = {
       resize();
       window.addEventListener('resize', () => {
         resize();
+        this._rowsVer++;                 // 尺寸变化：失效卡槽矩形缓存
               CardRenderer.repaintAll();
             });
             // Ubuntu 网络字体就绪后重绘一次（canvas 文字会立刻改用 Ubuntu；离线时自动回退系统字体）
@@ -632,6 +764,11 @@ const UI = {
               ]).catch(() => {}).then(() => CardRenderer.repaintAll());
             }
       const loop = () => {
+        // 小地图动画推进（三档切换 = 0.6s 平滑过渡）
+        const now = performance.now();
+        const dt = this._mmLast ? Math.min(0.05, (now - this._mmLast) / 1000) : 0.016;
+        this._mmLast = now;
+        this._mmTick(dt);
         const target = this._tipOn && this._tip ? 1 : 0;
         const cur = this._tipAlpha;
         if (cur !== target) {
@@ -676,22 +813,40 @@ const UI = {
   },
 
   _beginPointer(card, from, ev, onClick, srcEl) {
-    // 库存校验必须在最前面：卡已取完时连幽灵都不生成，避免"按了却凭空多出一张"
+    // 库存校验必须在最前面：卡已取完时连点击都不生效，避免"按了却凭空多出一张"
     if (from.type === 'gallery' && !this._canTakeFromGallery(card)) return;
     const startX = ev.clientX, startY = ev.clientY;
     const startTime = ev.timeStamp || performance.now();
     let windowsClosed = false;   // 延迟关闭窗口标志
-    // 按下即视为"拿起"：立即生成幽灵（放大 + 摇晃），源卡即时隐藏
-    this._hideTip();
-    this._createGhost(card, ev, srcEl);
-    // 暂不关闭窗口，等判定为拖拽时再关闭
-    if (from.type === 'gallery') { this._decGallery(card); this.renderInventory(); }
-    else {
+    let dragging = false;        // 是否已进入拖拽态（已生成幽灵）
+    let over = false;            // 本次交互是否已结束
+
+    // 进入拖拽态才生成幽灵：卡片会被放大到 1.3 倍、开始跟随指针，源卡即时隐藏。
+    // （点击路径绝不调用它 —— 0.1s 内松手时卡片不放大、不变形、不产生幽灵。）
+    const startDrag = (e) => {
+      if (dragging || over) return;
+      dragging = true;
+      this._hideTip();
+      this._createGhost(card, e, srcEl);
+      // 暂不关闭窗口，等按住时长够再关
+      if (from.type === 'gallery') { this._decGallery(card); this.renderInventory(); }
       // 卡槽/物品栏卡：拿起瞬间隐藏源卡，由幽灵从原卡中心无缝接替（不再有残影）
-      // 取消/放回时 _restoreAfterCancel 会重渲染恢复显示
-      if (srcEl.isConnected) srcEl.style.visibility = 'hidden';
-    }
+      else if (srcEl && srcEl.isConnected) srcEl.style.visibility = 'hidden';
+      // 记住来源：自动对齐【只有背包拖出的卡】才有，卡槽内拖出的统一不吸附
+      this._dragFrom = from.type;
+    };
+
+    // 0.1s 后仍未松手 -> 升级为拖拽（此时才放大、才产生幽灵）
+    const clickTimer = setTimeout(() => startDrag(ev), 100);
+
     const move = (e) => {
+      if (over) return;
+      if (!dragging) {
+        // 还没到 0.1s，但已经明显移动 -> 也立即升级为拖拽
+        if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) <= 6) return;
+        clearTimeout(clickTimer);
+        startDrag(e);
+      }
       const held = (e.timeStamp || performance.now()) - startTime;
       if (held >= 200 && !windowsClosed) {
         // 按住≥0.2s -> 识别为拖拽，立即关闭窗口
@@ -703,10 +858,14 @@ const UI = {
     const up = (e) => {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
-      const held = (e.timeStamp || performance.now()) - startTime;
-      if (held < 200) {   // 按住<0.2s -> 点击，不关闭窗口
+      if (over) return;
+      over = true;
+      clearTimeout(clickTimer);
+      if (!dragging) {
+        // —— 点击（按住 < 0.1s）：无幽灵、无放大、无形态变化 ——
+        // 但仍要播「飞入空槽」动画并正常扣数量（这两件事此前被一起弄丢了）。
         this._snap = null; this._snapPos = null; this._snapScale = null;
-        this._clickFly(card, from, () => { if (onClick) onClick(); });
+        this._clickFly(card, from, srcEl, (t) => { if (onClick) onClick(card, t); });
         return;
       }
       // 按住≥0.2s -> 拖拽，窗口已关闭；吸附中的槽位优先作为落点（幽灵已对齐，松手即装）
@@ -715,18 +874,25 @@ const UI = {
         : this._dropTargetAt(e.clientX, e.clientY);
       const handled = this.onDrop ? !!this.onDrop({ card, from }, target) : false;
       const ghost = this._drag;
+      // 已像素级焊死在卡槽上 -> 无需再飞，直接移除幽灵（renderInvBar 已重建，卡面即刻显示）
+      if (handled && target && ghost && ghost._boxLocked) { this._removeGhost(ghost); return; }
       let tx, ty, dur, endScale;
-      if (handled) {
-        // 装入卡槽 -> 飞向该槽（全程清晰不渐隐：到达后卡槽会显示卡面）；卸下回背包（target 为 null）-> 飞向背包按钮
-        let r = (target && target.el && target.el.isConnected) ? target.el.getBoundingClientRect() : null;
-        if (!r && target && target.type === 'slot' && this.refs.slotRow.children[target.index]) {
+      // 注意判据是 handled && target：拖到空白处松手时，dispatchDrop 对卡槽卡会返回 true
+      // （那是"卸下回背包"，并非装入卡槽）。若只判 handled，幽灵会以原尺寸飞向背包按钮、
+      // 既不缩小也不渐隐 —— 必须走下面的缩小渐隐分支。
+      if (handled && target) {
+        // 装入卡槽 -> 飞向该槽（全程清晰不渐隐：到达后卡槽才显示卡面）
+        let r = (target.el && target.el.isConnected) ? target.el.getBoundingClientRect() : null;
+        if (!r && target.type === 'slot' && this.refs.slotRow.children[target.index]) {
           r = this.refs.slotRow.children[target.index].getBoundingClientRect();
         }
         if (r) { tx = r.left + r.width / 2; ty = r.top + r.height / 2; }
         else { const bag = this.refs.bagBtn.getBoundingClientRect(); tx = bag.left + bag.width / 2; ty = bag.top + bag.height / 2; }
-        dur = 0.22; endScale = this._snap ? this._snap.scale : GHOST_TO_SLOT;
+        dur = 0.22;
+        // 缩放一律按目标卡槽的"视觉宽度"换算（卡槽带 zoom，视觉宽度并不是 54px）
+        endScale = r ? (r.width / GHOST_SIZE) : GHOST_TO_SLOT;
       } else {
-        // 未装入任何卡槽 -> 取消：gallery 恢复数量；统一飞回背包按钮
+        // 取消 / 卸下回背包：缩到最小 + 渐隐，飞向背包按钮
         if (from.type === 'gallery') this._incGallery(card);
         this._restoreAfterCancel(from);
         const bag = this.refs.bagBtn.getBoundingClientRect();
@@ -758,79 +924,106 @@ const UI = {
     else { this.refs.inv.classList.add('hidden'); this.refs.dex.classList.add('hidden'); }
   },
 
-  // 放下后的平滑动画：位置 / 缩放 / 透明度全部过渡（装卡槽快速变小；回退背包 0.5s 飞速缩小）
+  // 放下后的平滑动画：位置 / 尺寸 / 透明度一起补间（装卡槽快速变小；回退背包缩小渐隐）
+  // 走通用播放器：落点用「中心点 + 视觉尺寸」精确计算，到位即严格同心，不会残留斜角。
   _flyGhostTo(ghost, toX, toY, opts, done) {
     if (!ghost) { if (done) done(); return; }
     const o = opts || {};
     const dur = (o.dur != null) ? o.dur : 0.22;
     const endScale = (o.endScale != null) ? o.endScale : GHOST_TO_SLOT;
-    // 交还给 CSS 过渡前先停掉 JS 跟踪循环，并把幽灵落到当前显示位置（避免动画起点跳一下）
+    // 交还给动画前先停掉 JS 跟踪循环与可能正在跑的吸附过渡
     this._stopDragLoop();
     this._dragTarget = null;
-    const shown = this._dragShown || this._dragCur;
-    ghost.style.left = (shown ? shown.x : parseFloat(ghost.style.left)) + 'px';
-    ghost.style.top = (shown ? shown.y : parseFloat(ghost.style.top)) + 'px';
-    ghost.style.transition = `left ${dur}s ease, top ${dur}s ease, transform ${dur}s ease, opacity ${dur}s ease`;
-    requestAnimationFrame(() => {
-      ghost.style.left = toX + 'px';
-      ghost.style.top = toY + 'px';
-      ghost.style.transform = `translate(-50%,-50%) scale(${endScale})`;
-      // fade:false = 全程清晰（装入卡槽，到达后卡槽显示卡面）；否则末段渐隐
-      ghost.style.opacity = (o.fade === false) ? '1' : '0';
+    Anim.stop(ghost);
+    ghost._snapAnim = false;
+    // 起点必须是幽灵「当前的真实视觉矩形」：拿起时被放大到 1.3 倍、吸附时缩到卡槽尺寸，
+    // 只有照此起步，缩小 / 放大 / 渐隐这些细节才是平滑过渡过去的。
+    // （早先硬编码 GHOST_SIZE 会瞬间跳一级，动画细节就全丢了。）
+    const cur = ghost.getBoundingClientRect();
+    const fromW = cur.width > 0 ? cur.width : GHOST_SIZE;
+    const fromX = cur.left + cur.width / 2, fromY = cur.top + cur.height / 2;
+    // 还原被"焊死"的盒子（否则宽度基准还是卡槽那套，缩放会算错）
+    if (ghost._boxLocked) this._unlockGhostBox(ghost);
+    ghost.style.width = GHOST_SIZE + 'px';
+    ghost.style.height = GHOST_SIZE + 'px';
+    ghost._boxW = GHOST_SIZE;
+    ghost.style.transition = 'none';
+    const fade = (o.fade !== false);
+    Anim.play(ghost, {
+      base: GHOST_SIZE,
+      from: { x: fromX, y: fromY, w: fromW, h: fromW, a: 1 },
+      to: { x: toX, y: toY, w: GHOST_SIZE * endScale, h: GHOST_SIZE * endScale, a: fade ? 0 : 1 },
+      dur, ease: Anim.ease.out,
+      onDone: (el) => { if (done) done(el); }
     });
-    setTimeout(() => { if (done) done(ghost); }, dur * 1000 + 30);
   },
 
-  // 点击（按住<0.2s）行为：
-  //   背包画廊卡 / 物品栏卡 -> 飞入第一个空卡槽并装备；卡槽已满则「不替换」，不播放飞入动画，直接回退
-  //   卡槽卡 -> 卸下回背包
-  _clickFly(card, from, done) {
+  // 点击（按住 < 0.1s）行为：不产生幽灵、不放大、不变形。
+  //   背包画廊卡 -> 扣数量 + 播飞入动画 + 装入第一个空卡槽（主槽优先从左到右，满则副槽）；全满则原路飞回
+  //   主槽 / 副槽卡 -> 同列互换，动画由 swapSlotColumn -> animateRowSwap 唯一播放一次
+  _clickFly(card, from, srcEl, done) {
     const g = window.__game;
+    if (from.type !== 'gallery' && from.type !== 'inv') {
+      if (done) done();          // 卡槽卡：交给同列互换动画
+      return;
+    }
+    // 【必须最先做】先把源卡的矩形量下来。
+    // 下面 renderInventory() 会重建整个画廊，srcEl 随即被摘掉；此时再取
+    // getBoundingClientRect() 只会得到全 0（left/top/width/height 都是 0），
+    // 于是飞行动画的起点变成 (0,0) —— 也就是屏幕左上角。这正是"没有从对应位置飞出"的根因。
+    const sr = (srcEl && srcEl.getBoundingClientRect) ? srcEl.getBoundingClientRect() : null;
+    const hasSrc = !!(sr && sr.width > 0 && sr.height > 0);
+    // 数量在「点击」时就要扣掉（与拖拽路径一致），否则点击不计数
+    if (from.type === 'gallery') { this._decGallery(card); this.renderInventory(); }
+    const t = g ? g.firstEmptyAny() : null;    // 空槽计算含副槽：主槽优先、从左到右
     const bagPos = () => {
       const b = this.refs.bagBtn.getBoundingClientRect();
       return [b.left + b.width / 2, b.top + b.height / 2];
     };
-    if (from.type === 'gallery' || from.type === 'inv') {
-      const t = g ? g.firstEmptyAny() : null;    // 空槽计算含副槽
-      if (!t) {
-        // 全部卡槽已满：不替换 -> 不播放飞入动画，恢复来源显示并回退背包
-        if (from.type === 'gallery') { this._incGallery(card); this.renderInventory(); }
-        else this._restoreAfterCancel(from);
-        const [bx, by] = bagPos();
-        this._flyGhostTo(this._drag, bx, by, { dur: 0.5, endScale: 0.05, fade: true }, (gh) => this._removeGhost(gh));
-        return;                       // 不触发 onClick（不装备）
-      }
-      const rowEl = (t.row === 'slot') ? this.refs.slotRow : this.refs.subRow;
-      const slot = rowEl.children[t.index] || rowEl.children[0];
-      const rect = slot ? slot.getBoundingClientRect()
-        : { left: innerWidth / 2 - 26, top: innerHeight - 60, width: 52, height: 52 };
-      // 数量已在按下时扣过：点击=装备，直接装上即可（不再 +1/-1 反复）
-      // 装入卡槽（主/副）：全程清晰不渐隐，缩放到目标槽实际尺寸（到达后卡面显示，无缝衔接）
-      this._flyGhostTo(this._drag, rect.left + rect.width / 2, rect.top + rect.height / 2,
-        { dur: 0.22, endScale: rect.width / GHOST_SIZE, fade: false }, (gh) => {
-          this._removeGhost(gh);
-          if (done) done();
-        });
+    if (!t) {
+      // 全部卡槽已满：恢复数量，原路飞回背包按钮（缩小 + 渐隐），不装备
+      if (from.type === 'gallery') { this._incGallery(card); this.renderInventory(); }
+      const [bx, by] = bagPos();
+      this._flyElFrom(sr, card, bx, by, 54 * 0.05, { dur: 0.5, fade: true });
       return;
     }
-    // 副槽点击：与主槽同列互换（飞向主槽同列位置，全程清晰）
-    if (from.type === 'subslot') {
-      const slot = this.refs.slotRow.children[from.index];
-      const rect = slot ? slot.getBoundingClientRect()
-        : { left: innerWidth / 2 - 26, top: innerHeight - 60, width: 52, height: 52 };
-      this._flyGhostTo(this._drag, rect.left + rect.width / 2, rect.top + rect.height / 2,
-        { dur: 0.22, endScale: GHOST_TO_SLOT, fade: false }, (gh) => {
-          this._removeGhost(gh);
-          if (done) done();
-        });
-      return;
-    }
-    // 卡槽点击：卸下回背包
-    const [bx, by] = bagPos();
-    this._flyGhostTo(this._drag, bx, by, { dur: 0.22, endScale: GHOST_TO_SLOT, fade: true }, (gh) => {
-      this._removeGhost(gh);
-      const ok = done ? done() : true;
-      if (ok === false) this._restoreAfterCancel(from);   // 卸下失败 -> 恢复卡面显示
+    const rowEl = (t.row === 'slot') ? this.refs.slotRow : this.refs.subRow;
+    const slot = rowEl.children[t.index] || rowEl.children[0];
+    const rect = slot ? slot.getBoundingClientRect()
+      : { left: innerWidth / 2 - 26, top: innerHeight - 60, width: 52, height: 52 };
+    // 关键：把「已确定的目标」随回调一起传下去，避免 done() 里重新检索空槽，
+    // 导致"动画飞向 A 槽、卡却装进 B 槽"（槽位数不为 5 时更容易暴露）。
+    this._flyElFrom(sr, card, rect.left + rect.width / 2, rect.top + rect.height / 2,
+      rect.width, { dur: 0.22, fade: false }, () => { if (done) done(t); });
+  },
+
+  // 生成一张「纯飞行」的卡（不参与拖拽、不放大、不摇晃），从 srcRect 飞往目标点。
+  // srcRect 必须是【调用方预先量好的】矩形（不能传元素：画廊重建后元素已脱离文档，量出来全是 0）。
+  // 起点尺寸取源卡真实视觉尺寸 -> 点击路径下卡片完全不变形；目标尺寸由调用方给出（槽宽 / 5%）。
+  _flyElFrom(srcRect, card, toX, toY, toW, opts, done) {
+    const fly = this._ghostEl(card);
+    fly.style.transition = 'none';
+    document.body.appendChild(fly);
+    const base = fly.offsetWidth || 54;
+    const has = !!(srcRect && srcRect.width > 0 && srcRect.height > 0);
+    const o = opts || {};
+    const dur = (o.dur != null) ? o.dur : 0.22;
+    const fade = (o.fade !== false);
+    const fromW = has ? srcRect.width : base;
+    const fx = has ? srcRect.left + srcRect.width / 2 : toX;
+    const fy = has ? srcRect.top + srcRect.height / 2 : toY;
+    // 先按起点摆好（否则第一帧前元素会停在"静态位置"，看起来像从页面左上角闪一下）
+    fly.style.transformOrigin = '0 0';
+    fly.style.left = (fx - fromW / 2) + 'px';
+    fly.style.top = (fy - fromW / 2) + 'px';
+    fly.style.transform = 'scale(' + (fromW / base).toFixed(4) + ')';
+    if (!fade) fly.style.opacity = '1';
+    Anim.play(fly, {
+      base,
+      from: { x: fx, y: fy, w: fromW, h: fromW, a: 1 },
+      to: { x: toX, y: toY, w: toW, h: toW, a: fade ? 0 : 1 },
+      dur, ease: Anim.ease.out,
+      onDone: (el) => { el.remove(); if (done) done(); }
     });
   },
 
@@ -843,19 +1036,16 @@ const UI = {
     const slot = srcRow.children[slotIndex];
     const r = slot ? slot.getBoundingClientRect() : { left: tx, top: ty, width: 54, height: 54 };
     const g = this._ghostEl(card);
-    g.style.left = (r.left + r.width / 2) + 'px';
-    g.style.top = (r.top + r.height / 2) + 'px';
     g.style.transition = 'none';
     document.body.appendChild(g);
-    const dur = 0.5;
-    requestAnimationFrame(() => {
-      g.style.transition = `left ${dur}s ease, top ${dur}s ease, transform ${dur}s ease, opacity ${dur}s ease`;
-      g.style.left = tx + 'px';
-      g.style.top = ty + 'px';
-      g.style.transform = 'translate(-50%,-50%) scale(0.05)';
-      g.style.opacity = '0';
+    const base = g.offsetWidth || 54;
+    Anim.play(g, {
+      base,
+      from: { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height, a: 1 },
+      to: { x: tx, y: ty, w: base * 0.05, h: base * 0.05, a: 0 },
+      dur: 0.5, ease: Anim.ease.inOut,
+      onDone: (el) => el.remove()
     });
-    setTimeout(() => g.remove(), dur * 1000 + 30);
   },
 
   _flyCard(fromEl, toX, toY, card, cb) {
@@ -924,57 +1114,148 @@ const UI = {
       if (Math.abs(this._dragTarget.y - cur.y) < 0.3) cur.y = this._dragTarget.y;
       // 拿起时 0.2s 内由 1 倍放大到 1.3 倍（与位置跟踪互不干扰）
       const k = 1 + 0.3 * Math.min(1, (ts - this._dragStart) / DRAG_PICK_MS);
-      // 卡槽吸附：幽灵 45% 以上面积覆盖某个卡槽 -> 停止晃动、平滑平移+缩放对齐该槽
-      const snap = this._snapTargetAt(cur.x, cur.y, k);
+      // 自动对齐【仅背包拖出的卡】才有；卡槽内拖出的卡统一不吸附（落点仍按 ≥50% 覆盖判定）
+      // 判定尺寸用幽灵"当前实际缩放"（未吸附=拿起后的 1.3，吸附中=当前缩放），与视觉严格一致
+      const scTest = this._snap ? this._snapScale : k;
+      const snap = (this._dragFrom === 'gallery') ? this._snapTargetAt(cur.x, cur.y, scTest) : null;
       let sx = cur.x, sy = cur.y, sc = k;
       if (snap) {
         if (!this._snap) g.classList.remove('dragging');      // 吸附即停晃动（装好的感觉）
-        if (!this._snap || this._snap.el !== snap.el) this._snap = snap;
-        if (this._snapPos == null) this._snapPos = { x: cur.x, y: cur.y };
-        if (this._snapScale == null) this._snapScale = k;
-        const sa = 1 - Math.exp(-16 * dt);
-        this._snapPos.x += (snap.cx - this._snapPos.x) * sa;
-        this._snapPos.y += (snap.cy - this._snapPos.y) * sa;
-        this._snapScale += (snap.scale - this._snapScale) * sa;
-        // 收敛后硬对齐：消除指数逼近的亚像素残留（1-2px 误差）
-        if (Math.abs(snap.cx - this._snapPos.x) < 0.5) this._snapPos.x = snap.cx;
-        if (Math.abs(snap.cy - this._snapPos.y) < 0.5) this._snapPos.y = snap.cy;
-        if (Math.abs(snap.scale - this._snapScale) < 0.004) this._snapScale = snap.scale;
-        sx = this._snapPos.x; sy = this._snapPos.y; sc = this._snapScale;
+        // 目标变化（含第一次吸附）-> 用播放器从「当前视觉矩形」平滑过渡到新卡槽矩形。
+        // 切换对齐格子也因此有平滑的平移 + 缩放，不再是瞬移/直接跳过去。
+        if (!this._snap || this._snap.el !== snap.el) {
+          this._snap = snap;
+          this._snapTo(g, snap.el);
+        }
       } else if (this._snap) {
         g.classList.add('dragging');                          // 离开卡槽：恢复跟随晃动
         this._snap = null; this._snapPos = null; this._snapScale = null;
+        this._unsnap(g);
       }
+      // 吸附中（过渡动画播放中 / 已焊死）：位置与尺寸都交给动画，循环不再插手
+      if (this._snap) { this._dragRaf = requestAnimationFrame(step); return; }
       this._dragShown = { x: sx, y: sy };
+      const bw = g._boxW || GHOST_SIZE;                       // 盒子宽度（焊死时会是卡槽宽度）
       g.style.left = sx + 'px';
       g.style.top = sy + 'px';
-      g.style.transform = 'translate(-50%,-50%) scale(' + sc.toFixed(3) + ')';
+      // 目标视觉尺寸 = GHOST_SIZE × sc；按盒子实际宽度换算 scale，避免焊死/还原时跳一级
+      g.style.transform = `translate(-50%,-50%) scale(${(sc * GHOST_SIZE / bw).toFixed(3)})`;
       this._dragRaf = requestAnimationFrame(step);
     };
     this._dragRaf = requestAnimationFrame(step);
   },
-  // 吸附判定：遍历快捷栏卡槽，幽灵与槽的重叠面积 ≥ 幽灵面积 45% 且重叠最大者为吸附目标
-  _snapTargetAt(x, y, k) {
-    const gw = GHOST_SIZE * k, gh = GHOST_SIZE * k;
+  // 把幽灵盒子"焊死"到卡槽矩形：与卡槽共用同一组小数 left/top/width/height 且 transform:none，
+  // 卡面 canvas 经 ResizeObserver 同步重绘 -> 像素级完全对准（修掉右下 1~2px 偏移）
+  _lockGhostBox(g, el) {
+    if (!g) return;
+    if (g._boxLockedEl && g._boxLockedEl !== el) this._unlockGhostBox(g);   // 换目标：先还原再焊到新槽
+    if (g._boxLocked) return;
+    const s = this._slotRects().find((it) => it.el === el);
+    const r = s ? s.r : el.getBoundingClientRect();
+    g.style.transition = 'none';
+    g.style.width = r.width + 'px';
+    g.style.height = r.height + 'px';
+    g.style.left = r.left + 'px';
+    g.style.top = r.top + 'px';
+    g.style.transform = 'none';
+    g._boxLocked = true;
+    g._boxLockedEl = el;
+    g._boxW = r.width;
+    this._snapPos = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    this._snapScale = r.width / GHOST_SIZE;
+  },
+  // 离开卡槽：还原为跟随指针的标准幽灵（50.54px + translate(-50%,-50%)）
+  _unlockGhostBox(g) {
+    if (!g || !g._boxLocked) return;
+    g._boxLocked = false;
+    g._boxLockedEl = null;
+    g._boxW = GHOST_SIZE;
+    // 先把 left/top 同步到"当前视觉中心"再改尺寸/变换，否则幽灵会瞬间跳到旧卡槽左上角
+    const r = g.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    g.style.transition = 'none';
+    g.style.width = GHOST_SIZE + 'px';
+    g.style.height = GHOST_SIZE + 'px';
+    g.style.left = cx + 'px';
+    g.style.top = cy + 'px';
+    g.style.transform = 'translate(-50%,-50%) scale(1)';
+    if (this._dragCur) { this._dragCur.x = cx; this._dragCur.y = cy; }
+    if (this._snapPos) { this._snapPos.x = cx; this._snapPos.y = cy; }
+  },
+  // 吸附到指定卡槽：用通用播放器从「当前视觉矩形」平滑过渡到卡槽矩形，到位后再焊死。
+  // 第一次吸附与切换对齐目标都走这里 —— 两者都有平滑的平移 + 缩放。
+  _snapTo(g, el) {
+    const s = this._slotRects().find((it) => it.el === el);
+    if (!s) return;
+    const r = s.r;
+    const cur = g.getBoundingClientRect();
+    if (!(cur.width > 0)) return;
+    this._snapScale = r.width / GHOST_SIZE;
+    g._snapAnim = true;
+    Anim.stop(g);
+    Anim.play(g, {
+      base: g._boxW || GHOST_SIZE,
+      from: { x: cur.left + cur.width / 2, y: cur.top + cur.height / 2, w: cur.width, h: cur.width },
+      to: { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.width },
+      dur: 0.18, ease: Anim.ease.out,
+      onDone: (el2) => {
+        el2._snapAnim = false;
+        // 只有仍在拖拽中才焊死（若已松手，_flyGhostTo 会接管）
+        if (this._drag === el2) this._lockGhostBox(el2, el);
+      }
+    });
+  },
+  // 脱离吸附：停掉过渡动画、还原盒子，并让指针跟踪从幽灵当前位置接续（避免瞬移回指针处）
+  _unsnap(g) {
+    Anim.stop(g);
+    g._snapAnim = false;
+    if (g._boxLocked) this._unlockGhostBox(g);
+    const r = g.getBoundingClientRect();
+    if (r.width > 0 && this._dragCur) {
+      this._dragCur.x = r.left + r.width / 2;
+      this._dragCur.y = r.top + r.height / 2;
+    }
+  },
+
+  // 卡槽矩形缓存：拖拽中每帧都要做命中判定，反复 getBoundingClientRect() 会强制布局 -> 卡顿。
+  // 只在 renderInvBar 重建行、或窗口尺寸变化时重新测量。
+  // 注意：缓存属性名不能与方法同名（_slotRectList ≠ _slotRects），否则方法会被数组覆盖。
+  _slotRects() {
+    if (this._slotRectsVer === this._rowsVer && this._slotRectList) return this._slotRectList;
+    const list = [];
+    document.querySelectorAll('#quickbar .qslot').forEach((d) => {
+      const vis = d.querySelector('.qinner') || d;   // 视觉矩形（副槽被 scale 缩小）
+      const r = vis.getBoundingClientRect();
+      if (r.width && r.height) {
+        list.push({ el: d, type: d.dataset.drop, index: parseInt(d.dataset.idx, 10), r });
+      }
+    });
+    this._slotRectList = list;
+    this._slotRectsVer = this._rowsVer;
+    return list;
+  },
+  // 吸附判定：用幽灵"当前实际显示尺寸"（GHOST_SIZE × 缩放）做命中，而不是拿起时的 1.3 倍。
+  // 之前用大盒子判定：主槽间距小会同时压住多个槽、目标反复横跳（表面已对齐、底层还按大盒子算），
+  // 这正是"拖拽与自动对齐卡顿、主槽尤其明显"的来源。
+  _snapTargetAt(x, y, sc) {
+    const gw = GHOST_SIZE * sc, gh = GHOST_SIZE * sc;
     const need = gw * gh * 0.30;
     let best = null, bestArea = 0;
-    document.querySelectorAll('#quickbar .qslot').forEach((d) => {
-      const r = d.getBoundingClientRect();
-      if (!r.width || !r.height) return;
+    for (const s of this._slotRects()) {
+      const r = s.r;
       const ix = Math.max(0, Math.min(x + gw / 2, r.right) - Math.max(x - gw / 2, r.left));
       const iy = Math.max(0, Math.min(y + gh / 2, r.bottom) - Math.max(y - gh / 2, r.top));
       const area = ix * iy;
-      if (area > bestArea) { bestArea = area; best = d; }
-    });
+      if (area > bestArea) { bestArea = area; best = s; }
+    }
     if (!best || bestArea < need) return null;
-    const r = best.getBoundingClientRect();
     return {
-      el: best,
-      type: best.dataset.drop,                 // 'slot' | 'subslot'
-      index: parseInt(best.dataset.idx, 10),
-      cx: r.left + r.width / 2,
-      cy: r.top + r.height / 2,
-      scale: r.width / GHOST_SIZE              // 与该槽完全对齐所需缩放
+      el: best.el,
+      type: best.type,                    // 'slot' | 'subslot'
+      index: best.index,
+      cx: best.r.left + best.r.width / 2,
+      cy: best.r.top + best.r.height / 2,
+      scale: best.r.width / GHOST_SIZE    // 与该槽完全对齐所需缩放
     };
   },
   _stopDragLoop() {
@@ -989,7 +1270,8 @@ const UI = {
     const ghost = g || this._drag;
     // 传入了具体幽灵且不是当前拖拽幽灵 -> 只移除它自身（快速连点时旧飞行动画
     // 的定时器不能误删新幽灵，否则新幽灵会变成永远晃动的孤儿）
-    if (ghost && ghost !== this._drag) { ghost.remove(); return; }
+    if (ghost && ghost !== this._drag) { Anim.stop(ghost); ghost.remove(); return; }
+    if (this._drag) Anim.stop(this._drag);   // 停掉可能还在跑的飞行/吸附动画
     this._stopDragLoop();
     this._dragTarget = null; this._dragCur = null; this._dragShown = null;
     this._snap = null; this._snapPos = null; this._snapScale = null;
@@ -1018,52 +1300,228 @@ const UI = {
     return null;   // 覆盖不足 50% 或未命中任何卡槽 -> 不装入，回退背包
   },
 
-  // ---------------- 小地图 ----------------
-  // 画在游戏主画布上。优先直接 blit「按真实碰撞多边形栅格化」的小地图位图：
-  // 细斜边、窄边、圆弧都是真实轮廓，与实际碰撞完全一致（不再用四分之一格采样近似）。
-  drawMinimap(ctx, rect, map, player, mobs) {
-    const S = rect.size, x0 = rect.x, y0 = rect.y;
+  // ---------------- 小地图：三档模式 + 平滑切换 ----------------
+  // 0 小（局部）：直径 = 0.5×原(160)；"一个瓦片 = 0.5×直径"（即直径跨 2 个瓦片）；
+  //               以人物白点为中心，贴边时自动偏移，不显示边界外内容。
+  // 1 中（全图）：直径 = 1.2×原；全图 + 人物绝对位置白点。[M] 第一下；小档悬浮临时进入。
+  // 2 大（全图）：屏幕居中、0.6 半透明、直径 = 0.6×屏高；圆点等比放大。[M] 第二下。
+  // 再按 [M] 回到小档。大小与内容的切换都是 0.6s 同步平滑过渡。
+  _mmInit() {
+    this._mmMode = 0;
+    this._mmHover = false;
+    this._mmEase = 0;                                   // 0=局部视角 1=全图视角（切换时插值）
+    const W0 = window.innerWidth, s0 = 160 * 0.5;
+    this._mm = { size: s0, span: GARDEN_TILE * 6, x: W0 - s0 - 12, y: 12, alpha: 1, cx: 0, cy: 0 };
+    this._mmTo = null; this._mmFrom = null; this._mmT = 1;
+    this._mmKey = [s0, GARDEN_TILE * 6, W0 - s0 - 12, 12, 1, 0].join('|');
+    this._mmLast = 0;
+    // 地图名：样式与副槽 [1][2] 相同（Ubuntu 800 + 黑描边），始终居中在小地图正下方
+    const nm = document.createElement('div');
+    nm.id = 'mmName';
+    nm.textContent = I18N.t('Maps/garden/Name', 'Garden');
+    document.body.appendChild(nm);
+    this.refs.mmName = nm;
+    // 悬浮进入二档：用「移动命中」而不是 mouseenter。
+    // 原因：从大档按 M 缩回小档时，指针本来就在小地图那片区域，把热区的 pointer-events
+    // 从 none 改回 auto 并不会补发 mouseenter —— 残留的 _mmHover 会立刻再把小档顶成二档，
+    // 于是表现为"最大档按一下只回到中档，小档永远切不回去"。改成每帧按矩形判定即可。
+    // 命中区域 = 二档地图的矩形（与一档同锚点、尺寸更大）。
+    window.addEventListener('mousemove', (e) => {
+      if (this._mmMode !== 0) { this._mmHover = false; return; }
+      const size = 160 * 1.2;
+      const left = window.innerWidth - size - 12, top = 12;
+      this._mmHover = e.clientX >= left - 4 && e.clientX <= left + size + 4
+                   && e.clientY >= top - 4 && e.clientY <= top + size + 4;
+    });
+    // 预热位图（中档 + 全图/局部兜底）：避免第一次按 M 时现场构建整张地图造成延迟
+    setTimeout(() => {
+      const g = window.__game;
+      if (!g || !g.map || typeof g.map.minimapCanvas !== 'function') return;
+      try {
+        g.map.minimapCanvas(this._mmFullPx());
+        g.map.minimapCanvas(this._mmBmpPx(160 * 1.2));
+      } catch (e) { /* 忽略：预热失败只影响首次切换 */ }
+    }, 800);
+  },
+  cycleMinimapMode() {
+    this._mmMode = (this._mmMode + 1) % 3;
+    // 必须无条件清掉悬浮标记：否则从大档回到小档的瞬间，指针仍在小地图上，
+    // mouseenter 早已触发过、不会再发一次，_mmHover 残留为 true 会立刻又把小档顶成中档
+    // （表现为"最大档按一下只回到中档，再按又去最大档"，小档永远切不回去）。
+    this._mmHover = false;
+  },
+  // 每帧推进小地图动画（由 overlay 的 rAF 循环驱动）
+  _mmTick(dt) {
+    const g = window.__game;
+    const player = g && g.player, map = g && g.map;
+    if (!player || !map) return;
     const half = map.R || (map.width * (map.tile || 1)) / 2;
-    const scale = S / (2 * half);
-    ctx.save();
-    ctx.fillStyle = 'rgba(8,12,9,0.55)';
-    ctx.fillRect(x0 - 5, y0 - 5, S + 10, S + 10);
-    const mm = (typeof map.minimapCanvas === 'function')
-      ? map.minimapCanvas(Math.round(S * Math.min(2, window.devicePixelRatio || 1))) : null;
-    if (mm) {
-      ctx.fillStyle = '#d7ddcf';
-      ctx.fillRect(x0, y0, S, S);
-      ctx.drawImage(mm, x0, y0, S, S);
-    } else if (map.solidQuad && map.FW && map.FH) {
-      const W = map.width, H = map.height;
-      ctx.fillStyle = '#d7ddcf';
-      ctx.fillRect(x0, y0, S, S);
-      ctx.fillStyle = '#11130f';
-      const qpx = S / map.FW, qpy = S / map.FH, SQ = map.solidQuad;
-      for (let qy = 0; qy < map.FH; qy++)
-        for (let qx = 0; qx < map.FW; qx++)
-          if (SQ[qy * map.FW + qx] === 1)
-            ctx.fillRect(x0 + qx * qpx, y0 + qy * qpy, qpx + 0.5, qpy + 0.5);  // 轻微重叠0.5px消除抗锯齿缝隙，保留浮点精度
-    } else if (map.solid && map.width && map.height) {
-      const W = map.width, H = map.height;
-      ctx.fillStyle = '#d7ddcf'; ctx.fillRect(x0, y0, S, S);
-      ctx.fillStyle = '#11130f';
-      const px = S / W, py = S / H, solid = map.solid;
-      for (let ty = 0; ty < H; ty++)
-        for (let tx = 0; tx < W; tx++)
-          if (solid[ty * W + tx] === 1)
-            ctx.fillRect(x0 + tx * px, y0 + ty * py, px + 0.5, py + 0.5);  // 轻微重叠0.5px消除抗锯齿缝隙，保留浮点精度
-    } else {
-      const poly = map.poly || [[-half, -half], [half, -half], [half, half], [-half, half]];
-      ctx.fillStyle = 'rgba(10,20,14,0.7)'; ctx.fillRect(x0, y0, S, S);
-      ctx.beginPath();
-      ctx.moveTo(poly[0][0] * scale + S / 2, poly[0][1] * scale + S / 2);
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0] * scale + S / 2, poly[i][1] * scale + S / 2);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(80,150,70,0.55)'; ctx.fill();
+    if (!(half > 0)) return;
+    const W = window.innerWidth, H = window.innerHeight;
+    const tile = map.tile || GARDEN_TILE;
+    const eff = (this._mmMode === 0 && this._mmHover) ? 1 : this._mmMode;
+    // full = 「显示全图」的视角（视图回到地图中心，白点用绝对位置）；centered = 「屏幕居中」的位置。
+    // 这两个必须分开：中档是全图视角但仍在右上角。早先混用一个标志，导致中档的视角中心
+    // 也跟着变成"跟随人物"——于是二档地图像小档一样跟着人走，白点始终停在出生点位置。
+    let size, span, alpha, centered, full;
+    if (eff === 2) { size = H * 0.6; span = 2 * half; alpha = 0.8; centered = true; full = true; }
+    else if (eff === 1) { size = 160 * 1.2; span = 2 * half; alpha = 1; centered = false; full = true; }
+    else { size = 160 * 0.5; span = tile * 6; alpha = 1; centered = false; full = false; }
+    const tx = centered ? (W - size) / 2 : (W - size - 12);
+    const ty = centered ? (H - size) / 2 : 12;
+    const key = [size, span, tx, ty, alpha, full ? 1 : 0].join('|');
+    if (key !== this._mmKey) {                 // 目标变化 -> 起一段 0.6s 过渡
+      this._mmKey = key;
+      this._mmFrom = { size: this._mm.size, span: this._mm.span, x: this._mm.x, y: this._mm.y, alpha: this._mm.alpha, e: this._mmEase };
+      this._mmTo = { size, span, x: tx, y: ty, alpha, e: full ? 1 : 0 };
+      this._mmT = 0;
     }
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(x0 + player.x * scale + S / 2, y0 + player.y * scale + S / 2, 2.4, 0, TAU); ctx.fill();
-    ctx.restore();
+    if (this._mmTo) {
+      this._mmT = Math.min(1, this._mmT + dt / 0.6);
+      const t = this._mmT;
+      const k = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;   // easeInOutQuad
+      const f = this._mmFrom, to = this._mmTo;
+      this._mm.size = f.size + (to.size - f.size) * k;
+      this._mm.span = f.span + (to.span - f.span) * k;
+      this._mm.x = f.x + (to.x - f.x) * k;
+      this._mm.y = f.y + (to.y - f.y) * k;
+      this._mm.alpha = f.alpha + (to.alpha - f.alpha) * k;
+      this._mmEase = f.e + (to.e - f.e) * k;
+      if (this._mmT >= 1) this._mmTo = null;
+    }
+    // 视图中心：小档跟随人物；全图档回到地图中心；按过渡进度混合
+    const wcx = player.x * (1 - this._mmEase), wcy = player.y * (1 - this._mmEase);
+    const a = Math.min(1, dt * 16);
+    this._mm.cx += (wcx - this._mm.cx) * a;
+    this._mm.cy += (wcy - this._mm.cy) * a;
+    // 同步地图名位置（地图名始终居中在小地图正下方，随动画平滑跟随）
+    const nm = this.refs.mmName;
+    if (nm) {
+      nm.style.left = (this._mm.x + this._mm.size / 2) + 'px';
+      nm.style.top = (this._mm.y + this._mm.size + 6) + 'px';
+    }
+  },
+
+  // 位图请求尺寸：按"显示尺寸 × dpr"取整到 48 的倍数。
+  // 取整后动画期间只会出现寥寥几个值（每个只构建一次并永久缓存），
+  // 既保证接近 1:1 的清晰度，又不会每帧重建整张地图位图（那正是按 M 卡顿的主因）。
+  _mmBmpPx(S) {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    return Math.max(96, Math.ceil((S * dpr) / 48) * 48);
+  },
+  // 全图位图的固定分辨率（= 大档直径 × dpr）：与"当前动画尺寸"无关，
+  // 因此过渡期间不会触发新的位图构建（按 M 卡顿的根源）；启动时预热，切档零等待。
+  _mmFullPx() {
+    if (this._mmFullPxV && this._mmFullH === window.innerHeight) return this._mmFullPxV;
+    this._mmFullPxV = this._mmBmpPx(window.innerHeight * 0.6);
+    this._mmFullH = window.innerHeight;
+    return this._mmFullPxV;
+  },
+
+  // 用 solidQuad（四分之一格碰撞栅格）实时绘制视野内的碰撞体，返回画出的格子数。
+  // 这是局部小地图的主渲染路径：数据源与角色碰撞完全一致，绝无"画不出来"的情况。
+  _mmDrawQuad(ctx, map, vx, vy, span, x0, y0, S, color) {
+    const SQ = map.solidQuad, FW = map.FW, FH = map.FH, half = map.R;
+    if (!SQ || !FW || !FH || !(half > 0) || !(span > 0)) return 0;
+    const q = (2 * half) / FW;                        // 每个四分之一格对应的世界尺寸
+    const cell = S / (span / q);                      // 映射到小地图后的像素边长
+    const gx0 = Math.max(0, Math.floor((vx + half) / q));
+    const gy0 = Math.max(0, Math.floor((vy + half) / q));
+    const gx1 = Math.min(FW - 1, Math.ceil((vx + span + half) / q));
+    const gy1 = Math.min(FH - 1, Math.ceil((vy + span + half) / q));
+    if (gx1 < gx0 || gy1 < gy0) return 0;
+    ctx.fillStyle = color;
+    let n = 0;
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const py = y0 + (gy * q - (vy + half)) / span * S;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (SQ[gy * FW + gx] !== 1) continue;
+        ctx.fillRect(x0 + (gx * q - (vx + half)) / span * S, py, cell + 0.5, cell + 0.5);
+        n++;
+      }
+    }
+    return n;
+  },
+
+  // 画在游戏主画布上（位置/尺寸/缩放均由 _mmTick 动画驱动）
+  drawMinimap(ctx, viewW, viewH, map, player, mobs) {
+    const half = map.R || (map.width * (map.tile || 1)) / 2;
+    const m = this._mm;
+    if (!(half > 0) || !m || !(m.size > 0)) return;
+    const S = m.size, x0 = m.x, y0 = m.y;
+    const span = Math.max(1, m.span);
+    const tileNow = map.tile || GARDEN_TILE;
+    // 局部模式：视野中心直接取「人物当前坐标」（不经动画插值）—— 保证小档永远跟着人物。
+    const local = (span <= 7 * tileNow) && typeof map.drawCollisionRegion === 'function';
+    const vx = (local ? player.x : m.cx) - span / 2;
+    const vy = (local ? player.y : m.cy) - span / 2;
+
+    ctx.save();
+    ctx.globalAlpha = m.alpha;
+    // 取消描边：只做「略微圆角」的内容裁剪（原来是深色实心外框，现已移除）
+    const rad = Math.max(3, S * 0.09);
+    ctx.save();
+    ctx.beginPath();
+    roundRectPath(ctx, x0, y0, S, S, rad);
+    ctx.clip();
+
+    ctx.fillStyle = '#d7ddcf';
+    ctx.fillRect(x0, y0, S, S);
+
+    // 地形：一律使用「精确碰撞多边形」数据（collisionTiles），不再用会把边界撑胖一圈的
+    //       solidQuad 四分之一格近似。
+    //   · 局部档 -> 实时矢量绘制（只遍历视野内那几个瓦片，任意缩放/dpr 都锐利）
+    //   · 全图档 -> 预渲染位图（同样由精确多边形栅格化而来；尺寸按档位固定 -> 不卡）
+    //   只有精确数据完全不可用时，才最后退回 solidQuad 近似。
+    let drew = 0;
+    if (local) {
+      ctx.save();
+      ctx.translate(x0, y0);
+      drew = map.drawCollisionRegion(ctx, { x0: vx, y0: vy, size: span }, S / span, '#11130f');
+      ctx.restore();
+    }
+    if (!local || drew === 0) {
+      const px = local ? this._mmFullPx() : this._mmBmpPx(this._mmTo ? this._mmTo.size : S);
+      const bmp = (typeof map.minimapCanvas === 'function') ? map.minimapCanvas(px) : null;
+      if (bmp) {
+        // blit 位图里对应视图的那一块；夹紧在边界内 -> 不显示地图外内容
+        const k = bmp.width / (2 * half);
+        const sw = Math.min(span * k, bmp.width), sh = Math.min(span * k, bmp.width);
+        const sx = clamp((vx + half) * k, 0, bmp.width - sw);
+        const sy = clamp((vy + half) * k, 0, bmp.width - sh);
+        ctx.drawImage(bmp, sx, sy, sw, sh, x0, y0, S, S);
+      } else {
+        drew = this._mmDrawQuad(ctx, map, vx, vy, span, x0, y0, S, '#11130f');
+      }
+    }
+    if (!this._mmDiag) {   // 一次性诊断：万一还有问题，控制台会直接给出原因
+      this._mmDiag = true;
+      console.info('[minimap] local=%s span=%s S=%s polyHit=%s tile=%s',
+        local, span, S, drew, tileNow);
+    }
+
+    // 生物点 / 玩家白点（同样受上面的裁剪保护，贴边时不会溢出框外）
+    const dotR = Math.max(2.2, S * 0.0125);        // 圆点随直径等比缩放（大档明显更大）
+    if (mobs && mobs.length) {
+      ctx.fillStyle = '#ff6b6b';
+      for (const mb of mobs) {
+        if (mb.dead) continue;
+        const mx = x0 + (mb.x - vx) / span * S, my = y0 + (mb.y - vy) / span * S;
+        if (mx < x0 - dotR || mx > x0 + S + dotR || my < y0 - dotR || my > y0 + S + dotR) continue;
+        ctx.beginPath(); ctx.arc(mx, my, Math.max(1.1, dotR * 0.62), 0, TAU); ctx.fill();
+      }
+    }
+    // 玩家小点：Common 等级的草绿色 + 灰色描边（与 common 稀有度色 #7EEF6D 一致）
+    const px = x0 + (player.x - vx) / span * S, py = y0 + (player.y - vy) / span * S;
+    ctx.beginPath();
+    ctx.arc(px, py, dotR, 0, TAU);
+    ctx.fillStyle = '#7EEF6D';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, dotR * 0.3);
+    ctx.strokeStyle = '#8a8a8a';          // 灰色描边：在深浅地形上都看得清
+    ctx.stroke();
+
+    ctx.restore();   // 撤销裁剪
+    ctx.restore();   // 撤销外框
   }
 };
