@@ -7,16 +7,15 @@
 //
 // 名称文本一律来自 i18N（Petals/<slug>/Name），因此切换译文包时卡面文字随之改变，
 // 而图形的位置/大小与原版像素级一致（布局参数见 assets/petal-metrics.js）。
-// 早期名称字母是烘焙在 SVG 里的（assets/petaltmp/），那样卡面文字就固定无法翻译了。
+// 早期名称字母是烘焙在 SVG 里的，那样卡面文字就固定无法翻译了；那份原始素材已移除。
 //
 // 素材里烘焙了一层底板色（如 common 的 #cfcfcf）。做法：取素材原文，把非白(#fff)/非黑(#000)
 // 的颜色统一换成稀有度色，白与黑原样保留 —— 于是素材的底板与内板同色融为一体，只剩图形与名称。
 'use strict';
 
 const CardRenderer = (function () {
-  const _tinted = {};   // `${svgId}|${rarity}` -> dataURL（已对齐稀有度的素材）
-  const _raw = {};      // svgId -> Promise<string|null>（拆分后素材原文，花瓣实体用）
-  const _rawCard = {};  // svgId -> Promise<string|null>（原始素材原文，卡牌用）
+  const _tinted = {};   // svgId -> dataURL（已收紧画布的卡面素材）
+  const _raw = {};      // svgId -> Promise<string|null>（petal/ 素材原文）
   const _fit = {};      // svgId -> 收紧后的 viewBox（只依赖素材本身，与稀有度无关）
 
   // 素材在卡面里的占比：1 = 完全撑满（想要再大/再小改这一个数）
@@ -41,18 +40,11 @@ const CardRenderer = (function () {
     return (RARITIES[rarity] && RARITIES[rarity].color) || '#9aa3a0';
   }
 
-  // 两个素材来源（都由脚本预先处理好，运行时不再做任何启发式拆字 / 调距）：
-  //   petaltmp/ = 原始素材（自带白色漫画名称字母）-> 仅供「卡牌」使用（卡上要显示名字）
-  //   petal/    = 拆分后的素材（已去掉底部文字、图形平移到画布正中、大小不变）-> 供「花瓣实体」使用
-  // 两者都带 ASSET_VER：素材内容换过但文件名没变，必须靠版本号强制浏览器重新拉取，
+  // 唯一的素材来源：petal/（已去掉底部名称字母、图形已平移到画布正中央、大小与 viewBox 均不变）。
+  // 带 ASSET_VER：素材内容换过但文件名没变，必须靠版本号强制浏览器重新拉取，
   // 否则会一直用缓存里的旧文件（表现为"花瓣还带着字"）。
-  function loadRawCard(svgId) {
-    if (_rawCard[svgId]) return _rawCard[svgId];
-    _rawCard[svgId] = fetch('assets/petaltmp/' + svgId + '.svg?v=' + ASSET_VER)
-      .then((r) => (r.ok ? r.text() : null))
-      .catch(() => null);          // file:// 等场景拉取失败 -> 回退为原素材
-    return _rawCard[svgId];
-  }
+  // 早期还有第二份"原始素材"（名称字母烘焙在图上）专供卡牌显示名字；现在卡牌名字改由
+  // i18n 实时绘制，那份素材已彻底删除，本文件只认 petal/ 这一个目录。
   function loadRaw(svgId) {
     if (_raw[svgId]) return _raw[svgId];
     _raw[svgId] = fetch('assets/petals/' + svgId + '.svg?v=' + ASSET_VER)
@@ -109,16 +101,14 @@ const CardRenderer = (function () {
   }
 
   // 取卡面素材（纯图形 + 收紧画布）。只依赖素材本身，与稀有度无关。
-  // 有预置参数 -> 用 petal/ 的纯图形素材；没有（参数文件缺失等极端情况）-> 退回原始素材
-  // （字母烘焙在图上），两种情况下卡面都不会空白。
+  // 一律从 petal/ 取；viewBox 优先用预置参数（与旧版 fitViewBox 算法一致，保证图形位置/大小不变），
+  // 参数缺失时才退化为「按素材自身包围盒收紧」—— 图形依然撑满卡面，只是不再绘制名字。
   function asset(svgId) {
     if (_tinted[svgId] !== undefined) return Promise.resolve(_tinted[svgId]);
-    const mt = metrics(svgId);
-    const loader = mt ? loadRaw : loadRawCard;
-    return loader(svgId).then((txt) => {
+    return loadRaw(svgId).then((txt) => {
       if (!txt) { _tinted[svgId] = null; return null; }
       let out = txt;
-      const vb = mt ? mt.vb : fitViewBox(svgId, txt);      // 收紧画布 -> 图形撑满
+      const vb = metrics(svgId) ? metrics(svgId).vb : fitViewBox(svgId, txt);   // 收紧画布 -> 图形撑满
       if (vb) {
         out = /viewBox="[^"]*"/.test(out)
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb + '"')
