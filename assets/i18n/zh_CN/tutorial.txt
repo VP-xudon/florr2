@@ -1,0 +1,7 @@
+Tutorial/Start=<s val="1.5">教程</s><n/><n/>你似乎是刚刚接触这个游戏，让我们为你介绍一下基础知识吧。<n/>点击“开始”按钮开始。
+Tutorial/End=<s val="1.5">教程</s><n/><n/>就是这样！记得使用背包来装备和卸下花瓣<n/>你也可以通过点击花瓣来装备/卸下它。<n/><n/>继续收集更多花瓣吧，祝你好运！
+Tutorial/MustBeAlive=你必须活着才能继续教程。
+Tutorial/MustBeInGame=本教程的这一部分，你必须在游戏中进行，只需点击绿色的“开始”按钮即可进入游戏。
+Tutorial/MustLeaveGame=本教程的这一部分，你必须在“花园”内，要继续新手教程，请点击左上角的“退出游戏”按钮放弃此游戏。
+Tutorial/Next=继续
+Tutorial/Done=完成

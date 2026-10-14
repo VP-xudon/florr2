@@ -202,9 +202,14 @@ class Game {
     for (const d of this.dmgTexts) d.update(dt);
     this.dmgTexts = this.dmgTexts.filter(d => d.life > 0);
 
-    // 相机锁定玩家：主角永远固定在屏幕中心（地图相对滚动，手感不变；震动 shake 仍叠加）
-    this.camera.x = p.x;
-    this.camera.y = p.y;
+    // 相机：默认锁定玩家（主角固定在屏幕中心）。
+    // 但走到地图边缘时【不再让视角越界】，而是把相机夹住 —— 环境停住、人物继续走动，
+    // 这样屏幕上永远不会出现地图之外的部分（与一档小地图贴边时的行为一致）。
+    // 视图比整张地图还大时（窗口很大 / 地图很小）夹紧区间退化为一个点，相机停在地图中心。
+    const half = this.map.R || (this.map.width * (this.map.tile || 1)) / 2;
+    const hw = Math.min(this.W / 2, half), hh = Math.min(this.H / 2, half);
+    this.camera.x = clamp(p.x, -half + hw, half - hw);
+    this.camera.y = clamp(p.y, -half + hh, half - hh);
     this.shake = Math.max(0, this.shake - dt * 30);
 
     this.updateHUD();

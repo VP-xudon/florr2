@@ -42,6 +42,14 @@ const DRAG_FOLLOW = 55;
 const DRAG_PICK_MS = 200;                   // 拿起时"长出"的放大时长
 const SWAP_DUR = '0.5s';                    // 主/副槽行互换动画时长
 
+// 装填阴影角位移的「缓入」参数：
+//   POW   > 1 表示越转越快；越大末段越快（用户要求"最后快一点"）
+//   FLOOR 线性分量下限：保证起步瞬间角速度不为 0（否则看起来像卡住不动）
+// 当前 POW=2.5、FLOOR=0.12 -> 角速度从 0.12 升到 2.32（约 19 倍），
+// 时间过半时只转过 21.6%，最后 20% 的时间转过 40% —— 末段明显更快。
+const RELOAD_EASE_POW = 2.5;
+const RELOAD_EASE_FLOOR = 0.12;
+
 // ================= 通用补间动画播放器 =================
 // 所有 UI 动画（卡槽互换、幽灵飞入、飞回背包…）都走这里：
 //   · 多个动画可在不同元素上【同时】播放，互不打断（同一元素上新动画会替换旧的）；
@@ -241,7 +249,25 @@ const UI = {
   isDexVisible() { return !this.refs.dex.classList.contains('hidden'); },
   toggleDex() { if (this.onDexToggle) this.onDexToggle(); },
 
-  hideLoading() { if (this.refs.loading) this.refs.loading.style.display = 'none'; },
+  hideLoading() {
+    if (this.refs.loading) this.refs.loading.style.display = 'none';
+    this.hideLoadingWarn();
+  },
+
+  // 加载过慢提示：定格于「正上方中央」的悬浮框（只提示，不影响后台继续加载）。
+  // 文案一律从 i18N 提取（UI/Title/LoadingSlow），不硬编码。
+  showLoadingWarn() {
+    if (this._loadWarn) return;
+    const el = document.createElement('div');
+    el.id = 'loadWarn';
+    el.textContent = I18N.t('UI/Title/LoadingSlow',
+      'Loading is taking longer than expected. If you\'d like, refresh the page or check your network settings.');
+    document.body.appendChild(el);
+    this._loadWarn = el;
+  },
+  hideLoadingWarn() {
+    if (this._loadWarn) { this._loadWarn.remove(); this._loadWarn = null; }
+  },
 
   // ---------------- 底部常驻快捷栏：上行主槽（装备）+ 下行副槽（临时存储） ----------------
   // 行尺寸用 CSS zoom 整体缩放（0.9 / 0.75），描边、圆角、字体等所有子元素同步缩放。
@@ -272,6 +298,15 @@ const UI = {
     box.dataset.drop = drop; box.dataset.idx = i;
     const inner = document.createElement('div');
     inner.className = 'qinner';
+    if (!isSub) {
+      // 装填（reload）阴影层：只挂在主槽。它是 .card 的兄弟节点且 z-index 更高，
+      // 所以 _updateCell 替换 .card 时它不受影响（动画不中断）。
+      // 外观 = 一块无阴影的扇形在长大，扇形之外是阴影；扇形两条边界由 CSS 变量驱动：
+      //   --rs = 慢边界角度，--rw = 扇形宽度（= 快边界角 - 慢边界角）
+      const rl = document.createElement('div');
+      rl.className = 'card-reload';
+      inner.appendChild(rl);
+    }
     if (isSub) {
       // 副槽格子正下方的数字快捷键提示（放在 .qinner 内，随副槽缩放同步缩放）
       const num = document.createElement('div');
@@ -302,7 +337,8 @@ const UI = {
     }
     box._cardKey = key;
     const old = inner.querySelector('.card');
-    if (old) old.remove();                 // 旧卡面连同其事件监听一起移除
+    // 旧卡面连同其事件监听、以及它的数量角标兄弟节点一起移除（否则会残留一排孤立的 xN）
+    if (old) { if (old._countEl) old._countEl.remove(); old.remove(); }
     if (!card) return;
     const cardEl = CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg });
     cardEl.style.visibility = '';
@@ -474,6 +510,43 @@ const UI = {
     }
     this.refs.dexCount.textContent = I18N.tf('ui.dexCount', { n: fmtNum(total), m: fmtNum(total) }, 'Petals: {n}');
     this._dexBuilt = true;
+  },
+
+  // ---------------- 主槽装填（reload）阴影 ----------------
+  // 视觉：一块「无阴影扇形」从 0 长满一整圈，扇形之外都是阴影；扇形没有描边，就是两块区域的分界。
+  //   · 扇形有两条边界，都从同一点出发：慢边界与快边界，两者转速比率恒定（快 = 慢的 2 倍）；
+  //   · 慢边界在装填期间正好转一圈，快边界转两圈，因此在"装填完成"那一刻快边界恰好追上慢边界，
+  //     扇形宽度 = 2π -> 覆盖整圈 -> 阴影消失；
+  //   · 整个过程时长 = 该花瓣的 reload 秒数（type.spd），装填完成后才会生成花瓣实体。
+  // 实现：只改两个 CSS 变量（--rs 起始角 / --rw 扇形宽度），由 conic-gradient 出图，
+  //      不重绘 canvas、不产生额外 DOM，开销极低。
+  _reloadTick() {
+    const g = window.__game;
+    const p = g && g.player;
+    const row = this.refs.slotRow;
+    if (!p || !row || !p.reload) return;
+    const n = Math.min(row.children.length, p.slots.length);
+    for (let i = 0; i < n; i++) {
+      const ov = row.children[i].querySelector('.card-reload');
+      if (!ov) continue;
+      const r = p.reload[i];
+      // 没有装填任务（空槽 / 无需装填 / 已装填完）-> 阴影清零
+      if (!r || !(r.dur > 0) || r.age >= r.dur) {
+        if (ov.style.opacity !== '0') ov.style.opacity = '0';
+        continue;
+      }
+      const t = r.age / r.dur;                 // 0 -> 1
+      // 角位移走「缓入」曲线：两条边界【同步加速】—— 剩余 CD 越少转得越快；
+      // 而快边界的角速度始终是慢边界的 2 倍，所以两者的相对速度保持不变。
+      // （旧实现是慢边界匀速；后来 0.35t+0.65t² 的加速幅度又偏小，末段不够快。）
+      const e = RELOAD_EASE_FLOOR * t
+              + (1 - RELOAD_EASE_FLOOR) * Math.pow(t, RELOAD_EASE_POW);
+      const slow = e * TAU;                    // 慢边界：装填完成时正好转满一圈
+      const fast = e * TAU * 2;                // 快边界：转速恒为慢的 2 倍
+      ov.style.opacity = '1';
+      ov.style.setProperty('--rs', (slow * 180 / Math.PI).toFixed(2) + 'deg');
+      ov.style.setProperty('--rw', ((fast - slow) * 180 / Math.PI).toFixed(2) + 'deg');
+    }
   },
 
   // ---------------- 卡牌数据悬浮框：纯 canvas 绘制 ----------------
@@ -769,6 +842,7 @@ const UI = {
         const dt = this._mmLast ? Math.min(0.05, (now - this._mmLast) / 1000) : 0.016;
         this._mmLast = now;
         this._mmTick(dt);
+        this._reloadTick();   // 主槽装填阴影推进
         const target = this._tipOn && this._tip ? 1 : 0;
         const cur = this._tipAlpha;
         if (cur !== target) {
@@ -1453,8 +1527,14 @@ const UI = {
     const tileNow = map.tile || GARDEN_TILE;
     // 局部模式：视野中心直接取「人物当前坐标」（不经动画插值）—— 保证小档永远跟着人物。
     const local = (span <= 7 * tileNow) && typeof map.drawCollisionRegion === 'function';
-    const vx = (local ? player.x : m.cx) - span / 2;
-    const vy = (local ? player.y : m.cy) - span / 2;
+    // 局部档：视图随人物移动，但【夹紧在地图范围内】—— 贴边时环境停住、人物小点在框内继续移动，
+    // 绝不显示地图之外的内容（与主屏幕相机的行为一致）。span < 2*half，所以区间恒有效。
+    let vx = (local ? player.x : m.cx) - span / 2;
+    let vy = (local ? player.y : m.cy) - span / 2;
+    if (local) {
+      vx = clamp(vx, -half, half - span);
+      vy = clamp(vy, -half, half - span);
+    }
 
     ctx.save();
     ctx.globalAlpha = m.alpha;

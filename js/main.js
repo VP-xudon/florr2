@@ -2,8 +2,9 @@
 'use strict';
 
 const ASSET_LIST = [];
-for (const p of PETAL_TYPES) ASSET_LIST.push(['petal' + p.svg, 'assets/petals/' + p.svg + '.svg']);
-for (const m of MOB_TYPES) ASSET_LIST.push(['mob' + m.svg, 'assets/mobs/' + m.svg + '.svg']);
+// 花瓣/生物素材带 ASSET_VER：内容换过但文件名没变，必须靠版本号强制浏览器重新拉取
+for (const p of PETAL_TYPES) ASSET_LIST.push(['petal' + p.svg, 'assets/petals/' + p.svg + '.svg?v=' + ASSET_VER]);
+for (const m of MOB_TYPES) ASSET_LIST.push(['mob' + m.svg, 'assets/mobs/' + m.svg + '.svg?v=' + ASSET_VER]);
 
 // 调试模式：?mode=debug 开启开发者模式（背包卡牌显示 ∞，怎么拿都拿不空）
 const _params = new URLSearchParams(location.search);
@@ -33,14 +34,15 @@ async function boot() {
     // 注意：不在这里撤 loading —— 必须等全部资源加载完成后再撤（见下方 await）
   }
 
-  // 资源在后台加载（带超时，互不阻塞）；【全部完成后再撤 loading 蒙版】
-  // 加 12s 兜底超时：万一某张素材挂了也不会让 loading 永远挡着画面。
+  // 资源在后台加载（互不阻塞）。【蒙版绝不提前撤】—— 必须等全部资源加载完成。
+  // 超过 20s 仍未完成：在正上方中央显示一个定格提示框，但后台继续等（不放弃加载）。
+  const slowWarn = setTimeout(() => {
+    if (window.GARDEN_DATA && UI.showLoadingWarn) UI.showLoadingWarn();
+  }, 20000);
   try {
-    await Promise.race([
-      Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s))),
-      new Promise((res) => setTimeout(res, 12000))
-    ]);
+    await Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s)));
   } catch (e) { /* 单个素材失败不影响其他 */ }
+  clearTimeout(slowWarn);
   if (window.GARDEN_DATA) UI.hideLoading();
 }
 

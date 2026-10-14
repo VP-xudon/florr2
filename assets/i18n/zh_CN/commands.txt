@@ -1,0 +1,179 @@
+UI/Chat/CommandHelp=/{0} {#Chat/Command/{0}/Args}：{#Chat/Command/{0}/Description}
+
+Chat/Command/help/Args=[命令名]
+Chat/Command/help/Description=列出所有命令或列出特定命令的帮助
+
+Chat/Command/guild/Args=<消息>
+Chat/Command/guild/Description=只向公会其他成员发送消息
+
+Chat/Command/guild-create/Args=<名字> <标签>
+Chat/Command/guild-create/Description=创建一个新公会。名字必须为3-13个字符，标签必须为2-4个字符
+
+Chat/Command/guild-invite/Args=<名称>
+Chat/Command/guild-invite/Description=邀请玩家加入公会，你必须是会长，且该玩家必须在你附近
+
+Chat/Command/guild-transfer-leader/Args=<目标>
+Chat/Command/guild-transfer-leader/Description=将公会领导权转移给其他人
+
+Chat/Command/guild-motd/Args=<文本>
+Chat/Command/guild-motd/Description=设置公会公告
+
+Chat/Command/squad/Args=<消息>
+Chat/Command/squad/Description=只向小队其他成员发送消息
+
+Chat/Command/squad-create/Args=
+Chat/Command/squad-create/Description=创建一个小队
+
+Chat/Command/squad-invite/Args=<目标>
+Chat/Command/squad-invite/Description=邀请目标玩家加入小队
+
+Chat/Command/squad-leave/Args=
+Chat/Command/squad-leave/Description=离开小队
+
+Chat/Command/squad-find-public/Args=
+Chat/Command/squad-find-public/Description=加入随机公开小队
+
+Chat/Command/squad-public/Args=
+Chat/Command/squad-public/Description=将小队设为公开
+
+Chat/Command/squad-private/Args=
+Chat/Command/squad-private/Description=将小队设为私密
+
+Chat/Command/whisper/Args=<目标> <消息>
+Chat/Command/whisper/Description=向特定玩家发送消息
+
+Chat/Command/w/Args={#Chat/Command/whisper/Args}
+Chat/Command/w/Description={#Chat/Command/whisper/Description}
+
+Chat/Command/reply/Args=<消息>
+Chat/Command/reply/Description=回复最新收到的密语消息
+
+Chat/Command/r/Args={#Chat/Command/reply/Args}
+Chat/Command/r/Description={#Chat/Command/reply/Description}
+
+Chat/Command/local/Args=<消息>
+Chat/Command/local/Description=只向周围的人发送消息
+
+Chat/Command/map/Args=<消息>
+Chat/Command/map/Description=发送一条地图消息
+
+Chat/Command/global/Args=<消息>
+Chat/Command/global/Description=发送一条全球消息
+
+Chat/Command/unblock/Args=<名称>
+Chat/Command/unblock/Description=从屏蔽列表中移除某人
+
+Chat/Command/unblock-all/Args=
+Chat/Command/unblock-all/Description=移除对屏蔽列表中所有人的屏蔽
+
+Chat/Command/rot-speed/Args=<value>
+Chat/Command/rot-speed/Description=设置花瓣旋转速度，数值必须为从0.0到1.0之间的一个数
+
+Chat/Command/print-players/Args=
+Chat/Command/print-players/Description=列出附近玩家的账号ID
+
+##################################################################################
+# All the ones below do not need to be translated, they are admin-only commands: #
+##################################################################################
+
+Chat/Command/fake-achievements/Args=[n]
+Chat/Command/fake-achievements/Description=Make some fake achievement notifications
+
+Chat/Command/fill-chat/Args=
+Chat/Command/fill-chat/Description=Fill chat with messages
+
+Chat/Command/disable-save/Args=
+Chat/Command/disable-save/Description=Disables saving progress on this account
+
+Chat/Command/reset-talents/Args=
+Chat/Command/reset-talents/Description=Resets talent tree
+
+Chat/Command/one-of-everything/Args=[n]
+Chat/Command/one-of-everything/Description=Gives 1 petal of every kind
+
+Chat/Command/wipe/Args=
+Chat/Command/wipe/Description=Removes everything from account
+
+Chat/Command/flush/Args=
+Chat/Command/flush/Description=Forces an account flush
+
+Chat/Command/make-enemies/Args=
+Chat/Command/make-enemies/Description=Everyone else is an enemy
+
+Chat/Command/spawn-mob/Args=<type> <rarity> <normal drops? y/n> <enemy? y/n> [num] [global? y/n]
+Chat/Command/spawn-mob/Description=Spawns a mob
+
+Chat/Command/warp/Args=<map>
+Chat/Command/warp/Description=Warp to a specific map
+
+Chat/Command/warp-everyone/Args=<map>
+Chat/Command/warp-everyone/Description=Warp everyone to a specific map
+
+Chat/Command/kill/Args=
+Chat/Command/kill/Description=Kills self
+
+Chat/Command/kill-everyone/Args=
+Chat/Command/kill-everyone/Description=Kills everyone
+
+Chat/Command/revive-everyone/Args=
+Chat/Command/revive-everyone/Description=Revives everyone
+
+Chat/Command/kill-mobs/Args=<drops? y/n>
+Chat/Command/kill-mobs/Description=Kills every mob
+
+Chat/Command/revive/Args=
+Chat/Command/revive/Description=Revives self
+
+Chat/Command/set-loadout/Args=
+Chat/Command/set-loadout/Description=Set loadout
+
+Chat/Command/set-loadout-all/Args=
+Chat/Command/set-loadout-all/Description=Set everyone's loadout
+
+Chat/Command/levelup/Args=[n]
+Chat/Command/levelup/Description=Level up
+
+Chat/Command/isolate/Args=<target>
+Chat/Command/isolate/Description=Isolate player
+
+Chat/Command/unisolate/Args=
+Chat/Command/unisolate/Description=Unisolates
+
+Chat/Command/change-name/Args=<name>
+Chat/Command/change-name/Description=Changes flower's name temporarily
+
+Chat/Command/dev-boss/Args=
+Chat/Command/dev-boss/Description=
+
+Chat/Command/afk-check/Args=[target]
+Chat/Command/afk-check/Description=Runs manual AFK check
+
+Chat/Command/bot-finder/Args=<start/y/n/print>
+Chat/Command/bot-finder/Description=Hehehe
+
+Chat/Command/wipe-achievements/Args=
+Chat/Command/wipe-achievements/Description=Wipe achievements
+
+Chat/Command/reset-coin-delay/Args=
+Chat/Command/reset-coin-delay/Description=Reset coin trade delay
+
+Chat/Command/bring/Args=<target>
+Chat/Command/bring/Description=Bring player to me
+
+Chat/Command/goto/Args=<target>
+Chat/Command/goto/Description=Go to player
+
+Chat/Command/bring-everyone/Args=
+Chat/Command/bring-everyone/Description=Bring everyone to me
+
+Chat/Command/contagious-corruption/Args=
+Chat/Command/contagious-corruption/Description=Start the plague
+
+Chat/Command/purge-contagious-corruption/Args=
+Chat/Command/purge-contagious-corruption/Description=End the plague
+
+Chat/Command/calculate-next-shop/Args=<petal:rarity> [min discount level 0~3]
+Chat/Command/calculate-next-shop/Description=Calculates in how many periods the petal will appear in shop
+
+Chat/Command/lock-in-hel/Args=<target>
+Chat/Command/lock-in-hel/Description=Locks player in Hel for 1 hour

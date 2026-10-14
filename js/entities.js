@@ -22,6 +22,9 @@ const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
 //   退场（死亡 / 被删除 / 卸下）：平滑放大到 1.5 倍，同时渐隐
 const FADE_T      = 0.5;
 const DEATH_SCALE = 1.5;
+// 卸下花瓣（卡牌实体消失）的退场时长：0.2s 快速渐隐。
+// 单独一个常量而不用 FADE_T：生物死亡、掉落卡片、拾取特效仍保持 0.5s，只把"卸下花瓣"调快。
+const PETAL_GHOST_T = 0.2;
 function spawnFade(age) { return clamp(age / FADE_T, 0, 1); }                 // 出场：0 -> 1 的 alpha
 function deathFade(t01) { return { scale: 1 + (DEATH_SCALE - 1) * t01, alpha: 1 - t01 }; }
 
@@ -104,6 +107,7 @@ class Player {
     this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
     this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
+    this.reload = [];           // 主槽装填状态：{ card, age, dur } | null（与 slots 等长）
     this.name = 'Flower';
     // 模式状态：空格=reach、Shift=detect
     this.mode = 'normal';        // 'normal' | 'reach' | 'detect'
@@ -139,11 +143,36 @@ class Player {
     this.flash = Math.max(0, this.flash - dt);
 
     this.spin += PETAL_SPIN * dt;
+    // 装填计时必须在 _syncPetals 之前：新换上来的卡要先有 reload 状态（age=0 -> 未完成），
+    // 这一步之后花瓣实体才会被放出来
+    this._tickReload(dt);
     // 模式过渡动画：0.15s平滑过渡
     const targetT = (this.mode === 'normal') ? 0 : 1;
     const modeRate = 1 / 0.15;  // 0.15秒完成过渡
     this.modeT = damp(this.modeT, targetT, modeRate, dt);
     this._syncPetals(dt, map, mobs);
+  }
+
+  // ---------------- 主槽装填（reload） ----------------
+  // 每条主槽记录「当前这张卡 + 已装填时长 + 总时长」，总时长 = 该花瓣的 reload 秒数（type.spd）。
+  // 判定"是否换卡"用【对象身份】而不是 key：同一张卡卸下再装回、或两槽互换，都算"刚替换上来"，
+  // 必须重新结算（没装填完就被替换下去 -> 新上来的卡从头开始装填）。
+  _tickReload(dt) {
+    for (let i = 0; i < this.slots.length; i++) {
+      const c = this.slots[i];
+      if (!c) { this.reload[i] = null; continue; }
+      const r = this.reload[i];
+      if (!r || r.card !== c) {
+        this.reload[i] = { card: c, age: 0, dur: Math.max(0, (c.type && c.type.spd) || 0) };
+      } else {
+        r.age += dt;
+      }
+    }
+  }
+  // 该主槽是否装填完成（dur<=0 视为无需装填，立即完成）
+  reloadDone(i) {
+    const r = this.reload[i];
+    return !!r && r.age >= r.dur;
   }
 
   // 花瓣是实体 -> 会撞墙、也会撞生物：
@@ -170,8 +199,11 @@ class Player {
   //   · 人物跑起来时目标点跟着跑，花瓣会被甩在后面一小段距离，再平滑吸附（故意保留的缓冲感）
   //   · 装备数量变化引起间距重排时，同样走这套吸附过程，绝不瞬移
   _syncPetals(dt, map, mobs) {
+    // 只有【装填完成】的主槽才生成花瓣实体 —— 装填中的槽位暂时没有花瓣
     const live = [];
-    for (let i = 0; i < this.slots.length; i++) if (this.slots[i]) live.push(i);
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i] && this.reloadDone(i)) live.push(i);
+    }
     const n = live.length;
 
     // 同步实体列表：同一张卡保留其运动状态；新出现的卡从人物中心出生
@@ -195,7 +227,7 @@ class Player {
     this.petals = bodies;
     // 幽灵推进，超时即真正移除
     for (const g of this.petalGhosts) g.age += dt;
-    this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
+    this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
 
     // 计算应在位置，用欠阻尼弹簧吸附过去（帧率无关；目标突变时平滑追赶，绝不瞬移）
     const step = n > 0 ? TAU / n : 0;
@@ -238,11 +270,12 @@ class Player {
       if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, 1, a);
       else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, 1, a);  // 回退
     }
-    // 被卸下/移除的花瓣：留在原地放大 1.12 倍并渐隐 0.5s
+    // 被卸下/移除的花瓣：留在原地平滑放大并渐隐（0.2s 快速消失）
+    // 放大到 1.5 倍不会盖住主角：轨道半径约 43px、主角半径 15.6px，
+    // 花瓣放大后半宽 10.1px，内缘仍在 33px 处，离主角边缘还有 17px 余量。
     for (const g of this.petalGhosts) {
-      const size = 15 * 0.9;                         // 与在场花瓣同尺寸（原来漏定义 -> 抛错，导致主角脸整帧不画）
-      const t01 = clamp(g.age / FADE_T, 0, 1);
-      const d = { scale: 1 + 0.12 * t01, alpha: 1 - t01 };   // 卸下花瓣：仅轻微放大+渐隐，避免放大到 1.5 倍盖住主角
+      const size = 15 * 0.9;                         // 与在场花瓣同尺寸
+      const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
       if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);

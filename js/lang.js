@@ -23,10 +23,15 @@ window.I18N = (function () {
   function hasLang(code) { return !!packs[code]; }
   function lang() { return current; }
 
+  // 查找顺序：当前语言 -> en_US（官方英文，永远注册）-> en（本项目自定义小包）-> null。
+  // 中文包只有 2282 条，覆盖不到全部键，所以这条回退链是必需的：
+  // 缺键时显示英文，而不是把 key 本身当文案显示出来。
   function lookup(key) {
-    const d = packs[current] || packs.en_US || {};
-    if (d[key] != null) return d[key];
-    if (packs.en && packs.en[key] != null) return packs.en[key];   // 自定义英文兜底
+    const order = [current, 'en_US', 'en'];
+    for (let i = 0; i < order.length; i++) {
+      const d = packs[order[i]];
+      if (d && d[key] != null) return d[key];
+    }
     return null;
   }
 
@@ -71,3 +76,23 @@ if (typeof window.I18N_EN !== 'undefined') {
   I18N.addPack('en_US', window.I18N_EN);
   I18N.setLang('en_US');
 }
+
+// 注册官方简体中文包（由 assets/i18n/zh_CN/zh_CN.js 提供 window.I18N_ZH_CN）。
+// 该文件只在 ?i18n=zh_cn 时才会被加载（见 index.html 顶部的同步注入），所以这里是可选的。
+if (typeof window.I18N_ZH_CN !== 'undefined') {
+  I18N.addPack('zh_CN', window.I18N_ZH_CN);
+}
+
+// 应用 URL 里请求的语言：?i18n=zh_cn / ?i18n=en_us（大小写、连字符、下划线都兼容）。
+// 请求中文但包没加载上时保持英文（绝不出空白）；请求的值无法识别时同样保持默认。
+(function applyRequestedLang() {
+  const req = (typeof window !== 'undefined' && window.__i18nReq) || '';
+  if (!req) return;
+  const want = String(req).toLowerCase().replace(/-/g, '_');
+  if (want === 'zh_cn' || want === 'zh') {
+    if (I18N.hasLang('zh_CN')) I18N.setLang('zh_CN');
+    else console.warn('[i18n] 请求了中文但 zh_CN 包未加载，保持英文');
+  } else if (want === 'en_us' || want === 'en') {
+    I18N.setLang('en_US');
+  }
+})();

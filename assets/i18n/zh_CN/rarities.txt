@@ -1,0 +1,49 @@
+Rarities/common/Name=普通
+Rarities/common/ArticleUpper=一个
+Rarities/common/Article=一个
+Rarities/common/NameColored=<c val="{#Colors/common}">{#Rarities/common/Name}</c>
+
+Rarities/unusual/Name=罕见
+Rarities/unusual/ArticleUpper=一个
+Rarities/unusual/Article=一个
+Rarities/unusual/NameColored=<c val="{#Colors/unusual}">{#Rarities/unusual/Name}</c>
+
+Rarities/rare/Name=稀有
+Rarities/rare/ArticleUpper=一个
+Rarities/rare/Article=一个
+Rarities/rare/NameColored=<c val="{#Colors/rare}">{#Rarities/rare/Name}</c>
+
+Rarities/epic/Name=史诗
+Rarities/epic/ArticleUpper=一个
+Rarities/epic/Article=一个
+Rarities/epic/NameColored=<c val="{#Colors/epic}">{#Rarities/epic/Name}</c>
+
+Rarities/legendary/Name=传奇
+Rarities/legendary/ArticleUpper=一个
+Rarities/legendary/Article=一个
+Rarities/legendary/NameColored=<c val="{#Colors/legendary}">{#Rarities/legendary/Name}</c>
+
+Rarities/mythic/Name=神话
+Rarities/mythic/ArticleUpper=一个
+Rarities/mythic/Article=一个
+Rarities/mythic/NameColored=<c val="{#Colors/mythic}">{#Rarities/mythic/Name}</c>
+
+Rarities/ultra/Name=究极
+Rarities/ultra/ArticleUpper=一个
+Rarities/ultra/Article=一个
+Rarities/ultra/NameColored=<c val="{#Colors/ultra}">{#Rarities/ultra/Name}</c>
+
+Rarities/super/Name=超级
+Rarities/super/ArticleUpper=一个
+Rarities/super/Article=一个
+Rarities/super/NameColored=<c val="{#Colors/super}">{#Rarities/super/Name}</c>
+
+Rarities/eternal/Name=永恒
+Rarities/eternal/ArticleUpper=一个
+Rarities/eternal/Article=一个
+Rarities/eternal/NameColored=<c val="{#Colors/eternal}">{#Rarities/eternal/Name}</c>
+
+Rarities/unique/Name=唯一
+Rarities/unique/ArticleUpper=一个
+Rarities/unique/Article=一个
+Rarities/unique/NameColored=<c val="{#Colors/unique}">{#Rarities/unique/Name}</c>

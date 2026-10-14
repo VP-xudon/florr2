@@ -1588,6 +1588,7 @@ window.I18N_EN = {
 "UI/Language/Name": "English (US)",
 "UI/Language/Credits": "",
 "UI/Title/Loading": "Loading...",
+"UI/Title/LoadingSlow": "Loading is taking longer than expected. If you'd like, refresh the page or check your network settings.",
 "UI/Title/Connecting": "Connecting...",
 "UI/Title/LoggingIn": "Logging in...",
 "UI/Title/Ready": "Ready",

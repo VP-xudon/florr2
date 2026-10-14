@@ -1,0 +1,152 @@
+Attribute/PoisonNoColon=<c val="{#Colors/poison}">剧毒</c>
+
+Flower/Attribute/Health=<c val="{#Colors/health}">花朵生命值：</c>{0:tooltip}
+Flower/Attribute/HealthNoColon=<c val="{#Colors/health}">花朵生命值</c>
+Flower/Attribute/BodyDamage=<c val="{#Colors/damage}">身体伤害：</c>{0:tooltip}
+Flower/Attribute/BodyDamageNoColon=<c val="{#Colors/damage}">身体伤害</c>
+Flower/Attribute/BodyPoison=<c val="{#Colors/poison}">身体剧毒：</c>{0:tooltip}（{1:tooltip}/秒）
+Flower/Attribute/LuckNoColon=<c val="{#Colors/generic}">幸运值</c>
+Flower/Attribute/RotationSpeedNoColon=<c val="{#Colors/generic}">旋转速度</c>
+Flower/Attribute/AttackRangeNoColon=<c val="{#Colors/generic}">攻击距离</c>
+Flower/Attribute/HealingNoColon=<c val="{#Colors/heal}">治疗</c>
+Flower/Attribute/PetalHealthNoColon=<c val="{#Colors/health}">花瓣耐久</c>
+
+Mob/Attribute/Health=<c val="{#Colors/health}">生命值：</c>{0:tooltip}
+Mob/Attribute/HealthRange=<c val="{#Colors/health}">生命值：</c>{0:tooltip}～{1:tooltip}
+Mob/Attribute/HealthNoColon=<c val="{#Colors/health}">生命值</c>
+Mob/Attribute/Damage=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}
+Mob/Attribute/Damage/Lightning=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}<c val="{#Colors/lightning}">（闪电）</c>
+Mob/Attribute/DamagePerSecond=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/秒
+Mob/Attribute/DamagePerSecond/Lightning=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/秒<c val="{#Colors/lightning}">（闪电）</c>
+Mob/Attribute/Armor=<c val="{#Colors/armor}">护甲：</c>{0:tooltip}
+Mob/Attribute/Poison=<c val="{#Colors/poison}">剧毒：</c>{0:tooltip}（{1:tooltip}/秒）
+Mob/Attribute/PoisonPerSecond=<c val="{#Colors/poison}">剧毒：</c>{0:tooltip}/秒
+Mob/Attribute/PsionicConnection=<c val="{#Colors/psionic}">心灵感应</c>
+Mob/Attribute/PollenHealth=<c val="{#Colors/health}">花粉耐久：</c>{0:tooltip}
+Mob/Attribute/PollenDamage=<c val="{#Colors/damage}">花粉伤害：</c>{0:tooltip}
+Mob/Attribute/MissileHealth=<c val="{#Colors/health}">导弹耐久：</c>{0:tooltip}
+Mob/Attribute/MissileDamage=<c val="{#Colors/damage}">导弹伤害：</c>{0:tooltip}
+Mob/Attribute/MissilePoison=<c val="{#Colors/poison}">导弹剧毒：</c>{0:tooltip}（{1:tooltip}/秒）
+Mob/Attribute/PearlHealth=<c val="{#Colors/health}">珍珠耐久：</c>{0:tooltip}
+Mob/Attribute/PearlDamage=<c val="{#Colors/damage}">珍珠伤害：</c>{0:tooltip}
+Mob/Attribute/DandelionHealth=<c val="{#Colors/health}">花瓣耐久：</c>{0:tooltip}
+Mob/Attribute/DandelionDamage=<c val="{#Colors/damage}">花瓣伤害：</c>{0:tooltip}
+Mob/Attribute/MantisPeaHealth=<c val="{#Colors/health}">豌豆耐久：</c>{0:tooltip}
+Mob/Attribute/MantisPeaDamage=<c val="{#Colors/damage}">豌豆伤害：</c>{0:tooltip}
+Mob/Attribute/Duration=<c val="{#Colors/duration}">持续时间：</c>{0:tooltipTime}
+Mob/Attribute/Swallows=<c val="{#Colors/generic}">吞咽</c>
+Mob/Attribute/ArmorDebuff=<c val="{#Colors/armor}">护甲减益：</c>{0:tooltip}
+Mob/Attribute/Lifesteal=<c val="{#Colors/heal}">吸血：</c>{0:tooltip}
+Mob/Attribute/Lightning=<c val="{#Colors/lightning}">闪电：</c>{0:tooltip}
+Mob/Attribute/Bounces=<c val="{#Colors/generic}">连锁：</c>{0:tooltip}
+Mob/Attribute/Evasion=<c val="{#Colors/generic}">闪避：</c>{0:perc}%
+Mob/Attribute/UndeadDuration=<c val="{#Colors/undead}">死亡延缓：</c>{0:tooltipTime}
+Mob/Attribute/Charges=<c val="{#Colors/generic}">充能：</c>{0:tooltip}
+Mob/Attribute/Interval=<c val="{#Colors/generic}">间隔：</c>{0:tooltipTime}
+
+Petal/Attribute/Reload=<c val="{#Colors/generic}">冷却时间：</c>{0}
+Petal/Attribute/NumCopies=<c val="{#Colors/generic}">子瓣数量：</c>{0:tooltip}
+Petal/Attribute/Health=<c val="{#Colors/health}">耐久：</c>{0:tooltip}
+Petal/Attribute/Damage=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}
+Petal/Attribute/Damage/Lightning=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}<c val="{#Colors/lightning}">（闪电）</c>
+Petal/Attribute/DamageRange=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}～{1:tooltip}
+Petal/Attribute/DamagePerSecond=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/秒
+Petal/Attribute/DamagePerSecond/Lightning=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/秒<c val="{#Colors/lightning}">（闪电）</c>
+Petal/Attribute/DamagePlusPerPetal=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}；每装备一个额外的{#Petals/{2:base}/FullName}（{#Rarities/{2:rarity}/NameColored}）则+{1:tooltip}
+Petal/Attribute/Armor=<c val="{#Colors/armor}">护甲：</c>{0:tooltip}
+Petal/Attribute/RotationSpeed=<c val="{#Colors/generic}">旋转速度：</c>+{0:tooltip}弧度/秒
+Petal/Attribute/Heal=<c val="{#Colors/heal}">治疗：</c>{0:tooltip}
+Petal/Attribute/HealPerSecond=<c val="{#Colors/heal}">治疗：</c>{0:tooltip}/秒
+Petal/Attribute/HealPerc=<c val="{#Colors/heal}">治疗：</c>{0:perc}%
+Petal/Attribute/Poison=<c val="{#Colors/poison}">剧毒：</c>{0:tooltip}（{1:tooltip}/秒）
+Petal/Attribute/PoisonPerSecond=<c val="{#Colors/poison}">剧毒：</c>{0:tooltip}/秒
+Petal/Attribute/PoisonResistance=<c val="{#Colors/poison}">剧毒抗性：</c>{0:tooltip}/秒
+Petal/Attribute/FlowerHealth=<c val="{#Colors/health}">花朵生命值：</c>{0:tooltip}
+Petal/Attribute/FlowerHealthPerc=<c val="{#Colors/health}">花朵生命值：</c>+{0:perc}%
+Petal/Attribute/FlowerHealthPercNeg=<c val="{#Colors/health}">花朵生命值：</c>-{0:perc}%
+Petal/Attribute/Duration=<c val="{#Colors/duration}">持续时间：</c>{0:tooltipTime}
+Petal/Attribute/Duration2=<c val="{#Colors/duration}">延存期：</c>{0:tooltipTime} + {1:tooltipTime}
+Petal/Attribute/Contents={#Petal/Attribute/Contents{0:1orN}}
+Petal/Attribute/Contents1=<c val="{#Colors/generic}">内含：</c>{#Mobs/{1:base}/Name}（{#Rarities/{1:rarity}/NameColored}）
+Petal/Attribute/ContentsN=<c val="{#Colors/generic}">内含：</c>{0}个{#Mobs/{1:base}/Name}（{#Rarities/{1:rarity}/NameColored}）
+Petal/Attribute/ContentsNoRarity={#Petal/Attribute/ContentsNoRarity{0:1orN}}
+Petal/Attribute/ContentsNoRarity1=<c val="{#Colors/generic}">内含：</c>{#Mobs/{1}/Name}
+Petal/Attribute/ContentsNoRarityN=<c val="{#Colors/generic}">内含：</c>{0}个{#Mobs/{1}/Name}
+Petal/Attribute/ExtraVision=<c val="{#Colors/generic}">视野：</c>+{0:perc}%
+Petal/Attribute/VisionReduction=<c val="{#Colors/generic}">视野：</c>-{0:perc}%
+Petal/Attribute/Radius=<c val="{#Colors/generic}">半径：</c>{0:tooltip}
+Petal/Attribute/MaxMobRarity=<c val="{#Colors/generic}">最高生物稀有度：</c>{#Rarities/{0}/NameColored}
+Petal/Attribute/DamageReflection=<c val="{#Colors/reflection}">伤害反弹：</c>{0:perc}%（对{#Rarities/{2}/NameColored}生物），{1:perc}%（对花朵）
+Petal/Attribute/PickUpRange=<c val="{#Colors/generic}">拾取距离：</c>+{0:tooltip}
+Petal/Attribute/Lightning=<c val="{#Colors/lightning}">闪电：</c>{0:tooltip}
+Petal/Attribute/Bounces=<c val="{#Colors/generic}">连锁：</c>{0:tooltip}
+Petal/Attribute/Knockback=<c val="{#Colors/generic}">击退：</c>{0:tooltip}
+Petal/Attribute/ExtraDamage=<c val="{#Colors/damage}">额外伤害：</c>{0:tooltip}
+Petal/Attribute/Shield=<c val="{#Colors/generic}">护盾：</c>{0:tooltip}
+Petal/Attribute/BodyDamage=<c val="{#Colors/damage}">身体伤害：</c>{0:tooltip}
+Petal/Attribute/Period=<c val="{#Colors/generic}">周期：</c>{0:tooltipTime}
+Petal/Attribute/FlowerRadius=<c val="{#Colors/generic}">花朵半径：</c>+{0:tooltip}
+Petal/Attribute/DamageHealed=<c val="{#Colors/heal}">伤害治疗：</c>{0:perc}%
+Petal/Attribute/AttackRange=<c val="{#Colors/generic}">攻击距离：</c>+{0:tooltip}
+Petal/Attribute/Spawn={#Petal/Attribute/Spawn{0:1orN}}
+Petal/Attribute/Spawn1=<c val="{#Colors/generic}">生成：</c>{#Mobs/{1:base}/Name}（{#Rarities/{1:rarity}/NameColored}）
+Petal/Attribute/SpawnN=<c val="{#Colors/generic}">生成：</c>{0}个{#Mobs/{1:base}/Name}（{#Rarities/{1:rarity}/NameColored}）
+Petal/Attribute/SpawnNoRarity={#Petal/Attribute/SpawnNoRarity{0:1orN}}
+Petal/Attribute/SpawnNoRarity1=<c val="{#Colors/generic}">生成：</c>{#Mobs/{1}/Name}
+Petal/Attribute/SpawnNoRarityN=<c val="{#Colors/generic}">生成：</c>{0}个{#Mobs/{1}/Name}
+Petal/Attribute/SpawnRarity={#Petal/Attribute/SpawnRarity{0:1orN}}
+Petal/Attribute/SpawnRarity1=<c val="{#Colors/generic}">生成稀有度：</c>{#Rarities/{1}/NameColored}
+Petal/Attribute/SpawnRarityN=<c val="{#Colors/generic}">生成稀有度：</c>{#Rarities/{1}/NameColored}（{0}个）
+Petal/Attribute/Luck=<c val="{#Colors/generic}">幸运值：</c>+{0:tooltip}
+Petal/Attribute/MovementSpeed=<c val="{#Colors/generic}">移动速度：</c>+{0:perc}%
+Petal/Attribute/HealBonus=<c val="{#Colors/heal}">治疗增益：</c>+{0:perc}%
+Petal/Attribute/MobAggroRange=<c val="{#Colors/generic}">生物仇恨距离：</c>-{0:perc}%
+Petal/Attribute/FlowerKnockback=<c val="{#Colors/generic}">花朵击退：</c>+{0:tooltip}
+Petal/Attribute/SelfDamage=<c val="{#Colors/damage}">自我伤害：</c>{0:tooltip}
+Petal/Attribute/ArmorDebuff=<c val="{#Colors/armor}">护甲减益：</c>{0:tooltip}
+Petal/Attribute/FlowerArmor=<c val="{#Colors/armor}">花朵护甲：</c>{0:tooltip}
+Petal/Attribute/FlowerEvasion=<c val="{#Colors/generic}">花朵闪避：</c>+{0:perc}%
+Petal/Attribute/Charges=<c val="{#Colors/generic}">充能：</c>{0:tooltip}
+Petal/Attribute/OverhealConversion=<c val="{#Colors/generic}">过量治疗转化：</c>+{0:perc}%
+Petal/Attribute/AffectedByMagnets=<c val="{#Colors/generic}">受磁铁干扰</c>
+Petal/Attribute/CanFindSquares=<c val="{#Colors/generic}">可以找到不属于此的生物</c>
+Petal/Attribute/CollisionDamageResistance=<c val="{#Colors/generic}">碰撞伤害抗性：</c>+{0:perc}%
+Petal/Attribute/Evasion=<c val="{#Colors/generic}">闪避：</c>{0:perc}%
+Petal/Attribute/Health4=<c val="{#Colors/health}">耐久：</c>{0:tooltip}/{1:tooltip}/{2:tooltip}/{3:tooltip}
+Petal/Attribute/Damage2=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/{1:tooltip}
+Petal/Attribute/Damage4=<c val="{#Colors/damage}">伤害：</c>{0:tooltip}/{1:tooltip}/{2:tooltip}/{3:tooltip}
+Petal/Attribute/ExtraPoison=<c val="{#Colors/poison}">额外剧毒：</c>{0:tooltip}秒
+Petal/Attribute/Interval=<c val="{#Colors/generic}">间隔：</c>{0:tooltipTime}
+Petal/Attribute/CorruptsFlowersAround=<c val="{#Colors/generic}">腐化你周围的花朵。</c>
+Petal/Attribute/CannotBeUnequipped=<c val="{#Colors/generic}">无法卸下。</c>
+Petal/Attribute/PetalLostOnDeath=<c val="{#Colors/danger}">死亡时丢失。</c>
+Petal/Attribute/CannotBeUnequippedWhileAlive=<c val="{#Colors/generic}">无法在存活时卸下。</c>
+Petal/Attribute/Mana=<c val="{#Colors/mana}">魔力：</c>{0:tooltip}
+Petal/Attribute/ManaPerSecond=<c val="{#Colors/mana}">魔力：</c>{0:tooltip}/秒
+Petal/Attribute/BaseMaxMana=<c val="{#Colors/mana}">基础魔力上限：</c>{0:tooltip}
+Petal/Attribute/MaxMana=<c val="{#Colors/mana}">魔力上限：</c>+{0:tooltip}
+Petal/Attribute/AllowsFindingMagicPetals=<c val="{#Colors/mana}">可以发现魔法花瓣。</c>
+Petal/Attribute/DamageAbsorptionPerMana=<c val="{#Colors/generic}">伤害吸收：</c>{0:tooltip}/<c val="{#Colors/mana}">魔力</c>
+Petal/Attribute/LightningPerMana=<c val="{#Colors/lightning}">闪电：</c>{0:tooltip}/<c val="{#Colors/mana}">魔力</c>
+Petal/Attribute/SpawnManaCost=<c val="{#Colors/generic}">生成消耗：</c>{0:tooltip}<c val="{#Colors/mana}">魔力</c>
+Petal/Attribute/MaintenanceManaCost=<c val="{#Colors/generic}">维持消耗：</c>{0:tooltip}<c val="{#Colors/mana}">魔力</c>/秒
+Petal/Attribute/ExtraDropChance=<c val="{#Colors/generic}">有{0:perc}%的概率可以从生物获得一份额外的掉落物。</c>
+Petal/Attribute/ReloadPerc=<c val="{#Colors/generic}">冷却时间：</c>-{0:perc}%
+Petal/Attribute/LockInHel=<c val="{#Colors/danger}">被标记者将在冥界被困{0:time}。</c>
+Petal/Attribute/Controls=<c val="{#Colors/generic}">激活制导：</c>{#Petals/{0:base}/FullName}（{#Rarities/{0:rarity}/NameColored}及以下等级）
+Petal/Attribute/Broken=<c val="{#Colors/danger}">已损坏。</c>
+Petal/Attribute/UndeadDuration=<c val="{#Colors/undead}">死亡延缓：</c>{0:tooltipTime}
+Petal/Attribute/UnrevivableDuration=<c val="{#Colors/danger}">无法复活：</c>{0:tooltipTime}
+Petal/Attribute/BodyDamageReduction=<c val="{#Colors/damage}">身体伤害：</c>-{0:perc}%
+Petal/Attribute/PetalConsumedWhenUsed=<c val="{#Colors/danger}">使用时消耗。</c>
+Petal/Attribute/MobHealth=<c val="{#Colors/health}">生物生命值：</c>{0:tooltip}
+Petal/Attribute/MobDamage=<c val="{#Colors/damage}">生物伤害：</c>{0:tooltip}
+Petal/Attribute/Limit=<c val="{#Colors/generic}">上限：</c> {0:tooltip}
+Petal/Attribute/Missiles=<c val="{#Colors/generic}">导弹：</c>{0:tooltip}个
+Petal/Attribute/MissileHealth=<c val="{#Colors/health}">导弹耐久：</c>{0:tooltip}
+Petal/Attribute/MissileDamage=<c val="{#Colors/damage}">导弹伤害：</c>{0:tooltip}
+Petal/Attribute/MissilePoison=<c val="{#Colors/poison}">导弹剧毒：</c>{0:tooltip}（{1:tooltip}/秒）
+Petal/Attribute/PetalAttractionRange=<c val="{#Colors/generic}">花瓣吸引距离：</c>+{0:tooltip}
+Petal/Attribute/PetalHealthBonus=<c val="{#Colors/health}">花瓣耐久：</c>+{0:perc}%
+Petal/Attribute/ReloadPercInc=<c val="{#Colors/generic}">冷却时间：</c>+{0:perc}%
+Petal/Attribute/RelicAura=<c val="{#Colors/generic}">影响你周围的花朵。</c>

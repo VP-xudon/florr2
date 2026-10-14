@@ -1,8 +1,13 @@
-// cards.js — 卡牌渲染接口：稀有度「双色圆角底板」+ 素材（自带白色漫画字母）拼接
+// cards.js — 卡牌渲染接口：稀有度「双色圆角底板」+ 素材（纯图形）+ i18n 名称文字
 // 参照成品卡（Antennae_29 / Dark_Mark_29）：
 //   - 外框 = 同等级颜色偏深（圆角方），内板 = 同色纯色（更亮）；
-//   - 图形与名称由素材自带（黑色图形 + 白色漫画字+黑描边），卡牌不再叠加文字层；
+//   - 图形与名称由素材/文字层共同构成：图形取 petal/ 里【已去除名称字母、已居中】的纯素材，
+//     名称文字按原字母的位置与大小实时绘制（白字 + 黑描边 + Ubuntu 800）；
 //   - 全程纯色，无任何渐变。
+//
+// 名称文本一律来自 i18N（Petals/<slug>/Name），因此切换译文包时卡面文字随之改变，
+// 而图形的位置/大小与原版像素级一致（布局参数见 assets/petal-metrics.js）。
+// 早期名称字母是烘焙在 SVG 里的（assets/petaltmp/），那样卡面文字就固定无法翻译了。
 //
 // 素材里烘焙了一层底板色（如 common 的 #cfcfcf）。做法：取素材原文，把非白(#fff)/非黑(#000)
 // 的颜色统一换成稀有度色，白与黑原样保留 —— 于是素材的底板与内板同色融为一体，只剩图形与名称。
@@ -10,11 +15,15 @@
 
 const CardRenderer = (function () {
   const _tinted = {};   // `${svgId}|${rarity}` -> dataURL（已对齐稀有度的素材）
-  const _raw = {};      // svgId -> Promise<string|null>（素材原文，按需拉取）
+  const _raw = {};      // svgId -> Promise<string|null>（拆分后素材原文，花瓣实体用）
+  const _rawCard = {};  // svgId -> Promise<string|null>（原始素材原文，卡牌用）
   const _fit = {};      // svgId -> 收紧后的 viewBox（只依赖素材本身，与稀有度无关）
 
   // 素材在卡面里的占比：1 = 完全撑满（想要再大/再小改这一个数）
   const ART_SCALE = 0.7;
+  // 花瓣本体在卡面里的额外上移量（占内板高度的比例）。
+  // 只动图形，名称文字仍按原字母位置对齐，所以视觉上只有花瓣本体偏上。
+  const ART_LIFT = 0.07;
 
   function hexToRgb(hex) {
     hex = (hex || '#888888').replace('#', '');
@@ -32,11 +41,23 @@ const CardRenderer = (function () {
     return (RARITIES[rarity] && RARITIES[rarity].color) || '#9aa3a0';
   }
 
-  function loadRaw(svgId) {
-    if (_raw[svgId]) return _raw[svgId];
-    _raw[svgId] = fetch('assets/petals/' + svgId + '.svg')
+  // 两个素材来源（都由脚本预先处理好，运行时不再做任何启发式拆字 / 调距）：
+  //   petaltmp/ = 原始素材（自带白色漫画名称字母）-> 仅供「卡牌」使用（卡上要显示名字）
+  //   petal/    = 拆分后的素材（已去掉底部文字、图形平移到画布正中、大小不变）-> 供「花瓣实体」使用
+  // 两者都带 ASSET_VER：素材内容换过但文件名没变，必须靠版本号强制浏览器重新拉取，
+  // 否则会一直用缓存里的旧文件（表现为"花瓣还带着字"）。
+  function loadRawCard(svgId) {
+    if (_rawCard[svgId]) return _rawCard[svgId];
+    _rawCard[svgId] = fetch('assets/petaltmp/' + svgId + '.svg?v=' + ASSET_VER)
       .then((r) => (r.ok ? r.text() : null))
       .catch(() => null);          // file:// 等场景拉取失败 -> 回退为原素材
+    return _rawCard[svgId];
+  }
+  function loadRaw(svgId) {
+    if (_raw[svgId]) return _raw[svgId];
+    _raw[svgId] = fetch('assets/petals/' + svgId + '.svg?v=' + ASSET_VER)
+      .then((r) => (r.ok ? r.text() : null))
+      .catch(() => null);
     return _raw[svgId];
   }
 
@@ -74,13 +95,30 @@ const CardRenderer = (function () {
     return vb;
   }
 
-  // 取素材（原色 + 收紧画布）。只依赖素材本身，与稀有度无关。
+  // 卡面布局参数（由 assets/petal-metrics.js 离线提供，运行时零测量）：
+  //   vb = 卡面素材的 viewBox —— 与旧版 fitViewBox 的算法完全一致
+  //        （原素材"图形+名称"整体包围盒按 1/ART_SCALE 放大并居中）
+  //        => 图形的位置与大小和原版像素级相同
+  //   t  = 原素材中名称字母的位置 [cx, top, bottom]（同一 viewBox 坐标系）
+  //   sw = 原素材名称字母的描边宽度（同一 viewBox 坐标系）
+  // 卡面图形一律取自 petal/（已去字母、已居中的纯素材）；名称文字按 t 的位置实时绘制，
+  // 文本取自 i18n —— 所以切换语言包，卡牌上的名字会跟着变，而图形丝毫不动。
+  function metrics(svgId) {
+    const M = (typeof window !== 'undefined' && window.PETAL_METRICS) ? window.PETAL_METRICS : null;
+    return (M && svgId != null && M[svgId]) ? M[svgId] : null;
+  }
+
+  // 取卡面素材（纯图形 + 收紧画布）。只依赖素材本身，与稀有度无关。
+  // 有预置参数 -> 用 petal/ 的纯图形素材；没有（参数文件缺失等极端情况）-> 退回原始素材
+  // （字母烘焙在图上），两种情况下卡面都不会空白。
   function asset(svgId) {
     if (_tinted[svgId] !== undefined) return Promise.resolve(_tinted[svgId]);
-    return loadRaw(svgId).then((txt) => {
+    const mt = metrics(svgId);
+    const loader = mt ? loadRaw : loadRawCard;
+    return loader(svgId).then((txt) => {
       if (!txt) { _tinted[svgId] = null; return null; }
       let out = txt;
-      const vb = fitViewBox(svgId, txt);      // 收紧画布 -> 图形撑满
+      const vb = mt ? mt.vb : fitViewBox(svgId, txt);      // 收紧画布 -> 图形撑满
       if (vb) {
         out = /viewBox="[^"]*"/.test(out)
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb + '"')
@@ -92,19 +130,12 @@ const CardRenderer = (function () {
     });
   }
 
-  // ---- 世界里的"花瓣实体"：素材自带名称字母，这里把字母去掉，只留图形本身 ----
-  // 名称特征：位于整体底部、且比整体扁很多（是文字而不是图形）。
-  function stripName(svg) {
-    const all = svg.getBBox();
-    if (!(all.height > 0)) return;
-    for (const el of Array.from(svg.children)) {
-      if (el.tagName.toLowerCase() !== 'path') continue;
-      let bb; try { bb = el.getBBox(); } catch (e) { continue; }
-      if (bb.y > all.y + all.height * 0.55 && bb.height < all.height * 0.4) el.remove();
-    }
-  }
-
-  const _artSvg = {};   // svgId -> Promise<string|null>（去字母 + 收紧画布的素材文本）
+  // ---- 世界里的"花瓣实体"：直接用 petal/ 里【已拆分好】的素材 ----
+  // petal/ 的素材已去掉底部名称字母、并把剩余图形平移到画布正中央（viewBox 仍是 110×110）。
+  // 但图形只占画布中间一小块，若原样用作精灵，图形会非常小 —— 所以这里把 viewBox
+  // 【收紧到内容包围盒】。这一步纯粹是"贴合内容"的机械操作：素材里已经没有文字了，
+  // 不再需要任何"哪个 path 是字母"的启发式判断（那是旧实现的风险来源）。
+  const _artSvg = {};   // svgId -> Promise<string|null>（收紧画布后的素材文本）
   function artSvg(svgId) {
     if (_artSvg[svgId]) return _artSvg[svgId];
     _artSvg[svgId] = loadRaw(svgId).then((txt) => {
@@ -118,9 +149,8 @@ const CardRenderer = (function () {
         box.innerHTML = txt;
         const svg = box.querySelector('svg');
         let out = txt;
-        if (svg) {
-          stripName(svg);                          // 去掉名称字母
-          const bb = svg.getBBox();                // 收紧到剩下的图形
+        if (svg && svg.getBBox) {
+          const bb = svg.getBBox();          // 含 <g transform> 的整体包围盒
           if (bb.width > 0 && bb.height > 0) {
             svg.setAttribute('viewBox', `${bb.x} ${bb.y} ${bb.width} ${bb.height}`);
           }
@@ -128,7 +158,7 @@ const CardRenderer = (function () {
         }
         box.remove();
         return out;
-      } catch (e) { return null; }
+      } catch (e) { return txt; }
     });
     return _artSvg[svgId];
   }
@@ -208,8 +238,25 @@ const CardRenderer = (function () {
   // 数量角标：改为 DOM 文本（.card-count），不再画在 canvas 上。
   // 原因：canvas 会被自身边界裁掉，数量文字（尤其 x10 / ∞ 这种）显示不全；
   // DOM 元素可以自由溢出卡牌框框边界。字号/描边在 paint() 里按卡面尺寸同步。
+  //
+  // 元素是 canvas 的【兄弟节点】（canvas 不能有子元素），所以必须等 canvas 入 DOM 后才能建。
+  // 建的时候紧跟在 canvas 后面插入，父级（.qslot / .cardcell / .qinner）都是定位上下文，
+  // 用百分比定位即可随卡牌尺寸等比缩放。
+  function ensureCountEl(cv) {
+    if (cv._countEl) return cv._countEl;
+    const p = cv.parentElement;
+    if (!p) return null;
+    const el = document.createElement('div');
+    el.className = 'card-count';
+    el.style.display = 'none';
+    cv._countEl = el;
+    if (cv.nextSibling) p.insertBefore(el, cv.nextSibling);
+    else p.appendChild(el);
+    return el;
+  }
+
   function syncCount(cv, st) {
-    const el = cv._countEl;
+    const el = ensureCountEl(cv);
     if (!el) return;
     const txt = (st.count === Infinity) ? '∞' : (st.count > 0 ? ('x' + fmtNum(st.count)) : '');
     if (!txt) { el.textContent = ''; el.style.display = 'none'; return; }
@@ -218,6 +265,66 @@ const CardRenderer = (function () {
     el.style.display = '';
     el.style.fontSize = fs.toFixed(2) + 'px';
     el.style.webkitTextStrokeWidth = (fs * 0.115).toFixed(2) + 'px';
+  }
+
+  // 名称字号：以「原素材字母的字高」为基准反推，而不是按 measureText 的墨迹包围盒反推。
+  //   原文字母高度 ≈ 0.72 × 字号（Ubuntu 的 cap height 比例）=> 字号 = 字高 / 0.72。
+  // 这样英文和中文拿到的是【同一个字号】—— 中文全角字形笔画更满，同字号下看起来自然比英文
+  // 大一点，绝不会出现"切到中文突然变得非常小"。
+  // （旧实现按 actualBoundingBoxAscent+Descent 反推：中文字形墨迹占比约 0.86、英文约 0.75，
+  //   同样字高下中文字号会被压小 15%+；而遇到不返回 actualBoundingBox* 的浏览器/回退字体时
+  //   h=0 直接 break，字号退化成"字高"本身（约小 28%），中文就显得特别小。）
+  // 之后再按可用宽度收缩一两次，保证长译名也不溢出卡面。
+  function fitNameFont(ctx, text, targetH, maxW) {
+    let fs = targetH / 0.72;
+    if (maxW > 0 && fs > 4) {
+      for (let i = 0; i < 3; i++) {
+        ctx.font = `800 ${fs}px ${FONT}`;
+        const w = ctx.measureText(text).width;
+        if (!(w > maxW)) break;
+        fs *= Math.max(0.55, maxW / w);
+      }
+    }
+    return fs;
+  }
+
+  // 卡牌名称：绘制在「原素材自带字母」的同一位置、同一大小，白字 + 黑描边（先描边后填充，
+  // 等价于 SVG 的 paint-order:stroke fill），Ubuntu 800 —— 观感与原来烘焙在素材里的字母一致。
+  // 文本取自 i18N（Petals/<slug>/Name），因此切换译文包时卡面文字随之改变。
+  // (ox,oy,dw,dh) = 素材在小地图/卡面上实际绘制出的矩形，用于把 viewBox 坐标换算成像素。
+  function drawName(ctx, st, ox, oy, dw, dh) {
+    const mt = st.metrics;
+    if (!mt || !mt.t || !mt.vb) return;
+    const name = st.name;
+    if (!name) return;
+    const vb = mt.vb;
+    const sx = dw / vb[2], sy = dh / vb[3];           // viewBox -> 卡面像素 的缩放
+    const bx = ox - vb[0] * sx, by = oy - vb[1] * sy; // 平移
+    const cx = bx + mt.t[0] * sx;
+    const top = by + mt.t[1] * sy;
+    const bot = by + mt.t[2] * sy;
+    const targetH = bot - top;
+    if (!(targetH > 1)) return;
+    // 可用宽度：取素材绘制宽度的 92%（原字母约占 70%，留点余量给更长的译名）
+    const fs = fitNameFont(ctx, name, targetH, dw * 0.92);
+    if (!(fs > 2)) return;
+    ctx.save();
+    ctx.font = `800 ${fs}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const m = ctx.measureText(name);
+    // 垂直定位仍用真实墨迹度量：让文字【顶部】正好落在原字母顶部（中英文都准）。
+    // 取不到 actualBoundingBox* 时退回 0.72×字号（cap height），与基准一致。
+    const asc = (m.actualBoundingBoxAscent != null) ? m.actualBoundingBoxAscent : fs * 0.72;
+    const baseY = top + asc;
+    ctx.lineWidth = (mt.sw != null) ? (mt.sw * Math.max(sx, sy)) : fs * 0.115;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(name, cx, baseY);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(name, cx, baseY);
+    ctx.restore();
   }
 
   function drawCard(cv, st) {
@@ -237,13 +344,20 @@ const CardRenderer = (function () {
     if (iw > 0 && ih > 0) {
       ctx.fillStyle = base;
       ctx.fillRect(p, p, iw, ih);
-      // 素材：contain 塞进内板
+      // 素材：contain 塞进内板；同时记下它实际绘制出的矩形，供名称文字对齐使用
       const im = st.img;
+      let ox = p, oy = p, dw = iw, dh = ih;
       if (im && im.complete && im.naturalWidth > 0 && im.naturalHeight > 0) {
         const k = Math.min(iw / im.naturalWidth, ih / im.naturalHeight);
-        const dw = im.naturalWidth * k, dh = im.naturalHeight * k;
-        ctx.drawImage(im, p + (iw - dw) / 2, p + (ih - dh) / 2, dw, dh);
+        dw = im.naturalWidth * k; dh = im.naturalHeight * k;
+        ox = p + (iw - dw) / 2; oy = p + (ih - dh) / 2;
+        // 花瓣本体略微上移（按内板高度取比例，随卡牌大小等比缩放）。
+        // 名称文字仍按未上移的矩形对齐，所以只有图形动、名字留在原位。
+        oy -= ih * ART_LIFT;
+        ctx.drawImage(im, ox, oy, dw, dh);
       }
+      // 名称：按原素材字母的位置/大小实时绘制（观感与原来烘焙在素材里的字母一致）
+      drawName(ctx, st, ox, oy + ih * ART_LIFT, dw, dh);
     }
     // 数量角标由 DOM（.card-count）负责，这里只同步文本与字号
     syncCount(cv, st);
@@ -268,10 +382,18 @@ const CardRenderer = (function () {
     if (o.size) { cv.style.width = o.size + 'px'; cv.style.height = o.size + 'px'; }
     cv._card = {
       rarity: o.rarity || 'common',
+      svg: o.svg || null,                 // 用于反查名称与布局参数
       count: (o.count != null) ? o.count : null,
       pad: o.pad, radius: o.radius,
       img: null
     };
+    // 名称与布局参数在「绘制时」解析：语言包若后加载/切换，卡面文字会随之更新
+    if (o.svg) {
+      const t = (typeof getPetal === 'function') ? getPetal(o.svg) : null;
+      if (t && t.name) cv._card.name = t.name;
+      const mt = metrics(o.svg);
+      if (mt) cv._card.metrics = mt;
+    }
     if (o.svg) {
       // 先画纯色卡面，素材就绪后自动重绘（与原来 img 异步替换同一观感）
       asset(o.svg).then((u) => { if (u) { cv._card.img = imgFor(cv, u); paint(cv); } });
@@ -290,6 +412,12 @@ const CardRenderer = (function () {
   function repaintAll(root) {
     const list = (root || document).querySelectorAll('canvas.card');
     for (const cv of list) paint(cv);
+  }
+
+  // Ubuntu 走 Google Fonts 异步加载（display=swap）：卡牌可能在字体到位前就画好了，
+  // 那时名称会用了回退字体且不会自动更新。这里主动触发一次加载，就绪后统一重绘。
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.load) {
+    document.fonts.load('800 16px Ubuntu').then(() => repaintAll()).catch(() => {});
   }
 
   return { createCard, darken, rarityColor, artCanvas, repaintAll, FONT };
