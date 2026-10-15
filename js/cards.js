@@ -20,6 +20,13 @@ const CardRenderer = (function () {
 
   // 素材在卡面里的占比：1 = 完全撑满（想要再大/再小改这一个数）
   const ART_SCALE = 0.7;
+  // 装填阴影角位移的「缓入」参数（drawReload 用）：
+  //   POW   > 1 表示越转越快；越大末段越快（要求"最后快一点"）
+  //   FLOOR 线性分量下限：保证起步瞬间角速度不为 0（否则看起来像卡住不动）
+  // POW=2.5、FLOOR=0.12 -> 角速度从 0.12 升到 2.32（约 19 倍）；
+  // 时间过半时只转过 21.6%，最后 20% 的时间转过 40% —— 末段明显更快。
+  const RELOAD_EASE_POW = 2.5;
+  const RELOAD_EASE_FLOOR = 0.12;
   // 花瓣本体在卡面里的额外上移量（占内板高度的比例）。
   // 只动图形，名称文字仍按原字母位置对齐，所以视觉上只有花瓣本体偏上。
   const ART_LIFT = 0.07;
@@ -278,10 +285,42 @@ const CardRenderer = (function () {
     return fs;
   }
 
+  // 装填（reload）阴影：画在【内板之上、花瓣图形与名称之下】。
+  // 因此阴影只压暗卡牌中部那一块底板，花瓣本体和名字完全不被遮盖（用户要求）。
+  // 形状 = 一块"无阴影扇形"在长大，扇形之外是阴影；扇形两条边界（慢/快）同步加速，
+  // 快边界角速度恒为慢边界的 2 倍（相对速度不变），装填完成时正好覆盖整圈 -> 阴影消失。
+  // (p, iw, ih) = 内板矩形；扇形圆心即内板中心，半径取内板半对角线保证盖住四角。
+  function drawReload(ctx, st, p, iw, ih) {
+    const rl = st.reload;
+    if (!rl || !(rl.dur > 0) || rl.age >= rl.dur) return;
+    const t = Math.max(0, Math.min(1, rl.age / rl.dur));
+    const e = RELOAD_EASE_FLOOR * t
+            + (1 - RELOAD_EASE_FLOOR) * Math.pow(t, RELOAD_EASE_POW);
+    const slow = e * TAU;                    // 慢边界：装填完成时正好转满一圈
+    const fast = e * TAU * 2;                // 快边界：转速恒为慢的 2 倍
+    if (fast - slow >= TAU - 1e-3) return;   // 已铺满：不留阴影
+    const cx = p + iw / 2, cy = p + ih / 2;
+    const rad = Math.hypot(iw, ih) / 2 + 1;
+    // canvas 的 0° 在正右方，而描述中的"起点"习惯用正上方 -> 统一减 π/2
+    const a0 = -Math.PI / 2 + fast;          // 阴影从快边界开始
+    const a1 = -Math.PI / 2 + slow + TAU;    // 绕一大圈到慢边界
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(p, p, iw, ih);
+    ctx.clip();                              // 绝不溢出内板（卡牌描边不被遮住）
+    ctx.fillStyle = 'rgba(18, 24, 20, 0.5)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, rad, a0, a1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   // 卡牌名称：绘制在「原素材自带字母」的同一位置、同一大小，白字 + 黑描边（先描边后填充，
   // 等价于 SVG 的 paint-order:stroke fill），Ubuntu 800 —— 观感与原来烘焙在素材里的字母一致。
   // 文本取自 i18N（Petals/<slug>/Name），因此切换译文包时卡面文字随之改变。
-  // (ox,oy,dw,dh) = 素材在小地图/卡面上实际绘制出的矩形，用于把 viewBox 坐标换算成像素。
+  // (ox,oy,dw,dh) = 素材在卡面上实际绘制出的矩形，用于把 viewBox 坐标换算成像素。
   function drawName(ctx, st, ox, oy, dw, dh) {
     const mt = st.metrics;
     if (!mt || !mt.t || !mt.vb) return;
@@ -296,7 +335,12 @@ const CardRenderer = (function () {
     const targetH = bot - top;
     if (!(targetH > 1)) return;
     // 可用宽度：取素材绘制宽度的 92%（原字母约占 70%，留点余量给更长的译名）
-    const fs = fitNameFont(ctx, name, targetH, dw * 0.92);
+    // 字号按 (名称, 目标字高) 缓存：装填期间每帧都会重绘，不能每次都跑 measureText 迭代
+    if (st._fsName !== name || st._fsH !== targetH) {
+      st._fs = fitNameFont(ctx, name, targetH, dw * 0.92);
+      st._fsName = name; st._fsH = targetH;
+    }
+    const fs = st._fs;
     if (!(fs > 2)) return;
     ctx.save();
     ctx.font = `800 ${fs}px ${FONT}`;
@@ -334,6 +378,9 @@ const CardRenderer = (function () {
     if (iw > 0 && ih > 0) {
       ctx.fillStyle = base;
       ctx.fillRect(p, p, iw, ih);
+      // 装填阴影：先画（在内板之上）-> 后面的花瓣图形与名称会盖在它上面，
+      // 所以阴影只压暗底板，花瓣本体和名字完全不被遮盖
+      drawReload(ctx, st, p, iw, ih);
       // 素材：contain 塞进内板；同时记下它实际绘制出的矩形，供名称文字对齐使用
       const im = st.img;
       let ox = p, oy = p, dw = iw, dh = ih;
@@ -410,5 +457,5 @@ const CardRenderer = (function () {
     document.fonts.load('800 16px Ubuntu').then(() => repaintAll()).catch(() => {});
   }
 
-  return { createCard, darken, rarityColor, artCanvas, repaintAll, FONT };
+  return { createCard, darken, rarityColor, artCanvas, repaintAll, paintCard: paint, FONT };
 })();

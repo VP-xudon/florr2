@@ -20,8 +20,11 @@ const RARITIES = {
 const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
 
 // ---------------- 可用花瓣白名单 ----------------
-// 当前只启用 Basic：其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
-const ENABLED_PETAL_SLUGS = new Set(['basic']);
+// 只有列在这里的花瓣会真正进入游戏（按 slug，slug = 英文名小写、空格转下划线）。
+// 其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
+//   basic = id 1（Basic / 基本）
+//   rose  = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
+const ENABLED_PETAL_SLUGS = new Set(['basic', 'rose']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -74,8 +77,14 @@ function buildPetalTypes() {
       svg: id,                                  // assets/petals/<id>.svg
       dmg: (p.stats && p.stats.dmg) || 0,
       hp: (p.stats && p.stats.hp) || 0,
+      heal: (p.stats && p.stats.heal) || 0,      // 治疗量：只有部分花瓣有（如 Rose），0 = 无此属性
       spd: (p.stats && p.stats.spd) || 0,
+      // 冷却秒数：优先用显式的 reload；否则回退 stats.spd（历史约定，目前只有 Basic 走这条）。
+      // 注意 stats.spd 的本义是移动速度修正值（Rose 为 -12），所以有 reload 字段时以它为准。
+      reload: (p.reload != null) ? p.reload : Math.max(0, (p.stats && p.stats.spd) || 0),
+      reloadText: p.reloadText || null,          // 冷却的展示文本（如 "3.5s + 1.5s"），为空则按 reload 生成
       rarityMultipliers: p.rarityMultipliers || null,  // 稀有度倍率表（仅Basic有）
+      rarityStats: p.rarityStats || null,        // 各稀有度数值表（Rose 有：dmg/hp/heal）
       kind: p.kind || 'misc',
       identified: true,
       wiki: p.wiki || null
@@ -87,6 +96,12 @@ function buildPetalTypes() {
 }
 
 // ---------------- 生物 ----------------
+// registry 的 rarities 用的是中文键（普通/罕见/…），这里统一映射到英文稀有度键，
+// 与 RARITY_ORDER 对齐，方便按 RARITIES[rarity].color 取色、按 I18N 取译名。
+const MOB_RARITY_KEY = {
+  '普通': 'common', '罕见': 'unusual', '稀有': 'rare', '史诗': 'epic', '传奇': 'legendary',
+  '神话': 'mythic', '究极': 'ultra', '超级': 'super', '永恒': 'eternal', '唯一': 'unique'
+};
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
   const out = [];
@@ -96,12 +111,25 @@ function buildMobTypes() {
     if (id >= FANMADE_MOB_FROM) { flagManual('mob', id, m.name, '二创/超范围内容已忽略（如需启用请手填 registry）'); continue; }
     if (m.fanmade) { flagManual('mob', id, m.name, '标记为二创，已忽略'); continue; }
     if (!m.name || !String(m.name).trim()) { flagManual('mob', id, ('#' + id), '名称缺失，已忽略（待手填）'); continue; }
+    // 各稀有度数值表：中文键 -> 英文稀有度键（hp/dmg/exp）
+    let rarityStats = null;
+    if (m.rarities) {
+      rarityStats = {};
+      for (const zh in m.rarities) {
+        const rk = MOB_RARITY_KEY[zh];
+        if (!rk) continue;
+        const v = m.rarities[zh] || {};
+        rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0 };
+      }
+    }
     const t = {
       id, name: I18N.t('Mobs/' + ((m.name || '').toLowerCase().replace(/ /g, '_')) + '/Name', m.name), zh: m.zh || '', svg: id,
       hp: m.hp, dmg: m.dmg, speed: m.speed, size: m.size, tier: m.tier,
       color: m.color || '#888', boss: !!m.boss,
       type: m.type || '', biome: m.biome || '', desc: m.desc || '',
-      rarities: m.rarities || null
+      rarities: m.rarities || null,
+      rarityStats,                       // 英文稀有度键 -> { hp, dmg, exp }
+      ai: m.ai || null                   // 官方 AI 开关（aggro/chase/flee/retaliate…）
     };
     out.push(t);
     MOB_BY_ID[id] = t;
@@ -165,3 +193,9 @@ function rollMobType(level) {
 // 起始装备用：取第一个花瓣与第一个攻击型花瓣
 const STARTER_PETAL_A = PETAL_TYPES[0] ? PETAL_TYPES[0].key : 'p1';
 const STARTER_PETAL_B = (PETAL_TYPES.find(t => t.kind === 'attack') || PETAL_TYPES[1] || PETAL_TYPES[0]).key;
+
+// 初始生物：出生点附近固定生成 3 只 Ladybug（id 3），稀有度各一只。
+// 距离取 190 世界像素 —— 既"间隔不要太远"，又不会和出生点重叠。
+const STARTER_MOB_ID = 3;
+const STARTER_MOB_RARITIES = ['common', 'legendary', 'super'];
+const STARTER_MOB_RADIUS = 190;

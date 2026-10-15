@@ -28,6 +28,32 @@ const PETAL_GHOST_T = 0.2;
 function spawnFade(age) { return clamp(age / FADE_T, 0, 1); }                 // 出场：0 -> 1 的 alpha
 function deathFade(t01) { return { scale: 1 + (DEATH_SCALE - 1) * t01, alpha: 1 - t01 }; }
 
+// 圆角矩形路径（ cards.js 里那份在闭包内，这里给实体绘制单独放一份）
+function roundRectPath(ctx, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// 绘制生物贴图：用「裁剪到实际图案」的版本，使图案正好撑满 size（= 碰撞箱直径）。
+// 普通 drawSprite 按 viewBox 绘制，生物 SVG 外圈有一大片透明留白，图案会明显小一圈。
+function drawMob(ctx, key, size, x, y, rot, scale, alpha, white) {
+  const cv = white ? SpriteStore.artWhiteCanvas(key, size) : SpriteStore.artCanvas(key, size);
+  if (!cv) return;
+  ctx.save();
+  ctx.translate(x, y);
+  if (rot) ctx.rotate(rot);
+  if (scale && scale !== 1) ctx.scale(scale, scale);
+  if (alpha != null) ctx.globalAlpha = alpha;
+  ctx.drawImage(cv, -size / 2, -size / 2, size, size);
+  ctx.restore();
+}
+
 // 绘制已预渲染的贴图（支持旋转/缩放/透明）
 function drawSprite(ctx, key, size, x, y, rot, scale, alpha) {
   const cv = SpriteStore.canvas(key, size);
@@ -67,6 +93,19 @@ function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
 
 function moveEntity(entity, dt, map) {
   const dx = entity.vx * dt, dy = entity.vy * dt;
+  // 有碰撞外形（生物，外形取自其 SVG 轮廓）就走多边形碰撞；否则按圆形（主角/卡片）
+  if (entity.shape && typeof map.moveShape === 'function') {
+    const position = map.moveShape(entity.x, entity.y, dx, dy, entity.shape, entity.drawSize);
+    entity.x = position.x; entity.y = position.y;
+    for (const normal of position.normals) {
+      const intoWall = entity.vx * normal.x + entity.vy * normal.y;
+      if (intoWall < 0) {
+        entity.vx -= intoWall * normal.x;
+        entity.vy -= intoWall * normal.y;
+      }
+    }
+    return;
+  }
   if (typeof map.move !== 'function') {
     entity.x += dx; entity.y += dy;
     const position = map.clampTo(entity.x, entity.y, entity.r);
@@ -108,6 +147,7 @@ class Player {
     this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
     this.reload = [];           // 主槽装填状态：{ card, age, dur } | null（与 slots 等长）
+    this.reloadHold = [];       // 主槽装填暂停标记：换卡动画播放期间为 true（UI 置位/清除）
     this.name = 'Flower';
     // 模式状态：空格=reach、Shift=detect
     this.mode = 'normal';        // 'normal' | 'reach' | 'detect'
@@ -157,14 +197,19 @@ class Player {
   // 每条主槽记录「当前这张卡 + 已装填时长 + 总时长」，总时长 = 该花瓣的 reload 秒数（type.spd）。
   // 判定"是否换卡"用【对象身份】而不是 key：同一张卡卸下再装回、或两槽互换，都算"刚替换上来"，
   // 必须重新结算（没装填完就被替换下去 -> 新上来的卡从头开始装填）。
+  // reloadHold[i] = true 时暂停计时：卡牌"换上来"的动画（互换翻转 / 飞入卡槽）播放期间不结算冷却，
+  // 等卡牌完全落进卡槽后才开始（由 UI 在动画结束时置回 false）。
   _tickReload(dt) {
     for (let i = 0; i < this.slots.length; i++) {
       const c = this.slots[i];
-      if (!c) { this.reload[i] = null; continue; }
+      if (!c) { this.reload[i] = null; this.reloadHold[i] = false; continue; }
       const r = this.reload[i];
       if (!r || r.card !== c) {
-        this.reload[i] = { card: c, age: 0, dur: Math.max(0, (c.type && c.type.spd) || 0) };
-      } else {
+        // 冷却时长：优先 type.reload（显式字段）；否则回退 type.spd（历史约定）
+        const dur = (c.type && c.type.reload != null)
+          ? c.type.reload : Math.max(0, (c.type && c.type.spd) || 0);
+        this.reload[i] = { card: c, age: 0, dur };
+      } else if (!this.reloadHold[i]) {
         r.age += dt;
       }
     }
@@ -354,23 +399,51 @@ class Player {
   }
 }
 
+// 生物视觉直径 = 主角视觉直径 × 各稀有度倍率。
+// 主角绘制半径 = r×1.2 = 13.2×1.2 = 15.84 -> 视觉直径 31.68。
+// 倍率按用户给的两个基准点等比取值：common ≈ 1.9×、legendary ≈ 4.5×，
+// 每升一级稀有度 ×1.2406，super/eternal/unique 顺势外推。
+const PLAYER_VISUAL_D = 13.2 * 1.2 * 2;
+const MOB_DIAM_STEP = Math.pow(4.5 / 1.9, 1 / 4);        // common -> legendary 共 4 级
+const MOB_DIAM_BASE = 1.9;                                // common 的直径倍率
+const MOB_DIAM = (function () {
+  const o = {};
+  const order = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal', 'unique'];
+  for (let i = 0; i < order.length; i++) o[order[i]] = MOB_DIAM_BASE * Math.pow(MOB_DIAM_STEP, i);
+  return o;
+})();
+// 生物 SVG 的实际图案只占 viewBox 的一部分（外圈是 clipPath 留白）。
+// 旧实现按 91.667/110 估算这个比例，但真实图案比 clipPath 更小，所以视觉总比碰撞箱小一圈。
+// 现在改为运行时按 alpha 通道实测包围盒并裁剪（见 SpriteStore.artCanvas），这里只留注释说明。
+const MOB_ART_RATIO = 91.667 / 110;
+
 class Mob {
-  constructor(type, x, y, level) {
+  constructor(type, x, y, level, rarity) {
     this.type = type; this.name = type.name; this.svg = type.svg; this.zh = type.zh || '';
     this.level = level || 1;
-    const sc = mobScale(this.level);
+    this.rarity = rarity || 'common';
+    this.aiConf = type.ai || null;      // 官方 AI 配置（aggro/chase/flee/retaliate…）
+    this.ai = MobAI.create(this);       // 运行时 AI 状态（只产出"移动欲望"）
+    // 各稀有度数值：有表就整表取用（hp/dmg），否则退回基础值
+    const rs = type.rarityStats && type.rarityStats[this.rarity];
+    const baseHp = rs ? (rs.hp || 0) : type.hp;
+    const baseDmg = rs ? (rs.dmg || 0) : type.dmg;
+    // 视觉直径按稀有度取（mobScale(level) 留给日后的星级/等级）
+    const diam = Math.round(PLAYER_VISUAL_D * (MOB_DIAM[this.rarity] || MOB_DIAM_BASE) * mobScale(this.level));
+    this.visualD = diam;
+    this.r = diam / 2;                  // 碰撞/名牌半径跟着视觉直径走
+    this.drawSize = diam;               // 贴图裁剪后正好撑满它 -> 视觉与碰撞箱一致
+    this.shape = null;                  // 碰撞外形（SVG 轮廓的凸包），贴图就绪后懒加载
     this.x = x; this.y = y; this.vx = 0; this.vy = 0;
-    this.r = type.size * sc; this.drawSize = type.size * 2.2 * sc;
-    this.maxHp = type.hp; this.hp = type.hp;
-    this.dmg = type.dmg; this.speed = (type.speed || 0) * SPEED_SCALE;
+    this.maxHp = baseHp; this.hp = baseHp;
+    this.dmg = baseDmg; this.speed = (type.speed || 0) * SPEED_SCALE;
     this.color = type.color; this.boss = !!type.boss;
-    this.facing = rand(0, TAU); this.bob = rand(0, TAU);
+    this.facing = rand(0, TAU);         // 朝向（无呼吸/浮动动画，用户要求生物保持静止姿态）
     this.flash = 0; this.hitCd = 0; this.squash = 0;
     this.dead = false; this.deathTimer = 0;
-    this.age = 0;                       // 出场计时（渐显用）
-    this.wanderA = rand(0, TAU); this.wanderT = 0;
-    this.aggro = false;
-    this.xpVal = 4 + type.tier * 4;
+    this.age = 0;                       // 出场计时（渐隐用）
+    this.aggro = false;                 // 仇恨：暂不启用（还没有伤害）
+    this.xpVal = rs ? (rs.exp || 0) : (4 + type.tier * 4);
   }
 
   update(dt, player, map) {
@@ -379,24 +452,26 @@ class Mob {
     this.flash = Math.max(0, this.flash - dt);
     this.hitCd = Math.max(0, this.hitCd - dt);
     this.squash = damp(this.squash, 0, 10, dt);
-    this.bob += dt;
-    const d = dist(this.x, this.y, player.x, player.y);
-    this.aggro = d < 520 && !player.dead;
-    let tx, ty;
-    if (this.aggro) {
-      const a = angleTo(this.x, this.y, player.x, player.y);
-      tx = Math.cos(a) * this.speed; ty = Math.sin(a) * this.speed;
-      this.facing = lerpAngle(this.facing, a, clamp(dt * 8, 0, 1));
-    } else {
-      this.wanderT -= dt;
-      if (this.wanderT <= 0) { this.wanderA = rand(0, TAU); this.wanderT = rand(1, 3); }
-      tx = Math.cos(this.wanderA) * this.speed * 0.35;
-      ty = Math.sin(this.wanderA) * this.speed * 0.35;
-      this.facing = lerpAngle(this.facing, this.wanderA, clamp(dt * 4, 0, 1));
-    }
-    this.vx = damp(this.vx, tx, 6, dt);
-    this.vy = damp(this.vy, ty, 6, dt);
+    // 碰撞外形要等贴图光栅化后才能从轮廓提取；取到一次就固定（外形不随动画变）
+    if (!this.shape) this.shape = SpriteStore.shape('mob' + this.svg, this.drawSize);
+
+    // —— 1) 问 AI：现在想怎么动。AI 只给"移动欲望"，不直接改坐标 ——
+    const want = MobAI.step(this.ai, dt, this);
+    // —— 2) 底层引擎响应欲望：与主角同一套指数阻尼，渐渐起步、渐渐停住 ——
+    const desire = (want.x !== 0 || want.y !== 0);
+    const rate = desire ? 9 : 4;        // 9 = 起步(约0.3s到位)，4 = 收尾(约0.5s停住)
+    this.vx = damp(this.vx, want.x, rate, dt);
+    this.vy = damp(this.vy, want.y, rate, dt);
+    // —— 3) 位移 + 墙体碰撞（与主角同一条管线）——
+    const px = this.x, py = this.y;
     moveEntity(this, dt, map);
+    // —— 4) 把实际位移回馈给 AI，它靠这个判断"这趟走完了" ——
+    MobAI.notifyMoved(this.ai, dist(px, py, this.x, this.y));
+    // —— 5) 朝向跟随真实移动方向；停下来就保持当前朝向（下一趟再转）——
+    const sp = Math.hypot(this.vx, this.vy);
+    if (sp > this.speed * 0.12) {
+      this.facing = lerpAngle(this.facing, Math.atan2(this.vy, this.vx), clamp(dt * 7, 0, 1));
+    }
   }
 
   draw(ctx) {
@@ -407,40 +482,72 @@ class Mob {
       scale *= d.scale;
       alpha = d.alpha;
     }
-    const bob = 1 + Math.sin(this.bob * 3) * 0.05;
+    // 注意：生物【不做】呼吸/浮动特效（用户明确要求），尺寸只由受击挤压与退场缩放决定。
     const key = 'mob' + this.svg;
+    // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     if (this.flash > 0) {
-      drawWhite(ctx, key, this.drawSize, this.x, this.y, this.facing, scale * bob,
-        spawnFade(this.age) * clamp(this.flash / 0.14, 0, 1) * 0.9);
+      drawMob(ctx, key, this.drawSize, this.x, this.y, this.facing, scale,
+        spawnFade(this.age) * clamp(this.flash / 0.14, 0, 1) * 0.9, true);
     } else {
-      drawSprite(ctx, key, this.drawSize, this.x, this.y, this.facing, scale * bob, alpha);
+      drawMob(ctx, key, this.drawSize, this.x, this.y, this.facing, scale, alpha, false);
     }
-    // 血条：永远显示在正下方，按当前尺寸缩放宽度，满血也显示
+    // 名牌（参照 生物.png）：名称(上) + 血条(中) + 稀有度(下)。
+    // 文字统一 Ubuntu 800 + 纯黑描边（与卡牌/悬浮框同款漫画字）；名称白色，稀有度用其本色。
     if (!this.dead) {
-      const w = Math.max(22, this.r * 1.8), h = Math.max(3, this.r * 0.16);
-      const hx = this.x - w / 2, hy = this.y + this.drawSize * 0.5 + 7;
-      const ratio = clamp(this.hp / this.maxHp, 0, 1);
-      ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(hx, hy, w, h);
-      // 颜色：高血绿、中黄、低红
-      const col = ratio > 0.5 ? '#43d35a' : (ratio > 0.25 ? '#e8c63a' : '#ff5a5a');
-      ctx.fillStyle = col; ctx.fillRect(hx, hy, w * ratio, h);
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(hx, hy, w, h);
-      // 等级（连带显示在血条上）
-      ctx.font = 'bold ' + Math.max(10, Math.round(h * 2.2)) + 'px sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-      ctx.strokeText('Lv' + fmtNum(this.level), this.x, hy + h / 2);
-      ctx.fillStyle = '#ffe27a';
-      ctx.fillText('Lv' + fmtNum(this.level), this.x, hy + h / 2);
-      // 生物中文名（更直观）
-      if (this.zh) {
-        ctx.font = '11px sans-serif';
-        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-        ctx.strokeText(this.zh, this.x, hy + h + 9);
-        ctx.fillStyle = '#dfe';
-        ctx.fillText(this.zh, this.x, hy + h + 9);
-      }
+      // 名牌（血条/名称/稀有度）一律用【common 等级的基准尺寸】，不随稀有度缩放 ——
+      // 这样大怪小怪的名牌大小一致，远看也读得清。只有"比 common 还小"的生物才按比例收一点，
+      // 免得血条比身体还宽。（当前所有生物都 ≥ common，所以实际上就是固定大小。）
+      const baseR = PLAYER_VISUAL_D * MOB_DIAM_BASE / 2;      // common 的半径 ≈ 30.1
+      const fs = 12.6;                                        // 字号
+      const bw = Math.max(30, Math.min(baseR * 1.7, this.r * 1.9));
+      const bh = 6.6;                                         // 条高
+      const bodyBottom = this.y + this.r;                  // 图案实际底边（半径即 r）
+      const nameY = bodyBottom + fs * 1.05;                // 名称基线（血条上方）
+      const barY = nameY + fs * 0.34;                      // 血条顶
+      const rarY = barY + bh + fs * 1.0;                   // 稀有度基线（血条下方）
+      const bx = this.x - bw / 2, br = this.x + bw / 2;    // 血条左右边界
+
+      const rarCol = (typeof RARITIES !== 'undefined' && RARITIES[this.rarity])
+        ? RARITIES[this.rarity].color : '#fff';
+      const rarName = (typeof I18N !== 'undefined')
+        ? I18N.t('Rarities/' + this.rarity + '/Name', this.rarity) : this.rarity;
+
+      ctx.save();
+      ctx.font = `800 ${fs.toFixed(1)}px ${CardRenderer.FONT}`;
       ctx.textBaseline = 'alphabetic';
+      ctx.lineJoin = 'round'; ctx.miterLimit = 2;
+      ctx.lineWidth = fs * 0.16;
+      ctx.strokeStyle = '#000';
+
+      // 名称（白色，左对齐到血条左端）
+      ctx.textAlign = 'left';
+      ctx.strokeText(this.name, bx, nameY);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(this.name, bx, nameY);
+
+      // 血条：圆角 + 深色描边，填充色随比例 绿→黄→红
+      const rad = Math.min(bh / 2, 6);
+      roundRectPath(ctx, bx, barY, bw, bh, rad);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill();
+      const ratio = clamp(this.hp / this.maxHp, 0, 1);
+      if (ratio > 0) {
+        roundRectPath(ctx, bx, barY, Math.max(bh, bw * ratio), bh, rad);
+        ctx.fillStyle = ratio > 0.5 ? '#5fd36a' : (ratio > 0.25 ? '#e8c63a' : '#ff5a5a');
+        ctx.fill();
+      }
+      ctx.lineWidth = Math.max(1.2, bh * 0.22);
+      ctx.strokeStyle = '#000';
+      roundRectPath(ctx, bx, barY, bw, bh, rad);
+      ctx.stroke();
+
+      // 稀有度（本色，右对齐到血条右端）
+      ctx.textAlign = 'right';
+      ctx.lineWidth = fs * 0.16;
+      ctx.strokeText(rarName, br, rarY);
+      ctx.fillStyle = rarCol;
+      ctx.fillText(rarName, br, rarY);
+      ctx.restore();
     }
   }
 }

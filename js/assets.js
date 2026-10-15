@@ -4,6 +4,9 @@ const SpriteStore = {
   images: {},   // key -> Image | null   (null = 已尝试但失败)
   cache: {},    // key -> { size: canvas }
   white: {},    // key -> { size: canvas }  白色剪影
+  artBox: {},   // 'key@size' -> [minX, minY, w, h] | null（实际图案的像素包围盒）
+  artCache: {}, // 'key@size' -> canvas（裁剪并放大到 size×size 的图案）
+  artWhiteCache: {},
 
   // 带超时的加载：任何情况下都 resolve，绝不永久 pending（防止加载界面卡死）
   load(key, src, timeout = 8000) {
@@ -60,6 +63,100 @@ const SpriteStore = {
     return this.white[key] ? this.white[key][size] : null;
   },
 
+  // 实际图案的像素包围盒（相对 size×size 画布）。生物 SVG 的 viewBox 里有大片留白
+  // （clipPath 之外全是透明），直接按 viewBox 绘制会让图案明显比碰撞箱小一圈。
+  // 这里扫一遍 alpha 通道量出真实范围，每种 (key,size) 只算一次。
+  _artBox(key, size) {
+    const ck = key + '@' + size;
+    if (this.artBox[ck] !== undefined) return this.artBox[ck];
+    const base = this.canvas(key, size);
+    if (!base) { this.artBox[ck] = null; return null; }
+    let box = null;
+    try {
+      const x = base.getContext('2d');
+      const w = base.width, h = base.height;
+      const d = x.getImageData(0, 0, w, h).data;
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      for (let py = 0; py < h; py++) {
+        const row = py * w;
+        for (let px = 0; px < w; px++) {
+          if (d[(row + px) * 4 + 3] > 8) {
+            if (px < minX) minX = px;
+            if (px > maxX) maxX = px;
+            if (py < minY) minY = py;
+            if (py > maxY) maxY = py;
+          }
+        }
+      }
+      if (maxX >= 0) box = [minX, minY, maxX - minX + 1, maxY - minY + 1];
+    } catch (e) {
+      box = null;   // file:// 等下画布被污染：量不到就退回不裁剪
+    }
+    this.artBox[ck] = box;
+    return box;
+  },
+
+  // 把贴图裁剪到实际图案范围，再放大到 size×size —— 于是图案正好撑满 size。
+  // 配合「size = 碰撞箱直径」使用，视觉就与碰撞箱一致（不会大一圈/小一圈）。
+  artCanvas(key, size) {
+    const ck = key + '@' + size;
+    if (this.artCache[ck]) return this.artCache[ck];
+    const base = this.canvas(key, size);
+    if (!base) return null;
+    const b = this._artBox(key, size);
+    if (!b) { this.artCache[ck] = base; return base; }
+    const out = document.createElement('canvas');
+    out.width = size; out.height = size;
+    const o = out.getContext('2d');
+    o.imageSmoothingQuality = 'high';
+    o.drawImage(base, b[0], b[1], b[2], b[3], 0, 0, size, size);
+    this.artCache[ck] = out;
+    return out;
+  },
+
+  // 同上，但返回白色剪影版本（受击闪烁用）
+  artWhiteCanvas(key, size) {
+    const ck = key + '@' + size;
+    if (this.artWhiteCache[ck]) return this.artWhiteCache[ck];
+    this.canvas(key, size);
+    const base = this.white[key] ? this.white[key][size] : null;
+    if (!base) return null;
+    const b = this._artBox(key, size);
+    if (!b) { this.artWhiteCache[ck] = base; return base; }
+    const out = document.createElement('canvas');
+    out.width = size; out.height = size;
+    const o = out.getContext('2d');
+    o.imageSmoothingQuality = 'high';
+    o.drawImage(base, b[0], b[1], b[2], b[3], 0, 0, size, size);
+    this.artWhiteCache[ck] = out;
+    return out;
+  },
+
+  // 碰撞外形：从贴图的 alpha 通道提取【实际轮廓】做凸包，归一化到 [-0.5, 0.5]。
+  // 这样生物的碰撞箱就是它 SVG 体现出来的几何外形（Ladybug 出来是个圆润的多边形），
+  // 而不是一个和图稿未必吻合的圆。取不到（图片未加载/画布被污染）时返回 null，
+  // 调用方应退回圆形碰撞箱。
+  shape(key, size) {
+    const base = this.artCanvas(key, size);
+    if (!base) return null;                  // 不缓存失败：图片加载好后下次就能取到
+    let poly = null;
+    try {
+      const w = base.width, h = base.height;
+      const d = base.getContext('2d').getImageData(0, 0, w, h).data;
+      const step = Math.max(1, Math.floor(Math.min(w, h) / 44));   // 粗采样，够勾轮廓就行
+      const pts = [];
+      for (let py = 0; py < h; py += step) {
+        for (let px = 0; px < w; px += step) {
+          if (d[(py * w + px) * 4 + 3] > 128) pts.push([px, py]);
+        }
+      }
+      if (pts.length >= 3) {
+        poly = convexHull(pts).map(([px, py]) => [px / w - 0.5, py / h - 0.5]);
+      }
+    } catch (e) { poly = null; }
+    return (poly && poly.length >= 3) ? poly : null;
+  },
+
   // 按 Tiled 翻转标志（H=1, V=2, D=4）返回一个已翻转并缓存的画布。
   // 用于被翻转的边缘/叠加瓦片（例如把左边缘镜像成右边缘），保证边缘平滑过渡方向正确。
   canvasFlip(key, size, flags) {
@@ -74,6 +171,26 @@ const SpriteStore = {
     return out;
   }
 };
+
+// 凸包（Andrew 单调链）。用于把粗采样出来的实心像素点收敛成一个凸多边形碰撞外形。
+function convexHull(points) {
+  const pts = points.slice().sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  if (pts.length < 3) return pts;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
 
 // Apply Tiled's orthogonal GID transform order: diagonal, horizontal, then vertical.
 function flipCanvas(src, flags) {

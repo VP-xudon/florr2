@@ -73,7 +73,7 @@ body {
    定位用百分比 -> 随卡牌尺寸等比；倾斜 30° 与原 canvas 版观感一致，
    锚点在卡面右上角 (right:15% / top:11%)，绕该点旋转。 */
 .card-count {
-  position: absolute; right: 15%; top: 11%;
+  position: absolute; right: 8%; top: 20%;
   transform: rotate(30deg); transform-origin: 100% 0;
   font-family: 'Ubuntu', 'Segoe UI', sans-serif;
   font-weight: 800; font-size: 10.4px; line-height: 1;
@@ -81,19 +81,9 @@ body {
   paint-order: stroke fill; white-space: nowrap;
   pointer-events: none; z-index: 3;
 }
-/* 主槽装填（reload）阴影：无阴影扇形之外盖一层半透明暗色。
-   扇形由 conic-gradient 生成，两条边界（慢/快）就是两块区域的分界，本身没有任何描边。
-   --rs = 扇形起始角（慢边界），--rw = 扇形宽度（快边界角 - 慢边界角）。
-   inset: 9% = 卡牌 canvas 里内板的留白（pad = 0.09 × 卡面），所以阴影只盖中间内板，
-   不遮卡牌外周那圈描边；内板是直角的，因此这里也不设圆角。 */
-.card-reload {
-  position: absolute; inset: 9%; z-index: 2; pointer-events: none;
-  --rs: 0deg; --rw: 0deg;
-  background: conic-gradient(from var(--rs),
-    rgba(0, 0, 0, 0) 0deg var(--rw),
-    rgba(18, 24, 20, 0.5) var(--rw) 360deg);
-  opacity: 0;
-}
+/* 主槽装填（reload）阴影：改由卡牌 canvas 内部绘制（见 cards.js 的 drawReload）——
+   画在「内板之上、花瓣图形与名称之下」，所以阴影只压暗卡牌中部底板，
+   外周描边、花瓣本体、名称文字全都不被遮盖。因此这里不再需要任何 DOM 覆盖层。 */
 /* 副槽格子正下方的数字快捷键提示（放在 .qinner 内，随副槽缩放同步缩放） */
 .qinner .qnum {
   position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%);

@@ -352,6 +352,64 @@ function createGardenMap(data) {
     return [result.x, result.y];
   }
 
+  // ---- 任意凸多边形碰撞（生物用：外形取自其 SVG 的实际轮廓）----
+  // poly 为归一化到 [-0.5,0.5] 的顶点表，scale = 碰撞外形的直径（世界像素）。
+  // 复用 circleContact(px,py,0)：半径为 0 时它只在"点落在墙内"时返回，并给出
+  // 指向墙外法线 + 到最近边的穿透深度 —— 正好就是逐顶点推出所需要的。
+  function shapeContact(poly, ox, oy, scale) {
+    let deepest = null;
+    for (const [nx, ny] of poly) {
+      const c = circleContact(ox + nx * scale, oy + ny * scale, 0);
+      if (c && (!deepest || c.penetration > deepest.penetration)) deepest = c;
+    }
+    return deepest;
+  }
+
+  function moveShape(x, y, dx, dy, poly, scale) {
+    const clampR = scale * 0.5;
+    x = clamp(x, -half + clampR, half - clampR);
+    y = clamp(y, -half + clampR, half - clampR);
+    if (!grid) return { x: x + dx, y: y + dy, normals: [] };
+
+    // 起始就嵌在墙里 -> 先原地推出
+    let contact = shapeContact(poly, x, y, scale);
+    for (let pass = 0; pass < 8 && contact; pass++) {
+      x += contact.x * (contact.penetration + 0.05);
+      y += contact.y * (contact.penetration + 0.05);
+      contact = shapeContact(poly, x, y, scale);
+    }
+
+    const startX = x, startY = y;
+    const maxStep = Math.max(2, ss * 0.4);
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / maxStep));
+    const stepX = dx / steps, stepY = dy / steps;
+    const normals = [];
+    for (let step = 0; step < steps; step++) {
+      let remainingX = stepX, remainingY = stepY;
+      for (let slide = 0; slide < 4; slide++) {
+        if (Math.abs(remainingX) + Math.abs(remainingY) < 1e-5) break;
+        const candidateX = clamp(x + remainingX, -half + clampR, half - clampR);
+        const candidateY = clamp(y + remainingY, -half + clampR, half - clampR);
+        contact = shapeContact(poly, candidateX, candidateY, scale);
+        if (!contact) { x = candidateX; y = candidateY; break; }
+
+        if (!normals.some((n) => n.x * contact.x + n.y * contact.y > 0.98)) {
+          normals.push({ x: contact.x, y: contact.y });
+        }
+        const intoWall = remainingX * contact.x + remainingY * contact.y;
+        if (intoWall >= -1e-6) {
+          const separation = contact.penetration + 0.01;
+          x = candidateX + contact.x * separation;
+          y = candidateY + contact.y * separation;
+          break;
+        }
+        remainingX -= intoWall * contact.x;
+        remainingY -= intoWall * contact.y;
+      }
+    }
+    return { x, y, dx: x - startX, dy: y - startY, normals };
+  }
+
   // Rasterize the collision polygons and rectangles stored in the original Tiled tileset.
   function buildCollision() {
     const N = SUB;
@@ -518,7 +576,7 @@ function createGardenMap(data) {
   const poly = [[-half, -half], [half, -half], [half, half], [-half, half]];
   return {
     R: half, half, tile, width: W, height: H, size: data.size, solid, solidQuad, FW, FH, poly,
-    isSolid, solidAtPoint, collide, move: moveCircle, isInside, randomPoint, spawnPointAwayFrom,
+    isSolid, solidAtPoint, collide, move: moveCircle, moveShape, isInside, randomPoint, spawnPointAwayFrom,
     clampTo: (x, y, r) => collide(x, y, r || 22),
     minimapCanvas, drawCollisionRegion,
     buildCollision

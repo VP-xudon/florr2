@@ -125,8 +125,23 @@ window.REGISTRY = {
    "stats": {
     "dmg": 5.0,
     "hp": 5.0,
-    "spd": -12
+    "spd": -12,
+    "heal": 8.0
    },
+   "rarityStats": {
+    "common": {"dmg": 5, "hp": 5, "heal": 8},
+    "unusual": {"dmg": 15, "hp": 15, "heal": 23},
+    "rare": {"dmg": 45, "hp": 45, "heal": 68},
+    "epic": {"dmg": 135, "hp": 135, "heal": 203},
+    "legendary": {"dmg": 405, "hp": 405, "heal": 608},
+    "mythic": {"dmg": 1215, "hp": 1215, "heal": 1822.5},
+    "ultra": {"dmg": 3645, "hp": 3645, "heal": 3156.7},
+    "super": {"dmg": 10935, "hp": 10935, "heal": 5467.5},
+    "eternal": {"dmg": 32805, "hp": 32805, "heal": 9500},
+    "unique": {"dmg": 32805, "hp": 32805, "heal": 9500}
+   },
+   "reload": 3.5,
+   "reloadText": "3.5s + 1.5s",
    "wiki": {
     "common": {
      "dmg": 5.0,

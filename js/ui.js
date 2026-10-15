@@ -42,13 +42,14 @@ const DRAG_FOLLOW = 55;
 const DRAG_PICK_MS = 200;                   // 拿起时"长出"的放大时长
 const SWAP_DUR = '0.5s';                    // 主/副槽行互换动画时长
 
-// 装填阴影角位移的「缓入」参数：
-//   POW   > 1 表示越转越快；越大末段越快（用户要求"最后快一点"）
-//   FLOOR 线性分量下限：保证起步瞬间角速度不为 0（否则看起来像卡住不动）
-// 当前 POW=2.5、FLOOR=0.12 -> 角速度从 0.12 升到 2.32（约 19 倍），
-// 时间过半时只转过 21.6%，最后 20% 的时间转过 40% —— 末段明显更快。
-const RELOAD_EASE_POW = 2.5;
-const RELOAD_EASE_FLOOR = 0.12;
+// 属性标签：取官方 i18N 键（自带本地化）。官方值形如
+//   "<c val=\"{#Colors/health}\">Health:</c> {0:tooltip}"
+// 悬浮框里标签与数值是分开绘制的（标签彩色、数值白色），用不到那个占位符，
+// 所以要把末尾的 {0:tooltip} / {0} 之类的占位去掉，只留纯文本标签。
+function statLabel(key, fallback) {
+  const s = String(I18N.t(key, fallback) || '');
+  return s.replace(/\s*\{[^{}]*\}\s*$/, '').trim();
+}
 
 // ================= 通用补间动画播放器 =================
 // 所有 UI 动画（卡槽互换、幽灵飞入、飞回背包…）都走这里：
@@ -298,15 +299,6 @@ const UI = {
     box.dataset.drop = drop; box.dataset.idx = i;
     const inner = document.createElement('div');
     inner.className = 'qinner';
-    if (!isSub) {
-      // 装填（reload）阴影层：只挂在主槽。它是 .card 的兄弟节点且 z-index 更高，
-      // 所以 _updateCell 替换 .card 时它不受影响（动画不中断）。
-      // 外观 = 一块无阴影的扇形在长大，扇形之外是阴影；扇形两条边界由 CSS 变量驱动：
-      //   --rs = 慢边界角度，--rw = 扇形宽度（= 快边界角 - 慢边界角）
-      const rl = document.createElement('div');
-      rl.className = 'card-reload';
-      inner.appendChild(rl);
-    }
     if (isSub) {
       // 副槽格子正下方的数字快捷键提示（放在 .qinner 内，随副槽缩放同步缩放）
       const num = document.createElement('div');
@@ -331,8 +323,9 @@ const UI = {
       // 若在这里直接返回，那张卡就再也显示不出来了 —— 表现为
       //   ① 把卡拖出再放回原槽，该槽变空槽；
       //   ② 主/副槽互换「同属性」花瓣时吞掉一张（两边 key 相同，双双被跳过）。
+      // 例外：_dropHidden 表示"卡正在飞入该槽、还没落到位"，此刻不能提前显示。
       const keep = inner.querySelector('.card');
-      if (keep) keep.style.visibility = '';
+      if (keep && !keep._dropHidden) keep.style.visibility = '';
       return;
     }
     box._cardKey = key;
@@ -364,32 +357,47 @@ const UI = {
       const mr = (mb.querySelector('.qinner') || mb).getBoundingClientRect();
       const sr = (sb.querySelector('.qinner') || sb).getBoundingClientRect();
       const mc = mb.querySelector('.card'), sc = sb.querySelector('.card');
+      // 冷却结算与阴影动画都要等翻转动画完全播完才开始
+      this._holdReload(i);
       // zoom 传"卡片所在行"（即目标行）的缩放：旧实现传反了，位移量会多出约 20%
-      if (mc) this._flipVertical(mc, sr, mr, zm);   // 主槽卡：从副槽视觉矩形出发落回主槽
-      if (sc) this._flipVertical(sc, mr, sr, zs);   // 副槽卡：从主槽视觉矩形出发落回副槽
+      const a1 = mc ? this._flipVertical(mc, sr, mr, zm,
+        () => this._releaseReload(i)) : false;   // 主槽卡：从副槽出发落回主槽
+      const a2 = sc ? this._flipVertical(sc, mr, sr, zs,
+        () => this._releaseReload(i)) : false;   // 副槽卡：从主槽出发落回副槽
+      if (!a1) this._releaseReload(i);      // 没动画可播（位移可忽略）-> 立即放行，否则冷却永远不开始
+      if (!a2) this._releaseReload(i);
     }
   },
   // 卡面从 fromRect 平滑回到其原位（toRect）：按两行「实测矩形」算出斜向位移 + 等比缩放。
   // 上下两行 zoom 不同（0.9 / 0.75）-> 卡槽并不对齐，必须同时补 X 与 Y；只动 Y 会让横向差
   // 直接跳过去（旧实现抖动/跳动的来源）。终点严格回到 transform:''（即本槽原位），
   // 因此到位后绝不会有残留偏移。多列可同时播放（各自元素独立）。
-  _flipVertical(cardEl, fromRect, toRect, zoom) {
+  // 返回 true 表示确实播了动画（调用方据此决定是否放行装填计时）。
+  //
+  // 【关键】起始状态必须【同步】写好：Anim.play 只在下一帧才第一次 apply，若不先摆好起始
+  // 变换，卡片会在自己的槽位（= 终点）上先显示一帧，看起来就是"飞入之前卡牌就已经在那儿了"。
+  _flipVertical(cardEl, fromRect, toRect, zoom, onSettled) {
     const dx = ((fromRect.left + fromRect.width / 2) - (toRect.left + toRect.width / 2)) / zoom;
     const dy = ((fromRect.top + fromRect.height / 2) - (toRect.top + toRect.height / 2)) / zoom;
     const s = (toRect.width > 0) ? fromRect.width / toRect.width : 1;
-    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(s - 1) < 0.01) return;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(s - 1) < 0.01) {
+      if (onSettled) onSettled();
+      return false;
+    }
+    const setT = (x, y, k) => {
+      cardEl.style.transition = 'none';
+      cardEl.style.transform = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) scale(${k.toFixed(4)})`;
+    };
+    setT(dx, dy, s);                     // ← 同步摆好起始位，消除那一帧的"提前显示"
     Anim.play(cardEl, {
       from: { dx, dy, s },
       to: { dx: 0, dy: 0, s: 1 },
       dur: 0.5,                       // 0.5s
       ease: Anim.ease.out,            // 起步快、收尾缓：同样 0.5s 但观感更利落，不拖沓
-      apply: (el, st) => {
-        el.style.transition = 'none';
-        el.style.transform =
-          `translate(${st.dx.toFixed(2)}px, ${st.dy.toFixed(2)}px) scale(${st.s.toFixed(4)})`;
-      },
-      onDone: (el) => { el.style.transform = ''; }
+      apply: (el, st) => setT(st.dx, st.dy, st.s),
+      onDone: (el) => { el.style.transform = ''; if (onSettled) onSettled(); }
     });
+    return true;
   },
 
   // ---------------- 背包窗口 = 全部花瓣画廊（每张卡带数量角标） ----------------
@@ -513,13 +521,15 @@ const UI = {
   },
 
   // ---------------- 主槽装填（reload）阴影 ----------------
-  // 视觉：一块「无阴影扇形」从 0 长满一整圈，扇形之外都是阴影；扇形没有描边，就是两块区域的分界。
-  //   · 扇形有两条边界，都从同一点出发：慢边界与快边界，两者转速比率恒定（快 = 慢的 2 倍）；
+  // 阴影画在卡牌 canvas 内部（内板之上、花瓣图形与名称之下），所以：
+  //   · 只覆盖卡牌中部（内板），卡牌外周那圈稀有度描边不被遮住；
+  //   · 花瓣本体与名称文字完全不被遮盖。
+  // 视觉 = 一块"无阴影扇形"从 0 长满一整圈，扇形之外是阴影；扇形没有描边，就是两块区域的分界。
+  //   · 扇形两条边界同点出发：慢边界与快边界，两者转速比率恒定（快 = 慢的 2 倍）；
   //   · 慢边界在装填期间正好转一圈，快边界转两圈，因此在"装填完成"那一刻快边界恰好追上慢边界，
   //     扇形宽度 = 2π -> 覆盖整圈 -> 阴影消失；
   //   · 整个过程时长 = 该花瓣的 reload 秒数（type.spd），装填完成后才会生成花瓣实体。
-  // 实现：只改两个 CSS 变量（--rs 起始角 / --rw 扇形宽度），由 conic-gradient 出图，
-  //      不重绘 canvas、不产生额外 DOM，开销极低。
+  // 实现：每帧把装填进度写进 canvas 状态并重绘那一张卡（按进度取 key 去重，没变就不重绘）。
   _reloadTick() {
     const g = window.__game;
     const p = g && g.player;
@@ -527,26 +537,27 @@ const UI = {
     if (!p || !row || !p.reload) return;
     const n = Math.min(row.children.length, p.slots.length);
     for (let i = 0; i < n; i++) {
-      const ov = row.children[i].querySelector('.card-reload');
-      if (!ov) continue;
+      const cv = row.children[i].querySelector('.card');
+      if (!cv || !cv._card) continue;
       const r = p.reload[i];
-      // 没有装填任务（空槽 / 无需装填 / 已装填完）-> 阴影清零
-      if (!r || !(r.dur > 0) || r.age >= r.dur) {
-        if (ov.style.opacity !== '0') ov.style.opacity = '0';
-        continue;
-      }
-      const t = r.age / r.dur;                 // 0 -> 1
-      // 角位移走「缓入」曲线：两条边界【同步加速】—— 剩余 CD 越少转得越快；
-      // 而快边界的角速度始终是慢边界的 2 倍，所以两者的相对速度保持不变。
-      // （旧实现是慢边界匀速；后来 0.35t+0.65t² 的加速幅度又偏小，末段不够快。）
-      const e = RELOAD_EASE_FLOOR * t
-              + (1 - RELOAD_EASE_FLOOR) * Math.pow(t, RELOAD_EASE_POW);
-      const slow = e * TAU;                    // 慢边界：装填完成时正好转满一圈
-      const fast = e * TAU * 2;                // 快边界：转速恒为慢的 2 倍
-      ov.style.opacity = '1';
-      ov.style.setProperty('--rs', (slow * 180 / Math.PI).toFixed(2) + 'deg');
-      ov.style.setProperty('--rw', ((fast - slow) * 180 / Math.PI).toFixed(2) + 'deg');
+      const active = !!(r && r.dur > 0 && r.age < r.dur);
+      const key = active ? (r.age / r.dur).toFixed(4) : '';
+      if (cv._rlKey === key) continue;        // 进度没变：不重绘
+      cv._rlKey = key;
+      cv._card.reload = active ? r : null;
+      CardRenderer.paintCard(cv);
     }
+  },
+
+  // 装填计时的暂停/恢复：卡牌"换上来"的动画（互换翻转 / 飞入卡槽）播放期间必须暂停，
+  // 等动画完全结束、卡牌已经落在卡槽里，才开始结算冷却并播放阴影动画（用户要求）。
+  _holdReload(i) {
+    const p = window.__game && window.__game.player;
+    if (p && p.reload) p.reloadHold[i] = true;
+  },
+  _releaseReload(i) {
+    const p = window.__game && window.__game.player;
+    if (p && p.reload) p.reloadHold[i] = false;
   },
 
   // ---------------- 卡牌数据悬浮框：纯 canvas 绘制 ----------------
@@ -558,10 +569,15 @@ const UI = {
       el.addEventListener('mouseleave', () => this._hideTip());
     },
     _showTip(type, rarity, el) {
-        // 数值随稀有度倍率换算（与装备/提示一致）
-        let dmg = type.dmg || 0, hp = type.hp || 0;
-        const m = type.rarityMultipliers && type.rarityMultipliers[rarity];
-        if (m) { dmg = type.dmg * (m.dmg || 1); hp = type.hp * (m.hp || 1); }
+        // 数值随稀有度换算（与装备/提示一致）
+        let dmg = type.dmg || 0, hp = type.hp || 0, heal = type.heal || 0;
+        // 有「各稀有度数值表」就整表取用（Rose）；否则退回倍率表（Basic）；再否则用基础值
+        const rs = type.rarityStats && type.rarityStats[rarity];
+        if (rs) { dmg = rs.dmg || 0; hp = rs.hp || 0; heal = rs.heal || 0; }
+        else {
+          const m = type.rarityMultipliers && type.rarityMultipliers[rarity];
+          if (m) { dmg = type.dmg * (m.dmg || 1); hp = type.hp * (m.hp || 1); }
+        }
         const slug = type.slug || String(type.name || '').toLowerCase().replace(/ /g, '_');
         // 从"刚离开的另一张卡"快速移来（120ms 宽限）：不做「上一个渐隐 + 下一个渐显」，
         // 直接保持不透明并把框平移过去 —— 任何时刻画面上只有一个悬浮框
@@ -575,7 +591,9 @@ const UI = {
           desc: I18N.t('Petals/' + slug + '/Description', ''),
           dmg: Math.round(dmg * 10) / 10,
           hp: Math.round(hp * 10) / 10,
-          spd: type.spd || 0,
+          heal: Math.round(heal * 10) / 10,
+          reload: (type.reload != null) ? type.reload : Math.max(0, type.spd || 0),
+          reloadText: type.reloadText || null,
           anchor: el
         };
         this._tipOn = true;
@@ -622,11 +640,19 @@ const UI = {
         const F = CardRenderer.FONT;
         const measure = (size, str) => { ctx.font = `${W_ALL} ${size}px ${F}`; return ctx.measureText(str).width; };
         const desc = String(t.desc || '');
-        const reload = t.spd > 0 ? (fmtNum(t.spd) + 's') : '';
+        // 冷却展示：优先用 reloadText（如 "3.5s + 1.5s"）；否则按秒数生成
+        const reload = t.reloadText || (t.reload > 0 ? (fmtNum(t.reload) + 's') : '');
         const titleW = measure(FS_TITLE, t.name);
         const rarW = measure(FS_RAR, t.rarityName);
         const reloadW = reload ? measure(FS_RELOAD, reload) : 0;
-        const statW = Math.max(measure(FS_STAT, 'Health: ' + t.hp), measure(FS_STAT, 'Damage: ' + t.dmg));
+        // Heal 只有部分花瓣才有：没有就不占一行
+        const rows = [
+          [statLabel('Petal/Attribute/Health', 'Health:'), t.hp],
+          [statLabel('Petal/Attribute/Damage', 'Damage:'), t.dmg]
+        ];
+        if (t.heal > 0) rows.push([statLabel('Petal/Attribute/Heal', 'Heal:'), t.heal]);
+        const statW = Math.max.apply(null,
+          rows.map((r) => measure(FS_STAT, r[0] + ' ' + fmtNum(r[1]))));
         // 介绍：宽度够就单行（不换行），超上限才折行
         const descFull = desc ? measure(FS_DESC, desc) : 0;
         let lines;
@@ -648,13 +674,13 @@ const UI = {
         let W = Math.max(MIN_W, PADX * 2 + contentW);
         if (reload) W = Math.max(W, PADX + titleW + 14 + reloadW + 8 + ICON + RH);
         W = Math.min(MAX_W, W);
-        // 介绍上下各空出一行；数值统一在左下角
+        // 介绍上下各空出一行；数值统一在左下角，自上而下：Health / Damage / (Heal)
         const descTop = rarityY + 22 + BLANK;
         const descBottom = descTop + Math.max(0, lines.length - 1) * LH;
-        const healthY = descBottom + 22 + BLANK;
-        const dmgY = healthY + 21;
-        const H = dmgY + 12;
-        return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, healthY, dmgY, W_ALL,
+        const statY = [];
+        for (let i = 0; i < rows.length; i++) statY.push(descBottom + 22 + BLANK + i * 21);
+        const H = statY[statY.length - 1] + 12;
+        return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, rows, statY, W_ALL,
           FS_TITLE, FS_RELOAD, FS_RAR, FS_DESC, FS_STAT };
       },
 
@@ -754,10 +780,11 @@ const UI = {
         // 名称（左上）
         text(t.name, bx, y + L.titleY * S, L.FS_TITLE, L.W_ALL, '#ffffff');
         // 冷却（白字）+ 后面紧跟一个表示旋转的静态图标
-            if (t.spd > 0) {
+            if (t.reload > 0) {
               const cy = y + L.reloadY * S;
               const icon = L.ICON * S, gap = 6 * S;
-              text(fmtNum(t.spd) + 's', rx - icon - gap, cy, L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
+              text(t.reloadText || (fmtNum(t.reload) + 's'), rx - icon - gap, cy,
+                L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
               // 图标：270° 圆环 + 端点箭头（静态，不旋转）
               const icx = rx - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34, rad = icon * 0.42;
               ctx.save();
@@ -789,7 +816,9 @@ const UI = {
         for (let i = 0; i < L.lines.length; i++) {
           text(L.lines[i], bx, y + (L.descTop + i * L.LH) * S, L.FS_DESC, L.W_ALL, '#e9f2ec');
         }
-        // Health / Damage：统一排在左下角，标签彩色 + 数值白色（字号与介绍一致）
+        // Health / Damage / Heal：统一排在左下角，标签彩色 + 数值白色（字号与介绍一致）
+        // 治疗用专用粉色 #ff94c9，不与伤害(红)/生命(绿)共用颜色
+        const STAT_COLORS = ['#7fe08a', '#ff6b6b', '#ff94c9'];
         const statLine = (label, color, val, refY) => {
           const size = Math.round(L.FS_STAT * S * 100) / 100;
           ctx.font = `${L.W_ALL} ${size}px ${CardRenderer.FONT}`;
@@ -797,8 +826,9 @@ const UI = {
           text(label, bx, y + refY * S, L.FS_STAT, L.W_ALL, color);
           text(String(val), bx + lw + 6 * S, y + refY * S, L.FS_STAT, L.W_ALL, '#ffffff');
         };
-        statLine('Health:', '#7fe08a', fmtNum(t.hp), L.healthY);
-        statLine('Damage:', '#ff6b6b', fmtNum(t.dmg), L.dmgY);
+        for (let i = 0; i < L.rows.length; i++) {
+          statLine(L.rows[i][0], STAT_COLORS[i] || '#ffffff', fmtNum(L.rows[i][1]), L.statY[i]);
+        }
         ctx.restore();
       },
 
@@ -949,11 +979,18 @@ const UI = {
       const handled = this.onDrop ? !!this.onDrop({ card, from }, target) : false;
       const ghost = this._drag;
       // 已像素级焊死在卡槽上 -> 无需再飞，直接移除幽灵（renderInvBar 已重建，卡面即刻显示）
-      if (handled && target && ghost && ghost._boxLocked) { this._removeGhost(ghost); return; }
+      if (handled && target && ghost && ghost._boxLocked) {
+        // 幽灵已经和卡槽像素级重合：这里补上"隐藏目标卡 -> 动画结束后再显示 + 放行装填"
+        // （正常情况下会走下面的飞行分支；焊死时没有飞行过程，所以立即收尾）
+        this._settleDropTarget(target);
+        this._removeGhost(ghost);
+        return;
+      }
       let tx, ty, dur, endScale;
       // 注意判据是 handled && target：拖到空白处松手时，dispatchDrop 对卡槽卡会返回 true
       // （那是"卸下回背包"，并非装入卡槽）。若只判 handled，幽灵会以原尺寸飞向背包按钮、
       // 既不缩小也不渐隐 —— 必须走下面的缩小渐隐分支。
+      let dropped = null;
       if (handled && target) {
         // 装入卡槽 -> 飞向该槽（全程清晰不渐隐：到达后卡槽才显示卡面）
         let r = (target.el && target.el.isConnected) ? target.el.getBoundingClientRect() : null;
@@ -965,6 +1002,10 @@ const UI = {
         dur = 0.22;
         // 缩放一律按目标卡槽的"视觉宽度"换算（卡槽带 zoom，视觉宽度并不是 54px）
         endScale = r ? (r.width / GHOST_SIZE) : GHOST_TO_SLOT;
+        dropped = target;
+        // 数据已经换上来了，但卡要等飞到才显示：先把目标卡的可见性关掉，
+        // 并暂停该槽的装填计时（等落到卡槽里才开始结算冷却）。
+        this._holdDropTarget(target);
       } else {
         // 取消 / 卸下回背包：缩到最小 + 渐隐，飞向背包按钮
         if (from.type === 'gallery') this._incGallery(card);
@@ -975,10 +1016,37 @@ const UI = {
       }
       this._flyGhostTo(ghost, tx, ty,
         { dur, endScale, fade: !handled },   // 装入卡槽：全程清晰；取消/回背包：渐隐
-        (gh) => this._removeGhost(gh));
+        (gh) => {
+          if (dropped) this._settleDropTarget(dropped);
+          this._removeGhost(gh);
+        });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
+  },
+
+  // 拖拽落入卡槽：先把目标卡藏起来，并暂停该槽装填计时。
+  // （数据在 dispatchDrop 时就已经换上来了，若不藏，卡会出现在槽里而幽灵还在半空飞。）
+  _holdDropTarget(target) {
+    if (!target) return;
+    const rowEl = (target.type === 'slot') ? this.refs.slotRow : this.refs.subRow;
+    const box = rowEl && rowEl.children[target.index];
+    const cv = box && box.querySelector('.card');
+    if (cv) { cv.style.visibility = 'hidden'; cv._dropHidden = true; }
+    if (target.type === 'slot') this._holdReload(target.index);
+  },
+  // 飞行结束：显示目标卡、放行装填计时（阴影此刻才开始播放）。
+  _settleDropTarget(target) {
+    if (!target) return;
+    const rowEl = (target.type === 'slot') ? this.refs.slotRow : this.refs.subRow;
+    const box = rowEl && rowEl.children[target.index];
+    const cv = box && box.querySelector('.card');
+    if (cv) { cv.style.visibility = ''; cv._dropHidden = false; }
+    if (target.type === 'slot') {
+      this._releaseReload(target.index);
+      // 强制重绘一次：阴影状态可能在隐藏期间已经变过
+      if (cv && cv._card) { cv._rlKey = null; }
+    }
   },
 
   // 取消拖拽后恢复源区域显示（装卡槽失败/回退背包时调用）

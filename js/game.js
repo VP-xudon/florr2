@@ -118,9 +118,30 @@ class Game {
     this.player = new Player();
     this._resetPlayer(true);
     this.camera.x = this.player.x; this.camera.y = this.player.y;
+    this._spawnStarterMobs();          // 出生点附近的初始生物
 
     this.buildBackground();
     this.updateHUD();
+  }
+
+  // 初始生物：在玩家出生点附近生成 3 只 Ladybug（common / legendary / super）。
+  // 目前只做「实体 + 随机游走 + 名牌」，还没有伤害，所以不做仇恨与实体碰撞。
+  _spawnStarterMobs() {
+    const type = MOB_BY_ID[STARTER_MOB_ID] || null;
+    if (!type) return;
+    this.mobs = [];
+    for (let i = 0; i < STARTER_MOB_RARITIES.length; i++) {
+      const rarity = STARTER_MOB_RARITIES[i];
+      const m = new Mob(type, 0, 0, 1, rarity);
+      // 距离按体型加成：高稀有度直径可能是主角的 4~8 倍，放太近会直接盖住出生点，
+      // 所以基础半径之外再各自让开半个身位（整体仍在"不远处"）。
+      const d = STARTER_MOB_RADIUS + m.r * 0.9;
+      // 几个方向均匀铺开（再各自带一点抖动），彼此间隔适中
+      const a = (i / STARTER_MOB_RARITIES.length) * TAU + rand(-0.35, 0.35);
+      m.x = this.player.x + Math.cos(a) * d;
+      m.y = this.player.y + Math.sin(a) * d;
+      this.mobs.push(m);
+    }
   }
 
   _resetPlayer(full) {
@@ -183,6 +204,12 @@ class Game {
     // 模式控制：空格 = mode1 -> reach（花瓣距离×2 + 生气眼），Shift = mode2 -> detect（距离×0.3 + 伤心眼）
     p.mode = this.keys['mode1'] ? 'reach' : (this.keys['mode2'] ? 'detect' : 'normal');
     p.update(dt, dir, this.map, this.mobs);   // 传入生物列表：花瓣会与生物碰撞
+
+    // 生物：推进 AI / 动画计时，并回收退场结束的个体。
+    // 【必须更新】否则 Mob.age 永远是 0 -> spawnFade(0)=0 -> 本体以全透明绘制，
+    // 看起来就是"只有血条和名字、没有生物本体"。
+    for (const m of this.mobs) m.update(dt, p, this.map);
+    this.mobs = this.mobs.filter((m) => !(m.dead && m.deathTimer > FADE_T));
 
     // 卡片（拾取 / 入栏）——无战斗时已不掉落，但保留拖拽到世界时的回收
     for (const c of this.cards) {
