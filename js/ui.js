@@ -586,8 +586,11 @@ const UI = {
       const cv = row.children[i].querySelector('.card');
       if (!cv || !cv._card) continue;
       // —— reload 扇形阴影进度 ——
+      // 玩家死亡后 reload 计时冻结（update 早退不再推进），若仍按 active 绘制，
+      // 扇形会停在死前那半截进度 —— 表现为"卡面上停着的加载特效"。
+      // 死亡期间一律按未激活处理：扇形阴影消失，统一由 hpShadow 爬到全阴影接管。
       const r = p.reload[i];
-      const active = !!(r && r.dur > 0 && r.age < r.dur);
+      const active = !p.dead && !!(r && r.dur > 0 && r.age < r.dur);
       // —— 花瓣血量阴影（"水缸"）——目标值即时生效，不做过渡：
       // 阴影与 reload 阴影颜色天然相同（同色同级），状态切换无需动画；
       // 旧版指数平滑会让花瓣死亡瞬间的 hp 阴影回退与 reload 扇形短暂叠加
