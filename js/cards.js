@@ -317,6 +317,25 @@ const CardRenderer = (function () {
     ctx.restore();
   }
 
+  // 花瓣血量阴影（"水缸"）：与 reload 阴影【同一套视觉语言】——
+  //   · 同样画在内板之上、花瓣图形与名称之下，clip 到内板，绝不遮稀有度描边/花瓣/名字；
+  //   · 同样的颜色与不透明度（rgba(18,24,20,0.5)）；
+  //   · 形状不同：从内板【顶边水平下垂】的矩形，高度 = 内板高 × hpShadow
+  //     （hpShadow = 1 - hp/maxHp，由 ui.js 每帧平滑写入 st.hpShadow）。
+  // 与 reload 阴影天然兼容：血量归零 = 整块内板全阴影 = reload 起始状态，
+  // 亮扇形从全阴影中长大退散阴影，两个阶段无缝衔接；reload 期间 st.hpShadow=0 不叠加。
+  function drawHpShadow(ctx, st, p, iw, ih) {
+    const f = st.hpShadow;
+    if (!(f > 0)) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(p, p, iw, ih);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(18, 24, 20, 0.5)';
+    ctx.fillRect(p, p, iw, Math.max(1, ih * Math.min(1, f)));
+    ctx.restore();
+  }
+
   // 卡牌名称：绘制在「原素材自带字母」的同一位置、同一大小，白字 + 黑描边（先描边后填充，
   // 等价于 SVG 的 paint-order:stroke fill），Ubuntu 800 —— 观感与原来烘焙在素材里的字母一致。
   // 文本取自 i18N（Petals/<slug>/Name），因此切换译文包时卡面文字随之改变。
@@ -381,6 +400,8 @@ const CardRenderer = (function () {
       // 装填阴影：先画（在内板之上）-> 后面的花瓣图形与名称会盖在它上面，
       // 所以阴影只压暗底板，花瓣本体和名字完全不被遮盖
       drawReload(ctx, st, p, iw, ih);
+      // 花瓣血量阴影：与 reload 阴影同层级，紧随其后（都是压底板不压图形/名称）
+      drawHpShadow(ctx, st, p, iw, ih);
       // 素材：contain 塞进内板；同时记下它实际绘制出的矩形，供名称文字对齐使用
       const im = st.img;
       let ox = p, oy = p, dw = iw, dh = ih;

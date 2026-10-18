@@ -26,15 +26,24 @@ const MobAI = {
   },
 
   // 推进状态机并返回本帧的移动欲望
-  step(ai, dt, mob) {
+  step(ai, dt, mob, player) {
     if (!ai || !mob) return { x: 0, y: 0 };
     ai.t -= dt;
+
+    // 仇恨追击：中立/敌对生物优先冲向【累计伤害最高】的来源（被动型 passive 永不追击）。
+    // 仇恨在死亡前永久保留；花瓣造成的伤害由调用方统一记到玩家头上。
+    const tgt = mob.topThreat ? mob.topThreat() : null;
+    if (tgt && mob.hostility !== 'passive') {
+      const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
+      const d = Math.hypot(dx, dy) || 1;
+      return { x: dx / d * mob.speed, y: dy / d * mob.speed };
+    }
 
     if (ai.phase === 'walk') {
       // 走够了距离（或超时兜底：被墙卡住也不会永远走不完）-> 停下来等一会儿
       if (ai.remain <= 0 || ai.t <= 0) {
         ai.phase = 'idle';
-        ai.t = rand(0.8, 2.2);
+        ai.t = rand(2, 6);       // 原地停留 2~6 秒（更有昆虫的从容感）
         return { x: 0, y: 0 };
       }
       return { x: ai.dirX * mob.speed, y: ai.dirY * mob.speed };

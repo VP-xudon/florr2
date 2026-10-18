@@ -19,6 +19,10 @@ const RARITIES = {
 };
 const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
 
+// 生物护甲（armor）默认表：registry 暂无 armor 字段，按稀有度给默认值；
+// rarityStats.armor / type.armor 存在时优先生效（瓢虫等被动生物也走这条链路）。
+const MOB_ARMOR = { common: 0, unusual: 0, rare: 1, epic: 2, legendary: 3, mythic: 5, ultra: 8, super: 12, eternal: 16 };
+
 // ---------------- 可用花瓣白名单 ----------------
 // 只有列在这里的花瓣会真正进入游戏（按 slug，slug = 英文名小写、空格转下划线）。
 // 其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
@@ -95,12 +99,31 @@ function buildPetalTypes() {
   return { list: out, byId: PETAL_BY_ID };
 }
 
+// 按稀有度取花瓣数值：优先 rarityStats（整表，如 Rose），其次 rarityMultipliers（倍率表，如
+// Basic），最后退回基础 stats。dmg/hp/heal 都走这里——绝不在战斗/装填里直接读 type.dmg。
+function petalStatsFor(type, rarity) {
+  const rs = type.rarityStats && type.rarityStats[rarity];
+  if (rs) return { dmg: rs.dmg || 0, hp: rs.hp || 0, heal: rs.heal || 0 };
+  const mult = type.rarityMultipliers && type.rarityMultipliers[rarity];
+  const s = type;
+  if (mult) {
+    return { dmg: (s.dmg || 0) * (mult.dmg || 1), hp: (s.hp || 0) * (mult.hp || 1), heal: (s.heal || 0) * (mult.heal || 1) };
+  }
+  return { dmg: s.dmg || 0, hp: s.hp || 0, heal: s.heal || 0 };
+}
+
 // ---------------- 生物 ----------------
 // registry 的 rarities 用的是中文键（普通/罕见/…），这里统一映射到英文稀有度键，
 // 与 RARITY_ORDER 对齐，方便按 RARITIES[rarity].color 取色、按 I18N 取译名。
 const MOB_RARITY_KEY = {
   '普通': 'common', '罕见': 'unusual', '稀有': 'rare', '史诗': 'epic', '传奇': 'legendary',
   '神话': 'mythic', '究极': 'ultra', '超级': 'super', '永恒': 'eternal', '唯一': 'unique'
+};
+// 注册表中文类型串 -> 仇恨代码
+const MOB_HOSTILITY = {
+  '被动型生物': 'passive',
+  '中立型生物': 'neutral',
+  '敌对型生物': 'hostile'
 };
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
@@ -119,7 +142,7 @@ function buildMobTypes() {
         const rk = MOB_RARITY_KEY[zh];
         if (!rk) continue;
         const v = m.rarities[zh] || {};
-        rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0 };
+        rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0, armor: v.armor, hostility: MOB_HOSTILITY[v.type] };
       }
     }
     const t = {
@@ -127,8 +150,11 @@ function buildMobTypes() {
       hp: m.hp, dmg: m.dmg, speed: m.speed, size: m.size, tier: m.tier,
       color: m.color || '#888', boss: !!m.boss,
       type: m.type || '', biome: m.biome || '', desc: m.desc || '',
+      // 仇恨类型代码：'passive' 被动（永不反击追击）/ 'neutral' 中立（被打才追击）/
+      // 'hostile' 敌对（见人就追）。由注册表的中文类型串映射，未识别的按 neutral 处理。
+      hostility: MOB_HOSTILITY[m.type] || 'neutral',
       rarities: m.rarities || null,
-      rarityStats,                       // 英文稀有度键 -> { hp, dmg, exp }
+      rarityStats,                       // 英文稀有度键 -> { hp, dmg, exp, armor }
       ai: m.ai || null                   // 官方 AI 开关（aggro/chase/flee/retaliate…）
     };
     out.push(t);
@@ -197,5 +223,5 @@ const STARTER_PETAL_B = (PETAL_TYPES.find(t => t.kind === 'attack') || PETAL_TYP
 // 初始生物：出生点附近固定生成 3 只 Ladybug（id 3），稀有度各一只。
 // 距离取 190 世界像素 —— 既"间隔不要太远"，又不会和出生点重叠。
 const STARTER_MOB_ID = 3;
-const STARTER_MOB_RARITIES = ['common', 'legendary', 'super'];
+const STARTER_MOB_RARITIES = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super'];
 const STARTER_MOB_RADIUS = 190;

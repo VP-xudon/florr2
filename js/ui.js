@@ -250,6 +250,47 @@ const UI = {
   isDexVisible() { return !this.refs.dex.classList.contains('hidden'); },
   toggleDex() { if (this.onDexToggle) this.onDexToggle(); },
 
+  // ---------------- 死亡界面 ----------------
+  // 半透明灰色蒙版渐显 + 面板从屏幕下方滑入渐显（退出反向），符合全 UI 平滑过渡要求。
+  // 结构：死亡标题（i18N UI/Death/Title）换行 死因（生物名称，i18N 已本地化）
+  //       + 绿色 Continue 按钮（UI/Death/Continue）→ onRespawn 回调重生。
+  showDeathScreen(cause) {
+    if (this._deathEl) return;
+    const t = (typeof I18N !== 'undefined') ? I18N.t : (k, fb) => fb;
+    const wrap = document.createElement('div');
+    wrap.className = 'death-overlay';
+    const panel = document.createElement('div');
+    panel.className = 'death-panel';
+    const title = document.createElement('div');
+    title.className = 'death-title';
+    title.textContent = t('UI/Death/Title', 'You were destroyed by:');
+    const reason = document.createElement('div');
+    reason.className = 'death-cause';
+    reason.textContent = cause || t('UI/Death/NoSource', 'A mysterious entity');
+    const btn = document.createElement('button');
+    btn.className = 'death-continue';
+    btn.textContent = t('UI/Death/Continue', 'Continue');
+    panel.appendChild(title);
+    panel.appendChild(reason);
+    panel.appendChild(btn);
+    wrap.appendChild(panel);
+    document.body.appendChild(wrap);
+    this._deathEl = wrap;
+    // 双 rAF 后再加 .on：确保初始样式先完成一帧渲染，transition 才会播放
+    requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add('on')));
+    btn.addEventListener('click', () => {
+      this.hideDeathScreen();
+      if (this.onRespawn) this.onRespawn();
+    });
+  },
+  hideDeathScreen() {
+    const wrap = this._deathEl;
+    if (!wrap) return;
+    this._deathEl = null;
+    wrap.classList.remove('on');          // 反向过渡：面板滑回下方 + 蒙版渐隐
+    setTimeout(() => wrap.remove(), 400); // 过渡播完再摘除
+  },
+
   hideLoading() {
     if (this.refs.loading) this.refs.loading.style.display = 'none';
     this.hideLoadingWarn();
@@ -283,6 +324,7 @@ const UI = {
     this._renderRow(this.refs.slotRow, p.slots, 'slot', false);
     this._renderRow(this.refs.subRow, p.subSlots, 'subslot', true);
   },
+  // 卡槽"水缸"阴影已改由 _reloadTick 在卡牌 canvas 内板内驱动（cards.js drawHpShadow）。
   // 增量渲染一行：格子数量不够就补、多出来就删；内容没变的格子原样保留（动画不被打断）。
   _renderRow(rowEl, cards, drop, isSub) {
     while (rowEl.children.length < cards.length) {
@@ -305,6 +347,10 @@ const UI = {
       num.className = 'qnum';
       num.textContent = '[' + ((i + 1) % 10) + ']';   // 第 10 个显示 [0] 而非 [10]
       inner.appendChild(num);
+    }
+    if (drop === 'slot') {
+      // 花瓣血量"水缸"阴影改画在卡牌 canvas 内板上（与 reload 阴影同层同色，见
+      // cards.js drawHpShadow / ui.js _reloadTick），不再用 DOM 层。
     }
     box.appendChild(inner);
     box._cardKey = '\u0000none';           // 强制首次一定建卡面
@@ -539,12 +585,38 @@ const UI = {
     for (let i = 0; i < n; i++) {
       const cv = row.children[i].querySelector('.card');
       if (!cv || !cv._card) continue;
+      // —— reload 扇形阴影进度 ——
       const r = p.reload[i];
       const active = !!(r && r.dur > 0 && r.age < r.dur);
-      const key = active ? (r.age / r.dur).toFixed(4) : '';
-      if (cv._rlKey === key) continue;        // 进度没变：不重绘
+      // —— 花瓣血量阴影（"水缸"）——目标值即时生效，不做过渡：
+      // 阴影与 reload 阴影颜色天然相同（同色同级），状态切换无需动画；
+      // 旧版指数平滑会让花瓣死亡瞬间的 hp 阴影回退与 reload 扇形短暂叠加
+      // （两层 0.5 alpha 重叠变深），这正是"颜色略有不同"的来源。
+      //   · 玩家死亡          -> 全 1：所有卡【快速平滑】过渡到 reload 前的全阴影
+      //                          状态（reload 待命），重生后统一重新装填
+      //   · reload 阴影进行中 -> 0（视觉全部交给扇形阴影，绝不叠加）
+      //   · 有花瓣实体        -> 1 - hp/maxHp（归零即整块全阴影，无缝接 reload 起始）
+      //   · 无实体（装填中）  -> 0
+      let hpTarget = 0;
+      if (p.dead) {
+        hpTarget = 1;
+      } else if (!active) {
+        const b = p.petals ? p.petals.find((x) => x.slotIndex === i && !x.dead) : null;
+        if (b && b.maxHp > 0) hpTarget = 1 - Math.max(0, Math.min(1, b.hp / b.maxHp));
+      }
+      let cur = hpTarget;
+      if (p.dead) {
+        // 仅死亡爬坡保留平滑（约 0.3s 到全阴影）：从上一次显示值快速过渡
+        const prev = (cv._hpShadowSm != null) ? cv._hpShadowSm : 1;
+        cur = prev + (hpTarget - prev) * Math.min(1, 8 / 60);
+      }
+      cv._hpShadowSm = cur;
+      // 合并去重 key：reload 进度或阴影值任一变化才重绘那一张卡
+      const key = (active ? (r.age / r.dur).toFixed(4) : '') + '|' + cur.toFixed(3);
+      if (cv._rlKey === key) continue;        // 都没变：不重绘
       cv._rlKey = key;
       cv._card.reload = active ? r : null;
+      cv._card.hpShadow = cur;
       CardRenderer.paintCard(cv);
     }
   },
@@ -924,6 +996,7 @@ const UI = {
     let windowsClosed = false;   // 延迟关闭窗口标志
     let dragging = false;        // 是否已进入拖拽态（已生成幽灵）
     let over = false;            // 本次交互是否已结束
+    let movedMax = 0;            // 指针最大位移（判"原位松手"用）
 
     // 进入拖拽态才生成幽灵：卡片会被放大到 1.3 倍、开始跟随指针，源卡即时隐藏。
     // （点击路径绝不调用它 —— 0.1s 内松手时卡片不放大、不变形、不产生幽灵。）
@@ -945,9 +1018,11 @@ const UI = {
 
     const move = (e) => {
       if (over) return;
+      const md = Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY);
+      if (md > movedMax) movedMax = md;
       if (!dragging) {
         // 还没到 0.1s，但已经明显移动 -> 也立即升级为拖拽
-        if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) <= 6) return;
+        if (md <= 6) return;
         clearTimeout(clickTimer);
         startDrag(e);
       }
@@ -973,6 +1048,17 @@ const UI = {
         return;
       }
       // 按住≥0.2s -> 拖拽，窗口已关闭；吸附中的槽位优先作为落点（幽灵已对齐，松手即装）
+      // 【原位松手修正】：指针几乎没动（≤6px）说明用户是想"点一下"，只是按住超过了 0.1s。
+      // 旧逻辑把它当拖拽取消 -> 幽灵飞向背包按钮（用户看到"飞向背包按钮"）。
+      // 正确行为：回滚数量、移除拖拽幽灵，用幽灵当前位置当起点走点击装备路径（飞向空槽）。
+      if (from.type === 'gallery' && movedMax <= 6) {
+        const ghost = this._drag;
+        const gr = ghost ? ghost.getBoundingClientRect() : null;
+        this._removeGhost();
+        this._incGallery(card);
+        this._clickFly(card, from, gr, (t) => { if (onClick) onClick(card, t); });
+        return;
+      }
       const target = this._snap
         ? { type: this._snap.type, index: this._snap.index, el: this._snap.el }
         : this._dropTargetAt(e.clientX, e.clientY);
@@ -1103,7 +1189,7 @@ const UI = {
   // 点击（按住 < 0.1s）行为：不产生幽灵、不放大、不变形。
   //   背包画廊卡 -> 扣数量 + 播飞入动画 + 装入第一个空卡槽（主槽优先从左到右，满则副槽）；全满则原路飞回
   //   主槽 / 副槽卡 -> 同列互换，动画由 swapSlotColumn -> animateRowSwap 唯一播放一次
-  _clickFly(card, from, srcEl, done) {
+  _clickFly(card, from, srcElOrRect, done) {
     const g = window.__game;
     if (from.type !== 'gallery' && from.type !== 'inv') {
       if (done) done();          // 卡槽卡：交给同列互换动画
@@ -1113,7 +1199,10 @@ const UI = {
     // 下面 renderInventory() 会重建整个画廊，srcEl 随即被摘掉；此时再取
     // getBoundingClientRect() 只会得到全 0（left/top/width/height 都是 0），
     // 于是飞行动画的起点变成 (0,0) —— 也就是屏幕左上角。这正是"没有从对应位置飞出"的根因。
-    const sr = (srcEl && srcEl.getBoundingClientRect) ? srcEl.getBoundingClientRect() : null;
+    // 也接受调用方已量好的矩形（拖拽原位松手转点击时，源元素早已被重建）。
+    const sr = (srcElOrRect && srcElOrRect.getBoundingClientRect)
+      ? srcElOrRect.getBoundingClientRect()
+      : (srcElOrRect && srcElOrRect.width > 0 ? srcElOrRect : null);
     const hasSrc = !!(sr && sr.width > 0 && sr.height > 0);
     // 数量在「点击」时就要扣掉（与拖拽路径一致），否则点击不计数
     if (from.type === 'gallery') { this._decGallery(card); this.renderInventory(); }

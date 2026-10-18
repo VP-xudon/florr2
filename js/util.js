@@ -4,7 +4,7 @@ const TAU = Math.PI * 2;
 
 // 素材版本号：只要 assets/ 下的图片/SVG 内容变了（文件名不变），就把它 +1。
 // 浏览器会按 URL 缓存这些素材，不加版本号时改动可能不生效（表现为"还在用旧素材"）。
-const ASSET_VER = 2;
+const ASSET_VER = 5;
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 

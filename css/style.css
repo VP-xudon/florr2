@@ -69,6 +69,8 @@ body {
   border-radius: 4px; background: #ededed; border: 3.4px solid #c3c3c3; box-sizing: border-box;
 }
 .qslot .card { position: absolute; inset: 0; z-index: 1; }
+/* 花瓣血量"水缸"阴影已改画在卡牌 canvas 内板上（cards.js drawHpShadow，与
+   reload 装填阴影同层同色、掉血从顶边下垂），DOM 层方案已删除。 */
 /* 数量角标（xN / ∞）：DOM 文本，可自由溢出卡牌边界（canvas 绘制会被自身裁掉而显示不全）。
    定位用百分比 -> 随卡牌尺寸等比；倾斜 30° 与原 canvas 版观感一致，
    锚点在卡面右上角 (right:15% / top:11%)，绕该点旋转。 */
@@ -104,6 +106,44 @@ body {
 #uiOverlay {
   position: fixed; left: 0; top: 0; z-index: 500; pointer-events: none;
 }
+
+/* 死亡界面：半透明灰蒙版渐显（0.3s）+ 面板从屏幕下方滑入渐显（0.35s 回弹曲线）。
+   退出反向：去掉 .on 后过渡回初始状态，播完才摘除 DOM。 */
+.death-overlay {
+  position: fixed; inset: 0; z-index: 900;
+  background: rgba(45, 45, 45, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.3s ease;
+  pointer-events: auto;
+}
+.death-overlay.on { opacity: 1; }
+.death-panel {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-weight: 800;
+  text-align: center;
+  transform: translateY(64px); opacity: 0;
+  transition: transform 0.35s cubic-bezier(0.22, 1.2, 0.36, 1), opacity 0.35s ease;
+}
+.death-overlay.on .death-panel { transform: translateY(0); opacity: 1; }
+.death-title {
+  font-size: 17px; color: #fff;
+  -webkit-text-stroke: 1px #000; paint-order: stroke fill;
+}
+.death-cause {
+  font-size: 22px; color: #fff;
+  -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;
+}
+/* Continue 按钮：略下移、更小；加粗描边且描边色 = 原主色(#1ea761)，主色(底色)改浅 */
+.death-continue {
+  margin-top: 20px; padding: 7px 34px;
+  font-family: inherit; font-weight: 800; font-size: 14.5px;
+  color: #fff; -webkit-text-stroke: 1px #000; paint-order: stroke fill;
+  background: #2fc47a; border: 4px solid #1ea761; border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.death-continue:hover { background: #45d68d; transform: scale(1.06); }
+.death-continue:active { transform: scale(0.96); }
 
 /* 窗口：左下角背包窗口（宽 = 原 0.8 倍；主色 = 捕获.png 背包按钮棕，描边 = darken(0.18)） */
 .window {

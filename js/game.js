@@ -113,10 +113,19 @@ class Game {
     };
     UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
+    UI.onRespawn = () => this.respawn();   // 死亡界面 Continue 按钮 -> 重生
 
     // 玩家与初始装备
     this.player = new Player();
     this._resetPlayer(true);
+    // 调试参数 ?hp=N（可与 mode/lang 逗号混搭）：直接设定人物血量上限与当前血量。
+    // 必须在 _resetPlayer/recompute 之后应用，避免被覆盖；非法值（非正数）忽略。
+    const hpParam = parseFloat(window.__queryParams && window.__queryParams.hp);
+    if (hpParam > 0) {
+      this.player.maxHp = hpParam;
+      this.player.hp = hpParam;
+      this.player.dispHp = hpParam; this.player.ghostHp = hpParam; this.player.ghostV = 0;
+    }
     this.camera.x = this.player.x; this.camera.y = this.player.y;
     this._spawnStarterMobs();          // 出生点附近的初始生物
 
@@ -151,12 +160,39 @@ class Game {
     p.dead = false; p.deathTimer = 0; p.invuln = 0; p.flash = 0;
     p.slots = emptySlots();
     p.subSlots = emptySlots();
+    p.dispHp = null; p.ghostHp = null; p.ghostV = 0;   // 血条平滑值重置（update 中重新对齐）
     p.invBar = full ? [] : p.invBar;
     p.backpack = full ? [] : p.backpack;
     // 初始花瓣：基础 + 攻击型
     p.slots[0] = makePetal(STARTER_PETAL_A, 'common');
     p.slots[1] = makePetal(STARTER_PETAL_B, 'common');
     p.recompute();
+  }
+
+  // 重生：死亡界面 Continue 按钮触发。与 _resetPlayer 的关键区别：
+  // 【死亡不会导致花瓣消失】—— slots/subSlots/invBar/backpack/xp/level 全保留，
+  // 只重置生命状态并让所有花瓣重新装填（reload 从头结算，出场自带渐显+Q 弹）。
+  respawn() {
+    const p = this.player;
+    p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;         // 重生点
+    p.hp = p.maxHp;
+    p.dead = false; p.deathTimer = 0;
+    p.invuln = 2;                                  // 2s 无敌：起身缓冲
+    p.hurtT = 0; p.flash = 0; p.killedBy = null;
+    p.age = 0;                                     // 本体 Q 弹重生（spawnPop）
+    p.dispHp = p.hp; p.ghostHp = p.hp; p.ghostV = 0;
+    p.petalGhosts = [];                            // 死亡时的退场幽灵早已播完，兜底清空
+    // 所有花瓣重新装填：reload 各槽从头结算
+    for (let i = 0; i < p.slots.length; i++) {
+      const c = p.slots[i];
+      p.reloadHold[i] = false;
+      p.reload[i] = c
+        ? { card: c, age: 0, dur: (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0) }
+        : null;
+    }
+    this._deathShown = false;
+    this.camera.x = 0; this.camera.y = 0;
+    this.updateHUD();
   }
 
   buildBackground() {
@@ -211,6 +247,45 @@ class Game {
     for (const m of this.mobs) m.update(dt, p, this.map);
     this.mobs = this.mobs.filter((m) => !(m.dead && m.deathTimer > FADE_T));
 
+    // 敌对实体伤害数字：0.12s 聚合窗口到期就把累计伤害一次性弹出（精确到个位）
+    for (const m of this.mobs) {
+      if (m.dmgTextT > 0) { m.dmgTextT = Math.max(0, m.dmgTextT - dt); continue; }
+      if (m.pendDmg > 0) {
+        this.spawnText(m.x + rand(-m.r * 0.2, m.r * 0.2), m.y - m.r * 0.5,
+          String(Math.round(m.pendDmg)), '#ff4040');
+        m.pendDmg = 0;
+      }
+    }
+
+    // 玩家 vs 昆虫碰撞：把玩家挤出生物的精确外观碰撞（掩码网格）。
+    // 网格未就绪或中心陷入实心推不出时，退回圆形互斥。
+    if (!p.dead) {
+      for (const m of this.mobs) {
+        if (m.dead) continue;
+        const rr = p.r + m.r;
+        if (dist2(p.x, p.y, m.x, m.y) > rr * rr) continue;
+        let fixed = circleVsMob(m, p.x, p.y, p.r);
+        if (!fixed && mobMaskHit(m, p.x, p.y, p.r)) {
+          const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy) || 1;
+          fixed = { x: m.x + dx / d * rr, y: m.y + dy / d * rr };
+        }
+        if (fixed) { p.x = fixed.x; p.y = fixed.y; }
+      }
+    }
+
+    // 战斗结算：25 tick/s 固定步长，每 tick 对所有接触中的敌对实体双向扣血
+    this.combatAcc = (this.combatAcc || 0) + dt;
+    while (this.combatAcc >= 1 / 25) {
+      this.combatAcc -= 1 / 25;
+      this._combatTick();
+    }
+
+    // 死亡检测：弹出死亡界面（只弹一次，重生时复位）
+    if (p.dead && !this._deathShown) {
+      this._deathShown = true;
+      UI.showDeathScreen(p.killedBy);
+    }
+
     // 卡片（拾取 / 入栏）——无战斗时已不掉落，但保留拖拽到世界时的回收
     for (const c of this.cards) {
       c.update(dt, p);
@@ -239,6 +314,90 @@ class Game {
     this.camera.y = clamp(p.y, -half + hh, half - hh);
     this.shake = Math.max(0, this.shake - dt * 30);
 
+    this.updateHUD();
+  }
+
+  // ---------------- 战斗结算（25 tick/s 固定步长） ----------------
+  // 阵营：花朵本体 + 花瓣 vs 全部昆虫/生物。
+  // 每 tick：两个敌对实体接触时，双方【同时】各扣 max(对方攻击 - 己方护甲, 0) 点血。
+  _combatTick() {
+    const p = this.player;
+    for (const m of this.mobs) {
+      if (m.dead) continue;
+      // —— 花瓣 vs 昆虫（接触用精确外观掩码，网格未就绪退回圆形） ——
+      for (const b of p.petals) {
+        if (b.dead || b.fxNoCombat) continue;     // 已被打碎等幽灵 / 特效进行中（如玫瑰治疗）不参战
+        const rr = PETAL_R + m.r;
+        const touch = mobMaskHit(m, b.x, b.y, PETAL_R)
+          || dist2(b.x, b.y, m.x, m.y) < rr * rr;
+        if (!touch) continue;
+        const st = petalStatsFor(b.card.type, b.card.rarity);   // 按稀有度取攻/血
+        if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }   // 兜底初始化
+        const toPetal = Math.max((m.dmg || 0) - 0, 0);          // 花瓣护甲按 0
+        const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
+        if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
+        // 花瓣造成的伤害统一记到玩家头上（src 传 p）
+        if (toMob > 0) {
+          m.pendDmg = (m.pendDmg || 0) + toMob;
+          if (!(m.dmgTextT > 0)) m.dmgTextT = 0.12;
+          if (m.hurt(toMob, p)) this._onMobKilled(m);
+        }
+        if (b.hp <= 0) { this._destroyPetal(b); break; }
+        if (m.dead) break;
+      }
+      if (m.dead || p.dead) continue;
+      // —— 花朵本体 vs 昆虫 ——
+      // 玩家常被推出到与昆虫恰好相切：严格 < 会漏判（表现为"贴着但不掉血"），
+      // 所以接触判定带 +1 epsilon，同样优先用外观掩码。
+      const rr2 = p.r + m.r;
+      const touch = mobMaskHit(m, p.x, p.y, p.r + 1)
+        || dist2(p.x, p.y, m.x, m.y) < (rr2 + 1) * (rr2 + 1);
+      if (touch) {
+        const toMob = Math.max((p.bodyDmg || 0) - (m.armor || 0), 0);
+        const toFlower = Math.max((m.dmg || 0) - (p.armor || 0), 0);
+        if (toMob > 0) {
+          m.pendDmg = (m.pendDmg || 0) + toMob;
+          if (!(m.dmgTextT > 0)) m.dmgTextT = 0.12;
+          if (m.hurt(toMob, p)) this._onMobKilled(m);
+        }
+        if (toFlower > 0) p.hurt(toFlower, m);   // 传 m：死亡时记录死因（生物名称）
+      }
+    }
+    // —— 昆虫与昆虫之间的互斥碰撞（圆形，成对推开各半）——
+    const ms = this.mobs;
+    for (let i = 0; i < ms.length; i++) {
+      const a = ms[i]; if (a.dead) continue;
+      for (let j = i + 1; j < ms.length; j++) {
+        const b = ms[j]; if (b.dead) continue;
+        const rr = a.r + b.r;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dd = dx * dx + dy * dy;
+        if (dd >= rr * rr || dd <= 0) continue;
+        const d = Math.sqrt(dd), push = (rr - d) / 2;
+        const ux = dx / d, uy = dy / d;
+        a.x -= ux * push; a.y -= uy * push;
+        b.x += ux * push; b.y += uy * push;
+      }
+    }
+  }
+
+  // 花瓣被打碎：卡片保持装备，该槽【重新结算装填冷却】——装填完成后花瓣带着
+  // 满血重新生成（渐显）。本体不在这里移除：只打 dead 标记，下一帧 _syncPetals
+  // 的差分会把它转成退场幽灵（原地放大渐隐），保证消失渐隐与全体实体统一。
+  _destroyPetal(b) {
+    if (b.dead) return;
+    b.dead = true;
+    const p = this.player;
+    const c = p.slots[b.slotIndex];
+    if (c === b.card) {
+      const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
+      p.reload[b.slotIndex] = { card: c, age: 0, dur };
+    }
+  }
+
+  // 昆虫死亡落地：记入图鉴（退场放大渐隐动画由 Mob.draw 负责）
+  _onMobKilled(m) {
+    this.recordDefeat(m.type.id != null ? m.type.id : m.name, m.level);
     this.updateHUD();
   }
 
@@ -286,7 +445,8 @@ class Game {
     for (const c of this.cards) c.draw(ctx);
     const drawables = [];
     for (const m of this.mobs) drawables.push(m);
-    if (!this.player.dead) drawables.push(this.player);
+    // 玩家死亡也照画：Player.draw 的 dead 分支会画尸体（原地 X 眼+哭脸，保留到重生）
+    drawables.push(this.player);
     drawables.sort((a, b) => a.y - b.y);
     for (const d of drawables) {
       try { d.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
@@ -318,6 +478,7 @@ class Game {
   // ---------- HUD / 背包 ----------
   updateHUD() {
     UI.updateHUD(this.player);
+    // 卡槽"水缸"阴影已改由 ui.js _reloadTick 在卡牌 canvas 内驱动，HUD 无需再推
   }
 
   // ---------- 图鉴 ----------
@@ -590,7 +751,8 @@ class Game {
   }
 
   // ---------- HUD / 背包 ----------
-  updateHUD() { UI.updateHUD(this.player); }
+  // （注意：这里【不能】再定义第二个 updateHUD —— 类内后定义的会覆盖前面的，
+  //  曾导致带 updatePetalShadows 的版本被顶掉、卡槽水缸阴影永远 0% 看不见。）
 
   syncInventory() {
     UI.renderInvBar(this.player);

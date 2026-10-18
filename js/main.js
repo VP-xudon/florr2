@@ -5,9 +5,15 @@ const ASSET_LIST = [];
 // 花瓣/生物素材带 ASSET_VER：内容换过但文件名没变，必须靠版本号强制浏览器重新拉取
 for (const p of PETAL_TYPES) ASSET_LIST.push(['petal' + p.svg, 'assets/petals/' + p.svg + '.svg?v=' + ASSET_VER]);
 for (const m of MOB_TYPES) ASSET_LIST.push(['mob' + m.svg, 'assets/mobs/' + m.svg + '.svg?v=' + ASSET_VER]);
+// 瓢虫描边圈独立层：圆点画在鞘翅上、描边圈之下（见 entities.js LADYBUG_RING_RECT）
+ASSET_LIST.push(['mob3ring', 'assets/mobs/3_ring.svg?v=' + ASSET_VER]);
 
-// 调试模式：?mode=debug 开启开发者模式（背包卡牌显示 ∞，怎么拿都拿不空）
-const _params = new URLSearchParams(location.search);
+// 调试参数：?mode=debug 开启开发者模式（背包卡牌显示 ∞，怎么拿都拿不空）。
+// 支持【逗号与 & 混搭】的自由组合：?mode=debug,hp=1000,lang=zh_cn 与 ?mode=debug&hp=1000 等价。
+// 全部解析结果存 window.__queryParams（小写键）；hp 参数由 game.js init() 应用到玩家血量。
+const _params = new URLSearchParams(location.search.replace(/,/g, '&'));
+window.__queryParams = {};
+for (const [k, v] of _params) window.__queryParams[k.toLowerCase()] = v;
 window.__debug = _params.get('mode') === 'debug';
 
 async function boot() {
