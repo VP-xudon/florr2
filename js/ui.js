@@ -217,6 +217,9 @@ const UI = {
     };
     this._initOverlay();   // 悬浮框 / 卡牌覆盖层：纯 canvas
     this._mmInit();        // 小地图三档模式 + 地图名标签
+    // 全局聊天：DOM 由 chat.js 建（挂在 #ui 下）；Enter 热键在这里统一管理
+    if (typeof Chat !== 'undefined') Chat.init(null);
+    this._initChatKeys();
 
     this.refs.bagBtn.addEventListener('click', () => { if (this.onBagToggle) this.onBagToggle(); });
     this.refs.dexBtn.addEventListener('click', () => { if (this.onDexToggle) this.onDexToggle(); });
@@ -892,8 +895,8 @@ const UI = {
           text(L.lines[i], bx, y + (L.descTop + i * L.LH) * S, L.FS_DESC, L.W_ALL, '#e9f2ec');
         }
         // Health / Damage / Heal：统一排在左下角，标签彩色 + 数值白色（字号与介绍一致）
-        // 治疗用专用粉色 #ff94c9，不与伤害(红)/生命(绿)共用颜色
-        const STAT_COLORS = ['#7fe08a', '#ff6b6b', '#ff94c9'];
+        // 治疗用专用粉色，不与伤害(红)/生命(绿)共用颜色（与玫瑰回血飘字同色）
+        const STAT_COLORS = ['#7fe08a', '#ff6b6b', HEAL_TEXT_COLOR];
         const statLine = (label, color, val, refY) => {
           const size = Math.round(L.FS_STAT * S * 100) / 100;
           ctx.font = `${L.W_ALL} ${size}px ${CardRenderer.FONT}`;
@@ -906,6 +909,22 @@ const UI = {
         }
         ctx.restore();
       },
+
+    // Enter 聊天热键：非输入态下按 Enter 进入聊天输入态。
+    // 注意三点：
+    //   ① 输入框自己处理 Enter/Esc（chat.js 内已 stopPropagation），这里只在非输入态生效；
+    //   ② 背包/图鉴开着时不抢 Enter，避免与界面冲突；
+    //   ③ 同时认 e.code 与 e.key，主键盘/小键盘 Enter 都覆盖。
+    _initChatKeys() {
+      window.addEventListener('keydown', (e) => {
+        if (e.code !== 'Enter' && e.key !== 'Enter') return;
+        if (typeof Chat === 'undefined' || Chat.inputMode) return;
+        if ((this.isBagVisible && this.isBagVisible()) ||
+            (this.isDexVisible && this.isDexVisible())) return;
+        e.preventDefault();
+        Chat.enter();
+      });
+    },
 
     // 悬浮框专用覆盖层：全屏 canvas，0.2s 渐显渐隐，自带 rAF 循环
     _initOverlay() {
@@ -948,6 +967,7 @@ const UI = {
         this._mmLast = now;
         this._mmTick(dt);
         this._reloadTick();   // 主槽装填阴影推进
+        if (typeof Chat !== 'undefined') Chat.tick(dt);   // 聊天漂浮态渐隐推进
         const target = this._tipOn && this._tip ? 1 : 0;
         const cur = this._tipAlpha;
         if (cur !== target) {

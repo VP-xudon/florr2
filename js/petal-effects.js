@@ -25,6 +25,11 @@
 const PetalFX = {
   defs: {},
   ORBIT_T: 0.2,          // 弹出至轨道的判定阈值（出生 Q 弹 0.1s + 余量）
+  _suppress: false,      // true = 静音表现层输出（服务端权威副本推进时置位）
+
+  // 文字输出钩子：由 game.js 注入（内部转 spawnText）。
+  // 特效层不直接持有 Game 实例，只通过这个单一出口弹字，保持「特效只描述意图」的分层。
+  textSink: null,
 
   register(key, def) { this.defs[key] = def; },
 
@@ -59,7 +64,20 @@ const PetalFX = {
       stats: petalStatsFor(body.card.type, body.card.rarity),
       dt,
       onOrbit: () => body.age >= this.ORBIT_T,
-      heal: (n) => { player.hp = Math.min(player.maxHp, player.hp + (n || 0)); },
+      // 回血：返回【实际回血量】（血量有缺口不足时小于 n；满血返回 0）。
+      // 调用方应据此弹反馈，避免"想回 8 点但只回了 3 点却显示 8"。
+      heal: (n) => {
+        const before = player.hp;
+        player.hp = Math.min(player.maxHp, player.hp + (n || 0));
+        return player.hp - before;
+      },
+      // 弹飘字：走 textSink（game.spawnText），样式与攻击反馈完全一致（DamageText）。
+      // _suppress 为 true 时静音 —— 服务端权威副本也会跑特效逻辑（为了结算治疗量），
+      // 但表现层只能由客户端出，否则同一帧会弹两次。
+      floatText: (text, color, x, y) => {
+        if (PetalFX._suppress) return;
+        if (PetalFX.textSink) PetalFX.textSink(x, y, text, color);
+      },
       consumePetal: () => this._consume(body, player),
     };
   },
@@ -94,7 +112,14 @@ PetalFX.register('rose', {
     ctx.petal.x = s.fromX + (ctx.player.x - s.fromX) * e;
     ctx.petal.y = s.fromY + (ctx.player.y - s.fromY) * e;
     if (t01 >= 1) {
-      ctx.heal(ctx.stats.heal);
+      // 回血并弹出反馈：颜色用 Heal 专用粉（与卡面 Heal 属性行同色 #ff94c9），
+      // 数值是【实际回血量】，位置在花朵本体上方 —— 与攻击飘字同款式，只是颜色和出发点不同。
+      const got = ctx.heal(ctx.stats.heal);
+      if (got > 0) {
+        // 数字格式与攻击飘字保持一致（四舍五入到个位的原值），只换颜色与出发点
+        ctx.floatText(String(Math.round(got)), HEAL_TEXT_COLOR,
+          ctx.player.x, ctx.player.y - ctx.player.r - 6);
+      }
       ctx.consumePetal();
       return true;
     }

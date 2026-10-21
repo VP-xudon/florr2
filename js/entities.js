@@ -4,6 +4,96 @@
 // 世界放大后（瓦片 24→384），移动速度按相同比例放大，保持手感一致。
 const SPEED_SCALE = 5;
 
+// 花朵本体数值（体伤 / 血量 / 受击保护）。集中在此，避免散落的魔法数。
+const FLOWER_BASE_HP     = 100;   // 花朵基础血量（装备花瓣不再额外增加 maxHp）
+const FLOWER_BODY_DMG    = 20;    // 花朵本体伤害（体伤）基础值
+// 受伤后的无敌帧：只挡掉「同一 tick 里多只生物同时命中」的双扣，
+// 不改变战斗本身每 tick 结算的节奏（体伤/接触伤害都是每 tick 正常结算）。
+const FLOWER_HURT_INVULN = 0.2;
+// 碰撞反弹：被非己方实体打伤时，本体沿远离方向位移的距离（占主角直径的比例）。
+const FLOWER_KNOCKBACK = 0.3;
+// 反弹总位移在双方之间的分配比例 [玩家份额, 生物份额]（按稀有度查表，份额和恒为 1）。
+// 稀有度越高体型越大、越"重"：common 基本是生物被弹开，super 则基本是玩家被弹开。
+const KNOCKBACK_SHARE = {
+  common: [0.15, 0.85], unusual: [0.25, 0.75], rare: [0.35, 0.65], epic: [0.45, 0.55],
+  legendary: [0.55, 0.45], mythic: [0.65, 0.35], ultra: [0.75, 0.25], super: [0.85, 0.15],
+  eternal: [0.92, 0.08], unique: [0.92, 0.08]
+};
+// 反弹是「速度冲量 + 指数衰减」，不是瞬移：
+//   施加时给一个初速度 v0 = 目标总位移 × KNOCKBACK_DECAY，随后每帧 damp 回 0，
+//   位移对时间的积分正好收敛到目标总位移（∫v0·e^(-kt)dt = v0/k）。
+// 观感上是"被撞得滑出去一小段再停住"，而不是"位置突然跳一下"。
+const KNOCKBACK_DECAY = 12;
+// 施加反弹冲量：ux/uy 为单位方向，total 为希望的总位移（世界像素）
+function applyKnockback(ent, ux, uy, total) {
+  const v = total * KNOCKBACK_DECAY;
+  ent.kbX = (ent.kbX || 0) + ux * v;
+  ent.kbY = (ent.kbY || 0) + uy * v;
+}
+// 每帧推进反弹速度衰减（实体 update 里调用）
+function tickKnockback(ent, dt) {
+  if (!ent.kbX && !ent.kbY) return;
+  ent.kbX = damp(ent.kbX || 0, 0, KNOCKBACK_DECAY, dt);
+  ent.kbY = damp(ent.kbY || 0, 0, KNOCKBACK_DECAY, dt);
+  if (Math.abs(ent.kbX) < 1) ent.kbX = 0;   // 低于 1px/s 直接归零，避免长尾抖动
+  if (Math.abs(ent.kbY) < 1) ent.kbY = 0;
+}
+// 出生无敌时长（秒）：开局 3 秒保护，配合光晕与金/白血条提示。
+const FLOWER_SPAWN_INVULN = 3;
+// 无敌光晕：每秒 2 个完整闪烁周期（4π/s），峰值 alpha 0.22 —— 很淡。
+const INVULN_PULSE_HZ = 2;
+const INVULN_PULSE_MAX = 0.22;
+// 无敌血条配色（金色填充 + 白底）。
+const INVULN_BAR_FILL = '#ffd75e';
+const INVULN_BAR_BACK = '#ffffff';
+
+// ---- 无敌模式（通用，非出生专属） ----
+// 设计要点：内部按【绝对到期时间】记录每个来源，取最晚的到期时间作为当前无敌剩余。
+// 这样"长无敌生效中又叠加一个短无敌"不会像普通倒计时那样被短的那个提前解除。
+// 任何想获得无敌表现的东西（出生保护、受伤无敌帧、未来的无敌花瓣/技能）都调用同一接口：
+//   InvulnFX.add(ent, 'petal:rose', 1.5)   // 来源名随意，同一来源重复 add 会覆盖而非叠加
+//   InvulnFX.remove(ent, 'petal:rose')     // 提前撤销某个来源
+// 视觉（光晕 / 金白血条）由持有 invuln 的实体自行按 invulnA 插值绘制，本模块只管时间。
+const InvulnFX = {
+  add(ent, src, dur) {
+    if (!ent || dur <= 0) return;
+    if (!ent.invulnSrc) ent.invulnSrc = {};
+    ent.invulnSrc[src] = ent.clock + dur;      // 到期时刻 = 当前时刻 + 时长
+    this.sync(ent);
+  },
+  remove(ent, src) {
+    if (!ent || !ent.invulnSrc) return;
+    if (!(src in ent.invulnSrc)) return;
+    delete ent.invulnSrc[src];
+    this.sync(ent);
+  },
+  // 重算 invuln（剩余秒数）与 invulnTotal（本段无敌的总时长，供淡入淡出取包络）
+  sync(ent) {
+    if (!ent) return;
+    let latest = -Infinity;
+    for (const k in ent.invulnSrc) if (ent.invulnSrc[k] > latest) latest = ent.invulnSrc[k];
+    const left = Math.max(0, latest - ent.clock);
+    // 本段总时长 = 进入本段时的剩余量（只增不减，整段结束才归零）。
+    // 这样 (invulnTotal - invuln) 正好是"距本段开始过了多久"，可做淡入包络。
+    // 【旧实现是 Math.max(left, ent.invuln)】—— ent.invuln 是上一帧的剩余，
+    // 于是 invulnTotal 永远只比 invuln 大一个 dt，淡入包络恒等于 dt/0.25 ≈ 0.07，
+    // 光晕被压到设计亮度的 1/15，看起来就是"只闪了一下白色"。
+    if (left > (ent.invulnTotal || 0)) ent.invulnTotal = left;
+    ent.invuln = left;
+    if (left <= 0) { ent.invulnSrc = {}; ent.invulnTotal = 0; }
+  },
+  // 每帧推进：clock 单调递增，过期来源自然失效
+  tick(ent, dt) {
+    if (!ent) return;
+    ent.clock += dt;
+    if (ent.invulnSrc) {
+      let dirty = false;
+      for (const k in ent.invulnSrc) if (ent.invulnSrc[k] <= ent.clock) { delete ent.invulnSrc[k]; dirty = true; }
+      if (dirty || ent.invuln > 0) this.sync(ent);
+    }
+  }
+};
+
 // 花瓣物理参数
 // 采用「欠阻尼弹簧」：加速度 = K·(目标-位置) - D·速度
 //   · 回复力与距离成正比、速度无上限 —— 越远拉得越快，磁力吸附感
@@ -38,6 +128,32 @@ function hpBarColor(ratio) {
   const r = clamp(ratio, 0, 1);
   return 'hsl(' + (110 * r).toFixed(1) + ', 82%, 52%)';
 }
+// 颜色插值：支持 #rgb/#rrggbb/hsl(...) 输入，按 t(0..1) 线性混合后返回 #rrggbb。
+// 用途：无敌期间血条在「正常配色」与「金/白」之间平滑过渡（t 由 invulnA 驱动）。
+function mixHex(a, b, t) {
+  const pa = parseColor(a), pb = parseColor(b);
+  const k = clamp(t, 0, 1);
+  const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * k));
+  return '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+// 解析颜色为 [r,g,b]：支持 #rgb / #rrggbb / hsl(h, s%, l%)
+function parseColor(s) {
+  if (s[0] === '#') {
+    const h = s.length === 4
+      ? s[1] + s[1] + s[2] + s[2] + s[3] + s[3]
+      : s.slice(1, 7);
+    return [0, 2, 4].map((i) => parseInt(h.substr(i, 2), 16));
+  }
+  const m = /hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/.exec(s);
+  if (!m) return [255, 255, 255];
+  const h = parseFloat(m[1]) / 360, sat = parseFloat(m[2]) / 100, l = parseFloat(m[3]) / 100;
+  const f = (n) => {
+    const k = (n + h * 12) % 12;
+    const a = sat * Math.min(l, 1 - l);
+    return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+  };
+  return [f(0), f(8), f(4)].map((v) => Math.round(clamp(v, 0, 1) * 255));
+}
 
 // 圆角矩形路径（ cards.js 里那份在闭包内，这里给实体绘制单独放一份）
 function roundRectPath(ctx, x, y, w, h, r) {
@@ -60,17 +176,18 @@ function drawMob(ctx, key, size, x, y, rot, scale, alpha, white) {
   if (scale && scale !== 1) ctx.scale(scale, scale);
   if (alpha != null) ctx.globalAlpha = alpha;
   if (white) {
-    // 受击白闪：主画布上无法直接做 source-in 合成，用一次性高分辨率白色剪影缓存（512）
-    const cv = SpriteStore.whiteCanvas(key, 512);
+    // 受击白闪：用裁剪到图案包围盒的白色剪影（与本体同一裁剪管线），
+    // 否则未裁剪的全 viewBox 剪影会比本体小一圈且偏移，看着像"只有中间变白"。
+    const cv = SpriteStore.artWhiteCanvas(key, size);
     if (!cv) { ctx.restore(); return; }
     ctx.drawImage(cv, -size / 2, -size / 2, size, size);
   } else {
-    // 真矢量渲染：SVG 文件的 viewBox 已由 tools/crop_mob_svgs.py 烘焙到实际图案
-    // 包围盒（preserveAspectRatio=none），整图绘制即图案正好撑满 size×size，
-    // 每帧按屏幕分辨率直接光栅化（浏览器画的是矢量），任意尺寸下都绝对锐利。
-    const img = SpriteStore.getImage(key);
-    if (!img) { ctx.restore(); return; }
-    ctx.drawImage(img, -size / 2, -size / 2, size, size);
+    // 真矢量渲染：统一走「裁剪到实际图案包围盒」的 artCanvas，
+    // 保证与下面的白闪/红闪（artWhiteCanvas / artRedCanvas）同裁剪、同坐标系，
+    // 三者在 size×size 里完全对齐（否则红/白闪会偏小且偏移）。
+    const cv = SpriteStore.artCanvas(key, size);
+    if (!cv) { ctx.restore(); return; }
+    ctx.drawImage(cv, -size / 2, -size / 2, size, size);
   }
   ctx.restore();
 }
@@ -113,10 +230,12 @@ function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
 }
 
 function moveEntity(entity, dt, map) {
-  const dx = entity.vx * dt, dy = entity.vy * dt;
+  // 位移 = 自主移动速度 + 反弹冲量速度（kbX/kbY，由 tickKnockback 衰减）
+  const dx = (entity.vx + (entity.kbX || 0)) * dt;
+  const dy = (entity.vy + (entity.kbY || 0)) * dt;
   // 有碰撞外形（生物，外形取自其 SVG 轮廓）就走多边形碰撞；否则按圆形（主角/卡片）
-  if (entity.shape && typeof map.moveShape === 'function') {
-    const position = map.moveShape(entity.x, entity.y, dx, dy, entity.shape, entity.drawSize);
+  if (entity.hull && typeof map.moveShape === 'function') {
+    const position = map.moveShape(entity.x, entity.y, dx, dy, entity.hull, entity.drawSize);
     entity.x = position.x; entity.y = position.y;
     for (const normal of position.normals) {
       const intoWall = entity.vx * normal.x + entity.vy * normal.y;
@@ -161,9 +280,14 @@ class Player {
     this.maxInvBar = 8;
     this.maxBackpack = 24;
     this.invuln = 0; this.flash = 0;
+    this.clock = 0;             // 单调递增计时器：InvulnFX 的时间基准（绝对到期时间）
+    this.invulnSrc = {};        // 无敌来源表：{ 'spawn'|'hurt'|'petal:xxx': 到期时刻 }
+    this.invulnTotal = 0;       // 本段无敌总时长（供光晕/血条做淡入淡出包络）
+    this.invulnA = 0;           // 无敌视觉强度（平滑 0..1：光晕亮度、血条金白程度）
     this.armor = 0;             // 花朵护甲：受击结算 = max(攻-甲, 0)
-    this.bodyDmg = 0;           // 花朵本体攻击（0：本体不造成伤害，输出靠花瓣）
+    this.bodyDmg = FLOWER_BODY_DMG;  // 花朵本体攻击（体伤）；recompute() 会再次同步
     this.hurtT = 0;             // 受伤红色滤镜剩余时间（0.1s）
+    this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     this.hpBarA = 0;            // 血条显示透明度（非满血渐显 0.3s / 满血渐隐 0.3s）
     this.deathRot = 0;          // 死亡时本体固定的随机旋转角
     this.dead = false; this.deathTimer = 0;
@@ -191,24 +315,31 @@ class Player {
         dmg += st.dmg; spd += p.type.spd;
       }
     }
-    this.maxHp = Math.max(20, 100);
+    // 注意：maxHp 不在这里重置——它由构造函数给默认值 100，调试参数 ?hp=N 在之外覆盖。
+    // 若在此硬编码写回 FLOWER_BASE_HP，则每次换装 recompute() 都会把 ?hp 覆盖回 100，
+    // 表现为"一碰就死 / ?hp 无效"。speed / damage 等依赖装填的字段照常重算。
     this.speed = Math.max(60, this.baseSpeed + spd);
     this.damage = dmg;
+    this.bodyDmg = FLOWER_BODY_DMG;   // 体伤：与 maxHp 同源，重算后稳定为 20
   }
 
-  // 受击结算：返回是否致死。护甲已在调用方扣减。
+  // 受击结算：返回【本击是否真正扣到了血】（护甲已在调用方扣减）。
+  // 注意语义：返回 true 表示"掉血了"，不等于"死了"—— 是否致死看 this.dead / this.hp。
+  // （旧实现返回的是"是否致死"，导致非致命受伤时反弹/屏幕抖动全部不触发。）
   // src = 伤害来源（Mob）：致死时记录其名称，死亡界面显示"你死于 XX"。
+  // invuln > 0 时完全免伤（不扣血、不触发红闪）——出生无敌/受伤无敌帧/未来的无敌花瓣都走这里。
   hurt(dmg, src) {
     if (this.dead || dmg <= 0) return false;
+    if (this.invuln > 0) return false;
     this.hp -= dmg;
-    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长）
+    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈，不再叠加白闪）
+    InvulnFX.add(this, 'hurt', FLOWER_HURT_INVULN);   // 挨打后给一段无敌，挡掉同帧/下一 tick 的连续扣血
     if (this.hp <= 0) {
       this.hp = 0;
       this.killedBy = (src && src.name) ? src.name : null;
       this.die();
-      return true;
     }
-    return false;
+    return true;
   }
 
   // 花朵死亡：花瓣原地快速渐隐消失，本体随机旋转一个角度后保持不动（叉叉眼 + 哭脸）
@@ -246,10 +377,18 @@ class Player {
     this.ghostHp = clamp(this.ghostHp + this.ghostV * dt, 0, this.maxHp);
     const len = Math.hypot(dir.x, dir.y);
     let tx = 0, ty = 0;
-    if (len > 0) { tx = dir.x / len * this.speed; ty = dir.y / len * this.speed; }
+    if (len > 0) {
+      // dir 模长 = 目标速度占比(0..1)：鼠标移动(?movemode=mouse)用"指针距离"映射速度；
+      // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。据此缩放目标速度，
+      // 并复用下方同一套 rate 9/4 指数平滑加减速。
+      const sc = Math.min(len, 1);
+      tx = dir.x / len * this.speed * sc;
+      ty = dir.y / len * this.speed * sc;
+    }
     const rate = (len > 0) ? 9 : 4;   // 加速到默认速度约 0.3s（rate 9）；松开方向键沿用约 0.5s 减速（rate 4）
     this.vx = damp(this.vx, tx, rate, dt);
     this.vy = damp(this.vy, ty, rate, dt);
+    tickKnockback(this, dt);          // 反弹冲量衰减（必须在 moveEntity 之前：本帧的位移要带上它）
     moveEntity(this, dt, map);
     this.moving = len > 0;
     if (this.moving) {
@@ -258,7 +397,9 @@ class Player {
     }
     this.breath += dt;
     this.age += dt;                  // 出场 Q 弹推进
-    this.invuln = Math.max(0, this.invuln - dt);
+    InvulnFX.tick(this, dt);            // 无敌时间推进（多来源，取最晚到期）
+    // 无敌视觉强度平滑跟随：进入/退出都是渐变，绝不硬切换（光晕亮度与血条金白共用它）
+    this.invulnA = damp(this.invulnA, this.invuln > 0 ? 1 : 0, 8, dt);
     this.flash = Math.max(0, this.flash - dt);
 
     this.spin += PETAL_SPIN * dt;
@@ -270,6 +411,31 @@ class Player {
     const modeRate = 1 / 0.15;  // 0.15秒完成过渡
     this.modeT = damp(this.modeT, targetT, modeRate, dt);
     this._syncPetals(dt, map, mobs);
+  }
+
+  // 客户端侧销毁一朵花瓣实体：转退场幽灵（由 _syncPetals 的差分完成）+
+  // 该槽重新结算装填。与服务端 _destroyPetal 语义一致，但这里只做表现。
+  _killPetalBody(b) {
+    if (b.dead) return;
+    b.dead = true;
+    const c = b.card;
+    const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
+    this.reload[b.slotIndex] = { card: c, age: 0, dur };
+  }
+
+  // 把服务端下发的花瓣战斗状态（hp / 受伤红闪 / 是否已碎）应用到当前花瓣实体上。
+  // 由 _syncPetals 每帧调用；快照到达时也由 Game._applySnap 立即调一次，
+  // 保证同帧就能看到掉血/碎裂，不用等下一帧。
+  _applyNetPetalStates() {
+    if (!this.netPetals) return;
+    for (const b of this.petals) {
+      const ns = this.netPetals[b.slotIndex];
+      if (!ns) continue;
+      b.hp = ns.hp; b.maxHp = ns.maxHp;
+      // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
+      if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
+      if (ns.dead && !b.dead) this._killPetalBody(b);
+    }
   }
 
   // ---------------- 主槽装填（reload） ----------------
@@ -345,6 +511,12 @@ class Player {
       if (!kept) this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
     }
     this.petals = bodies;
+
+    // ---- 服务端花瓣战斗状态回填 ----
+    // 客户端不跑战斗（战斗在服务端），所以花瓣的 hp / 受伤红闪 / 是否已碎
+    // 全部由快照下发到这里。缺了这一步，服务端花瓣掉血碎掉而客户端毫无反应，
+    // 外观上就是"花瓣永远不受伤、永远不会碎"。
+    this._applyNetPetalStates();
     // 幽灵推进，超时即真正移除
     for (const g of this.petalGhosts) g.age += dt;
     this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
@@ -492,18 +664,22 @@ class Player {
     ctx.stroke();
     ctx.restore();
 
-    if (this.flash > 0) {
-      ctx.save();
-      ctx.globalAlpha = clamp(this.flash / 0.18, 0, 1) * 0.85;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
-      ctx.restore();
-    }
-    // 受伤红色滤镜（0.3s）：红色覆盖脸部，随剩余时间渐隐
+    // 受伤红色滤镜（0.3s）：红色覆盖脸部，随剩余时间渐隐。受击只红闪，不再叠加白闪。
     if (this.hurtT > 0) {
       ctx.save();
       ctx.globalAlpha = clamp(this.hurtT / 0.3, 0, 1) * 0.4;
       ctx.fillStyle = '#ff4040';
+      ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    // 无敌光晕：淡白色、平滑闪烁（每秒 INVULN_PULSE_HZ 下），进入与退出都有淡入淡出包络。
+    // 与受伤红闪/白闪互不干扰：三者 alpha 叠加，视觉上仍是"很淡地一闪一闪"。
+    if (this.invulnA > 0.002) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.clock * Math.PI * 2 * INVULN_PULSE_HZ);   // 平滑 0..1
+      const env = Math.min(1, this.invuln / 0.25, Math.max(0, (this.invulnTotal - this.invuln) / 0.25));
+      ctx.save();
+      ctx.globalAlpha = pulse * env * this.invulnA * INVULN_PULSE_MAX;
+      ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
       ctx.restore();
     }
@@ -535,20 +711,22 @@ class Player {
       ctx.save();
       ctx.globalAlpha = this.hpBarA;
       roundRectPath(ctx, bx, barY, bw, bh, rad);
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillStyle = mixHex('#2b2b33', INVULN_BAR_BACK, this.invulnA || 0);
       ctx.fill();
       // 黑框内先画淡灰缓冲条（慢速跟随、轻微过冲），再画绿色主条（快速跟随）；
       // 主条颜色随血量连续渐变。两者平时重合，缓冲条被完全盖住。
+      // 无敌期间整体平滑过渡为「金色填充 + 白底」（invulnA 做连续插值，不是硬切换）。
+      const gold = this.invulnA || 0;
       const dRatio = clamp((this.dispHp == null ? this.hp : this.dispHp) / this.maxHp, 0, 1);
       const gRatio = clamp((this.ghostHp == null ? this.hp : this.ghostHp) / this.maxHp, 0, 1);
       if (gRatio > 0) {
         roundRectPath(ctx, bx, barY, Math.max(bh, bw * gRatio), bh, rad);
-        ctx.fillStyle = '#b9bec8';
+        ctx.fillStyle = mixHex('#b9bec8', INVULN_BAR_BACK, gold);
         ctx.fill();
       }
       if (dRatio > 0) {
         roundRectPath(ctx, bx, barY, Math.max(bh, bw * dRatio), bh, rad);
-        ctx.fillStyle = hpBarColor(dRatio);
+        ctx.fillStyle = mixHex(hpBarColor(dRatio), INVULN_BAR_FILL, gold);
         ctx.fill();
       }
       ctx.lineWidth = Math.max(1.2, bh * 0.22);
@@ -629,99 +807,57 @@ const HPBAR_W = Math.max(30, Math.min(
   PLAYER_VISUAL_D * MOB_DIAM_BASE / 2 * 1.9)) * 1.9 * 0.6 * 1.3;
 const HPBAR_H = 6.6 * 0.8;
 
-// —— 精确外观碰撞：把贴图实心度烘焙成 N×N 网格，圆与实心格求交 ——
-// 凸包表示不了凹形（瓢虫的头凹槽等），网格直接取自渲染像素 -> 碰撞箱完全依照外观。
-const MOB_MASK_N = 64;
-function mobMaskHit(m, cx, cy, cr) {
-  const g = SpriteStore.alphaGrid('mob' + m.svg, MOB_MASK_N);
-  if (!g) return false;                        // 网格未就绪/被污染：调用方退回圆形
-  const half = m.drawSize / 2;
-  const dx = cx - m.x, dy = cy - m.y;
-  const rOut = half + cr;
-  if (dx * dx + dy * dy > (rOut + 2) * (rOut + 2)) return false;   // 粗判：外接圆
-  // 世界 -> 生物本地（贴图随 facing+artRot 旋转）
+// —— 生物碰撞箱：取自 SVG 实绘图形的轮廓多边形（marching squares 提取）——
+// 网格直接取自渲染像素，因此凹形（瓢虫头凹槽）也能表达；多边形顶点表与地图碰撞同形态，
+// 消费方做「圆 vs 多边形」求交（思路同 map.js 的 circleContact）。
+
+// 圆 vs 生物轮廓多边形。命中返回 { nx, ny, depth }（世界空间法线，指向生物外），否则 null。
+// 复杂度 = O(顶点数)，顶点已抽样简化（通常几十个），比逐格扫描更快。
+function circleVsMobPoly(m, cx, cy, cr) {
+  const poly = m.shape;
+  if (!poly || !poly.pts || poly.pts.length < 3) return null;
+  const D = m.drawSize;
+  // 世界 -> 生物本地（贴图随 facing + artRot 旋转，与绘制完全一致）
   const rot = m.facing + (m.artRot || 0);
   const c = Math.cos(rot), s = Math.sin(rot);
+  const dx = cx - m.x, dy = cy - m.y;
   const lx = dx * c + dy * s, ly = -dx * s + dy * c;
-  const cell = m.drawSize / MOB_MASK_N;
-  const cr2 = cr * cr;
-  const gx0 = Math.max(0, Math.floor((lx - cr + half) / cell));
-  const gx1 = Math.min(MOB_MASK_N - 1, Math.floor((lx + cr + half) / cell));
-  const gy0 = Math.max(0, Math.floor((ly - cr + half) / cell));
-  const gy1 = Math.min(MOB_MASK_N - 1, Math.floor((ly + cr + half) / cell));
-  for (let j = gy0; j <= gy1; j++) {
-    for (let i = gx0; i <= gx1; i++) {
-      if (!g[j * MOB_MASK_N + i]) continue;
-      // 圆 vs 实心格 AABB（圆心在格内时最近点=自身，必然命中）
-      const nx = Math.max(-half + i * cell, Math.min(lx, -half + (i + 1) * cell));
-      const ny = Math.max(-half + j * cell, Math.min(ly, -half + (j + 1) * cell));
-      const ex = lx - nx, ey = ly - ny;
-      if (ex * ex + ey * ey <= cr2) return true;
-    }
-  }
-  return false;
-}
-// 命中时沿「圆心-生物中心」方向二分外推到刚好脱离，返回修正后的圆心；推不出（中心陷入）返回 null。
-function circleVsMob(m, cx, cy, cr) {
-  if (!mobMaskHit(m, cx, cy, cr)) return null;
-  let dx = cx - m.x, dy = cy - m.y;
-  let len = Math.hypot(dx, dy);
-  if (len < 1e-3) { dx = 0; dy = -1; len = 1; }
-  const ux = dx / len, uy = dy / len;
-  let lo = 0, hi = cr + 2;
-  while (mobMaskHit(m, cx + ux * hi, cy + uy * hi, cr)) {
-    hi += cr;
-    if (hi > m.drawSize) return null;           // 兜底：整个方向都在实心里（几乎不可能）
-  }
-  for (let k = 0; k < 9; k++) {
-    const mid = (lo + hi) / 2;
-    if (mobMaskHit(m, cx + ux * mid, cy + uy * mid, cr)) lo = mid; else hi = mid;
-  }
-  return { x: cx + ux * hi, y: cy + uy * hi };
-}
+  // 粗判：本地外接圆
+  const rr = D * poly.r + cr;
+  if (lx * lx + ly * ly > rr * rr) return null;
 
-// —— 几何矢量化碰撞（旧凸包方案，保留作参考/兜底） ——
-// 生物的碰撞多边形（世界坐标）：SVG 轮廓凸包（归一化 [-0.5,0.5]）× drawSize，按朝向旋转后平移。
-// 与 drawMob 的绘制完全同构（同旋转、同尺寸），碰撞箱就是看见的图案本身。
-function mobWorldPoly(m) {
-  if (!m.shape || m.dead) return null;
-  const rot = m.facing + (m.artRot || 0);   // 与绘制同角度：碰撞箱就是看见的图案本身
-  const cos = Math.cos(rot), sin = Math.sin(rot);
-  const pts = [];
-  for (const p of m.shape) {
-    const lx = p[0] * m.drawSize, ly = p[1] * m.drawSize;
-    pts.push([m.x + lx * cos - ly * sin, m.y + lx * sin + ly * cos]);
-  }
-  return pts;
-}
-// 圆 vs 凸多边形：相交时把圆推出到表面相切，返回修正后的圆心；不相交返回 null。
-// 对绕向不敏感（射线法判内点 + 全边最近点），圆心在多边形内也能正确推出。
-function circleVsConvex(cx, cy, cr, pts) {
-  const n = pts.length;
+  const pts = poly.pts;
+  // 内外判定用射线法（与绕向无关，轮廓提取不保证绕向）
   let inside = false;
-  for (let i = 0, j = n - 1; i < n; j = i++) {
-    const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
-    if (((yi > cy) !== (yj > cy)) && (cx < (xj - xi) * (cy - yi) / (yj - yi) + xi)) inside = !inside;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const ax = pts[j][0] * D, ay = pts[j][1] * D;
+    const bx = pts[i][0] * D, by = pts[i][1] * D;
+    if ((ay > ly) !== (by > ly) && lx < (bx - ax) * (ly - ay) / (by - ay) + ax) inside = !inside;
   }
+  // 逐边求最近点，取最深的一条
   let bx = 0, by = 0, bd2 = Infinity;
-  for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    const ex = b[0] - a[0], ey = b[1] - a[1];
-    const L2 = ex * ex + ey * ey;
-    let t = L2 > 0 ? ((cx - a[0]) * ex + (cy - a[1]) * ey) / L2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    const px = a[0] + ex * t, py = a[1] + ey * t;
-    const d2 = (cx - px) * (cx - px) + (cy - py) * (cy - py);
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const ax = pts[j][0] * D, ay = pts[j][1] * D;
+    const ex = pts[i][0] * D - ax, ey = pts[i][1] * D - ay;
+    const len2 = ex * ex + ey * ey || 1e-9;
+    let t = ((lx - ax) * ex + (ly - ay) * ey) / len2;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    const px = ax + t * ex, py = ay + t * ey;
+    const ddx = lx - px, ddy = ly - py;
+    const d2 = ddx * ddx + ddy * ddy;
     if (d2 < bd2) { bd2 = d2; bx = px; by = py; }
   }
-  const d = Math.sqrt(bd2) || 1e-6;
-  if (inside) {
-    const ux = (bx - cx) / d, uy = (by - cy) / d;
-    return { x: bx + ux * cr, y: by + uy * cr };
-  }
-  if (d >= cr) return null;
-  const ux = (cx - bx) / d, uy = (cy - by) / d;
-  return { x: bx + ux * cr, y: by + uy * cr };
+  const dist = Math.sqrt(bd2);
+  if (!inside && dist >= cr) return null;          // 完全在外且没碰到
+  let nlx, nly;
+  if (dist > 1e-6) {
+    nlx = (lx - bx) / dist; nly = (ly - by) / dist;
+    if (inside) { nlx = -nlx; nly = -nly; }        // 圆心在内部：法线反向（指向出口）
+  } else { nlx = 1; nly = 0; }
+  const depth = inside ? cr + dist : cr - dist;
+  if (depth <= 0) return null;
+  // 本地法线 -> 世界
+  return { nx: nlx * c - nly * s, ny: nlx * s + nly * c, depth };
 }
 
 class Mob {
@@ -740,7 +876,8 @@ class Mob {
     this.visualD = diam;
     this.r = diam / 2;                  // 碰撞/名牌半径跟着视觉直径走
     this.drawSize = diam;               // 贴图裁剪后正好撑满它 -> 视觉与碰撞箱一致
-    this.shape = null;                  // 碰撞外形（SVG 轮廓的凸包），贴图就绪后懒加载
+    this.shape = null;                  // 碰撞外形：SVG 轮廓多边形 { pts, r }（玩家/接触判定用）
+    this.hull = null;                   // 同一轮廓的凸包（墙体碰撞用，凹处不会卡）
     this.x = x; this.y = y; this.vx = 0; this.vy = 0;
     this.maxHp = baseHp; this.hp = baseHp;
     this.dmg = baseDmg; this.speed = (type.speed || 0) * SPEED_SCALE;
@@ -753,6 +890,9 @@ class Mob {
     this.hostility = (rs && rs.hostility) || type.hostility || 'neutral';   // 仇恨按稀有度（瓢虫 common/unusual 被动、rare+ 中立）
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
     this.flash = 0; this.hitCd = 0; this.squash = 0;
+    this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
+    // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
+    this.dispHp = null; this.ghostHp = null; this.ghostV = 0;
     this.dead = false; this.deathTimer = 0;
     this.age = 0;                       // 出场计时（渐隐用）
     this.aggro = false;                 // 仇恨：暂不启用（还没有伤害）
@@ -763,19 +903,26 @@ class Mob {
     this.xpVal = rs ? (rs.exp || 0) : (4 + type.tier * 4);
   }
 
-  // 受击结算：返回是否致死。护甲已在调用方扣减。
-  // src = 伤害来源实体（花瓣造成的伤害由调用方统一记到玩家头上）。
+  // 受击结算：返回 { applied, killed }。
+  //   applied = 本击【实际造成的伤害】，不会超过剩余血量 —— 伤害飘字只认这个值，
+  //             所以"打出 80000 秒杀只剩 300 血的怪"只会弹 300，绝不会超额。
+  //   killed  = 是否被这一击致死（调用方据此立即弹飘字，保证秒杀也有反馈）。
+  // 护甲已在调用方扣减；src = 伤害来源实体（花瓣造成的伤害由调用方统一记到玩家头上）。
   hurt(dmg, src) {
-    if (this.dead || dmg <= 0) return false;
-    this.hp -= dmg;
-    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长）
+    if (this.dead || dmg <= 0) return { applied: 0, killed: false };
+    const applied = Math.min(dmg, this.hp);
+    this.hp -= applied;
+    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈；不缩放，缩放只留给死亡退场）
     // 仇恨：永久累计（死亡前不清零）。被动型（passive）不记仇恨、永不追击。
     if (src && this.hostility !== 'passive') {
       const e = this.threat.find((t) => t.ent === src);
-      if (e) e.dmg += dmg; else this.threat.push({ ent: src, dmg });
+      if (e) e.dmg += applied; else this.threat.push({ ent: src, dmg: applied });
     }
-    if (this.hp <= 0) { this.hp = 0; this.dead = true; this.deathTimer = 0; return true; }
-    return false;
+    if (this.hp <= 0) {
+      this.hp = 0; this.dead = true; this.deathTimer = 0;
+      return { applied, killed: true };
+    }
+    return { applied, killed: false };
   }
 
   // 当前最恨的实体：累计伤害最高且还活着；没有则 null
@@ -805,15 +952,40 @@ class Mob {
     return dots;
   }
 
+  // 血条平滑管线（与花朵血条完全同款，只是没有"非满血才显示"的透明度逻辑）：
+  //   dispHp  = 主条，指数阻尼【快速】跟随真实血量；
+  //   ghostHp = 淡灰缓冲条，欠阻尼弹簧【慢速】跟随主条并轻微过冲再回稳。
+  // 平时两者重合，掉血瞬间缓冲条才露出来 —— 这就是"掉血时露白条再追平"的观感。
+  _tickHpSmooth(dt) {
+    if (this.dispHp == null) { this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0; }
+    this.dispHp = damp(this.dispHp, this.hp, 18, dt);
+    const gk = 34, gd = 9;                      // 刚度低 + 阻尼欠 -> 追赶时过冲一小段
+    this.ghostV += (gk * (this.dispHp - this.ghostHp) - gd * this.ghostV) * dt;
+    this.ghostHp = clamp(this.ghostHp + this.ghostV * dt, 0, this.maxHp);
+  }
+
   update(dt, player, map) {
     if (this.dead) { this.deathTimer += dt; return; }
     this.age += dt;
+    this._tickHpSmooth(dt);
     this.flash = Math.max(0, this.flash - dt);
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.hitCd = Math.max(0, this.hitCd - dt);
     this.squash = damp(this.squash, 0, 10, dt);
+    tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
     // 碰撞外形要等贴图光栅化后才能从轮廓提取；取到一次就固定（外形不随动画变）
-    if (!this.shape) this.shape = SpriteStore.shape('mob' + this.svg, this.drawSize);
+    if (!this.shape) {
+      const ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
+      if (ct) {
+        this.shape = ct;
+        // 凸包：把轮廓点两两去重后取凸包，供 map.moveShape（墙体）使用
+        const uniq = [];
+        for (const p of ct.pts) {
+          if (!uniq.some((q) => Math.abs(q[0] - p[0]) < 1e-6 && Math.abs(q[1] - p[1]) < 1e-6)) uniq.push(p);
+        }
+        this.hull = uniq.length >= 3 ? convexHull(uniq) : null;
+      }
+    }
 
     // —— 1) 问 AI：现在想怎么动。AI 只给"移动欲望"，不直接改坐标 ——
     const want = MobAI.step(this.ai, dt, this, player);
@@ -849,12 +1021,8 @@ class Mob {
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     let bodyAlpha = alpha;
-    if (this.flash > 0) {
-      bodyAlpha = spawnFade(this.age) * clamp(this.flash / 0.14, 0, 1) * 0.9;
-      drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, bodyAlpha, true);
-    } else {
-      drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
-    }
+    // 受击只做红色滤镜（hurtT -> 下方 artRedCanvas 红闪），不再叠加白闪剪影。
+    drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
     // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。
     // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
     // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。
@@ -867,7 +1035,7 @@ class Mob {
       ctx.beginPath();
       ctx.arc(0, 0, 0.48 * this.drawSize, 0, TAU);
       ctx.clip();
-      ctx.fillStyle = this.flash > 0 ? '#fff' : '#111';
+      ctx.fillStyle = '#111';   // 斑点恒为黑色；受击由整体红色滤镜统一表现，不再随白闪变白
       for (const d of this.dots) {
         ctx.beginPath();
         ctx.arc(d.x * this.drawSize, d.y * this.drawSize, d.r * this.drawSize, 0, TAU);
@@ -897,7 +1065,7 @@ class Mob {
       ctx.rotate(rot);
       if (scale !== 1) ctx.scale(scale, scale);
       const ra = clamp(this.hurtT / 0.3, 0, 1) * 0.55;
-      const rc = SpriteStore.redCanvas(key, 512);
+      const rc = SpriteStore.artRedCanvas(key, this.drawSize);
       if (rc) {
         ctx.globalAlpha = ra;
         ctx.drawImage(rc, -this.drawSize / 2, -this.drawSize / 2, this.drawSize, this.drawSize);
@@ -947,16 +1115,24 @@ class Mob {
       ctx.fillStyle = '#fff';
       ctx.fillText(this.name, bx, nameY);
 
-      // 血条：圆角 + 深色描边，填充色随比例 绿→黄→红
+      // 血条：圆角 + 深色描边，填充色随比例 绿→黄→红。
+      // 黑框内先画淡灰缓冲条（慢速跟随、轻微过冲），再画主条（快速跟随）；
+      // 两者平时重合，掉血瞬间缓冲条才露出来 —— 由 _tickHpSmooth 驱动。
       const rad = Math.min(bh / 2, 6);
       roundRectPath(ctx, bx, barY, bw, bh, rad);
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fill();
-      const ratio = clamp(this.hp / this.maxHp, 0, 1);
-      if (ratio > 0) {
-        roundRectPath(ctx, bx, barY, Math.max(bh, bw * ratio), bh, rad);
+      const gRatio = clamp((this.ghostHp == null ? this.hp : this.ghostHp) / this.maxHp, 0, 1);
+      const dRatio = clamp((this.dispHp == null ? this.hp : this.dispHp) / this.maxHp, 0, 1);
+      if (gRatio > 0) {
+        roundRectPath(ctx, bx, barY, Math.max(bh, bw * gRatio), bh, rad);
+        ctx.fillStyle = '#b9bec8';
+        ctx.fill();
+      }
+      if (dRatio > 0) {
+        roundRectPath(ctx, bx, barY, Math.max(bh, bw * dRatio), bh, rad);
         // 剩余血量：绿 -> 红 连续渐变（与主角血条同一 helper）
-        ctx.fillStyle = hpBarColor(ratio);
+        ctx.fillStyle = hpBarColor(dRatio);
         ctx.fill();
       }
       ctx.lineWidth = Math.max(1.2, bh * 0.22);

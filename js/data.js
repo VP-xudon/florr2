@@ -23,6 +23,12 @@ const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic'
 // rarityStats.armor / type.armor 存在时优先生效（瓢虫等被动生物也走这条链路）。
 const MOB_ARMOR = { common: 0, unusual: 0, rare: 1, epic: 2, legendary: 3, mythic: 5, ultra: 8, super: 12, eternal: 16 };
 
+// 治疗（Heal）专用色：卡牌悬浮框的 Heal 属性行、玫瑰回血飘字共用同一份，
+// 绝不与伤害红(#ff4040) / 生命绿(#7fe08a) 混用。
+const HEAL_TEXT_COLOR = '#ff94c9';
+// 伤害飘字色（花朵/花瓣对生物造成的伤害），与 Heal 区分开。
+const DAMAGE_TEXT_COLOR = '#ff4040';
+
 // ---------------- 可用花瓣白名单 ----------------
 // 只有列在这里的花瓣会真正进入游戏（按 slug，slug = 英文名小写、空格转下划线）。
 // 其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。

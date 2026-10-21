@@ -2284,5 +2284,11 @@ window.I18N_ZH_CN = {
 "UI/HelperText/Squad": "小队成员",
 "UI/HelperText/You": "你",
 "UI/ChromeBug": "你当前使用的Chrome版本存在严重的性能问题。<n/>在修复完成前，为获得最佳体验，<n/>请使用Google Chrome Canary，该版本已修复此问题。",
-"UI/Title/LoadingSlow": "加载时间似乎过长，如果愿意请刷新或更改网络配置"
+"UI/Title/LoadingSlow": "加载时间似乎过长，如果愿意请刷新或更改网络配置",
+"Chat/Command/summon/BadMobId": "无效生物ID。",
+"Chat/Command/summon/BadRarity": "无效稀有度。",
+"Chat/Command/summon/BadCount": "无效数量。",
+"Chat/Command/summon/Done": "已召唤生物。",
+"Chat/Command/resphere/Done": "已原地复活。",
+"Chat/Command/Unknown": "未知指令。"
 };

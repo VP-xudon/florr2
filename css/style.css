@@ -243,3 +243,108 @@ body {
   z-index: 60; pointer-events: none;
   font-family: 'Ubuntu', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
+/* ================= 全局聊天（仿 notice.PNG / notice2.PNG / example1.PNG） ================= */
+/* 单一容器：收起态与展开态共用同一个输入框，左右边界/圆角/白底黑边完全一致；
+   展开只是在上方追加标签与历史（#chat 以 bottom 定位，自动向上生长）。 */
+
+/* 左右边界恒定：左侧避开左下角图标列（#dockBtns 宽约 71px），右侧由 width 决定 */
+#chat {
+  position: absolute; left: 88px; bottom: 22px; width: 235px;
+  pointer-events: auto; z-index: 46;
+  font-family: 'Ubuntu', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px; line-height: 1.45; color: #fff;
+}
+/* 收起态：隐藏标签/历史/前缀；输入行变成参考图里紧凑的深绿胶囊（notice.PNG / example1.PNG），
+   宽度自适应内容，不再是 340px 白框。点击或按 Enter 后还原为白底黑边输入框（notice2.PNG 底部）。 */
+#chat.collapsed .chat-tabs,
+#chat.collapsed .chat-log,
+#chat.collapsed .chat-chan { display: none; }
+#chat.collapsed { width: 235px; }   /* 与展开态同宽，点击展开时输入框不再变宽 */
+#chat.collapsed .chat-inputrow {
+  display: inline-flex; width: 100%;
+  background: #2f7d4c;                 /* 纯色填充，不用任何渐变/高光 */
+  border: 2px solid #808080;           /* 无焦点态描边为灰色（聚焦态为黑，作区分） */
+  border-radius: 4px;
+  padding: 4px 9px;
+  box-shadow: none;
+}
+#chat.collapsed .chat-input {
+  flex: 1; min-width: 0; color: #fff; font-size: 11px;
+}
+#chat.collapsed .chat-input::placeholder {
+  color: #fff; opacity: 1; font-weight: 700;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+}
+
+/* ---- 频道标签（notice2.PNG 顶部四个） ---- */
+.chat-tabs { display: flex; gap: 2px; margin-bottom: 5px; }
+.chat-tab {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 5px; border: none; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35); color: #fff;
+  font: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
+  -webkit-text-stroke: 1.1px #000; paint-order: stroke fill;
+}
+.chat-tab:hover { background: rgba(0, 0, 0, 0.5); }
+.chat-tab.on { background: rgba(255, 255, 255, 0.18); }
+/* 频道标签前的小方块 checkbox：参考 notice2.PNG 为浅色实心方块（频道颜色只体现在文字上） */
+.chat-tab .chat-box {
+  width: 9px; height: 9px; border-radius: 2px; display: inline-block;
+  background: rgba(255, 255, 255, 0.9);
+  outline: 1px solid rgba(0, 0, 0, 0.5);
+}
+
+/* ---- 历史区：深灰底、可滚动、保留登入以来全部消息 ---- */
+.chat-log {
+  background: rgba(58, 58, 58, 0.72); border-radius: 4px;
+  padding: 6px 8px; margin-bottom: 5px;
+  max-height: 168px; overflow-y: auto; overscroll-behavior: contain;
+  font-size: 13px;
+}
+.chat-log::-webkit-scrollbar { width: 8px; }
+.chat-log::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.35); border-radius: 4px; }
+.chat-log::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+
+/* ---- 强制换行：任何长度都不许撑破左右边界 ---- */
+.chat-line { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.chat-tag  { color: #ffffff; font-weight: 700; margin-right: 2px; }   /* 频道前缀：白字（notice2.PNG） */
+.chat-name { color: #FFE763; font-weight: 700; margin-right: 3px; }   /* 玩家名：黄字 */
+.chat-text { color: #ffffff; }
+/* 文字统一黑色描边（与画面内 canvas 的 strokeText 同款：黑边、圆角连接、填充在上） */
+.chat-tag, .chat-name, .chat-text, .chat-sys {
+  -webkit-text-stroke: 1.8px #000;
+  paint-order: stroke fill;
+}
+/* 系统消息：整行红字（约定：红色一律为系统） */
+.chat-line.sys .chat-sys { color: #FF0000; font-weight: 700; }
+
+/* ---- 输入行：白底黑字黑边。收起/展开完全同一款，左右边界与 #chat 一致 ---- */
+.chat-inputrow {
+  display: flex; align-items: center; gap: 6px;
+  background: #ffffff; border: 2px solid #000; border-radius: 5px;
+  padding: 2px 8px; width: 100%; box-sizing: border-box;
+}
+.chat-chan { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.chat-input {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  font: inherit; font-size: 13px; color: #000;
+}
+.chat-input::placeholder { color: #333; opacity: 1; }
+/* 聚焦后隐藏提示文案：与 notice2.PNG 一致，只留 [Local] 前缀与光标 */
+.chat-input:focus::placeholder { opacity: 0; }
+
+/* ---- 漂浮态：无边框、无底色，直接叠在游戏画面上（example1.PNG） ---- */
+.chat-float {
+  position: absolute; left: 88px; bottom: 62px;
+  display: flex; flex-direction: column; gap: 2px;
+  pointer-events: none; user-select: none;
+  font-family: 'Ubuntu', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px; line-height: 1.4;
+  max-width: 235px;
+}
+/* 漂浮态同样黑描边（不用投影，与画面内文字观感一致） */
+.chat-float .chat-tag, .chat-float .chat-name, .chat-float .chat-text, .chat-float .chat-sys {
+  -webkit-text-stroke: 1.8px #000;
+  paint-order: stroke fill;
+}
+.chat-float .chat-line { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }

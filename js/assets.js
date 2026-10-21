@@ -7,9 +7,13 @@ const SpriteStore = {
   artBox: {},   // 'key@size' -> [minX, minY, w, h] | null（实际图案的像素包围盒）
   artCache: {}, // 'key@size' -> canvas（裁剪并放大到 size×size 的图案）
   artWhiteCache: {},
+  artRedCache: {},   // 'key@size' -> canvas（裁剪到图案包围盒的红色剪影，受击红闪用）
   artRectCache: {},   // key -> [x,y,w,h] 归一化（0..1）实际图案包围盒（在 SVG 原坐标系内）
   red: {},      // key -> { size: canvas }  红色剪影（受伤滤镜）
   alphaGridCache: {},   // 'key@N' -> Uint8Array(N*N) 实心度网格（精确外观碰撞用）
+  contourCache: {},     // 'key@size' -> { pts, r } | null（碰撞轮廓多边形，归一化 [-0.5,0.5]）
+
+  // 带超时的加载：任何情况下都 resolve，绝不永久 pending（防止加载界面卡死）
 
   // 带超时的加载：任何情况下都 resolve，绝不永久 pending（防止加载界面卡死）
   load(key, src, timeout = 8000) {
@@ -68,20 +72,38 @@ const SpriteStore = {
 
   // 实心度网格：把贴图按 N×N 光栅化，alpha>96 记 1。碰撞箱"完全依照外观"的数据源
   //（含凹形轮廓，凸包做不到）。网格坐标与 drawMob 的整图绘制一一对应。
+  // 【只缓存成功结果】素材还没加载好时 canvas() 返回 null，若把 null 也缓存下来，
+  // 之后每次都直接拿到 null —— 轮廓/碰撞箱将永远建不出来。因此失败不缓存，下次重试。
   alphaGrid(key, N) {
     const ck = key + '@' + N;
-    if (this.alphaGridCache[ck] !== undefined) return this.alphaGridCache[ck];
-    let g = null;
+    const hit = this.alphaGridCache[ck];
+    if (hit) return hit;
     const cv = this.canvas(key, N);
-    if (cv) {
-      try {
-        const d = cv.getContext('2d').getImageData(0, 0, N, N).data;
-        g = new Uint8Array(N * N);
-        for (let i = 0; i < N * N; i++) g[i] = d[i * 4 + 3] > 96 ? 1 : 0;
-      } catch (e) { g = null; }   // 画布被污染（file:// 等）：退回圆形碰撞
-    }
-    this.alphaGridCache[ck] = g;
+    if (!cv) return null;                    // 素材未就绪：不缓存，下一帧再试
+    let g = null;
+    try {
+      const d = cv.getContext('2d').getImageData(0, 0, N, N).data;
+      g = new Uint8Array(N * N);
+      for (let i = 0; i < N * N; i++) g[i] = d[i * 4 + 3] > 96 ? 1 : 0;
+    } catch (e) { g = null; }   // 画布被污染（file:// 等）：退回圆形碰撞
+    if (g) this.alphaGridCache[ck] = g;
     return g;
+  },
+
+  // 碰撞轮廓多边形：把实心度网格用 marching squares 描出【外边界】，抽样简化后
+  // 归一化到 [-0.5, 0.5]（与整图绘制同坐标系），并给出外接半径供粗判。
+  // 与"凸包"的区别：保留凹形（如瓢虫头部凹槽），所以碰撞箱就是看见的形状本身；
+  // 数据形态与地图的碰撞多边形一致（顶点表 + 半径），消费方做圆 vs 多边形求交。
+  // 每种 (key,size) 只算一次并缓存；顶点数经简化后通常几十个，逐帧检测很便宜。
+  contour(key, size) {
+    const ck = key + '@' + size;
+    const hit = this.contourCache[ck];
+    if (hit) return hit;                 // 只认成功结果：失败不缓存，素材就绪后下次就能建出来
+    const g = this.alphaGrid(key, CONTOUR_N);
+    if (!g) return null;
+    const out = contourFromGrid(g, CONTOUR_N);
+    if (out) this.contourCache[ck] = out;
+    return out;
   },
 
   // 红色剪影（受伤 0.1s 红色滤镜）：与白色剪影同一管线，仅填充色不同
@@ -175,6 +197,31 @@ const SpriteStore = {
     return out;
   },
 
+  // 裁剪到图案包围盒的红色剪影（受击红闪用），与 artWhiteCanvas 同一裁剪管线。
+  // 关键：红闪必须和本体（artCanvas 裁剪版）同坐标系同尺寸，否则会偏小且偏移，
+  // 表现为"红闪没盖住、只糊在中间一小块"。旧实现直接拿未裁剪的 redCanvas(key,512)
+  // （全 viewBox 带留白）来画，自然对不上。
+  artRedCanvas(key, size) {
+    const ck = key + '@' + size;
+    if (this.artRedCache[ck]) return this.artRedCache[ck];
+    const SS = 2;
+    this.canvas(key, size * SS);
+    const base = this.white[key] ? this.white[key][size * SS] : null;
+    if (!base) return null;
+    const b = this._artBox(key, size * SS);
+    if (!b) { const fb = this.white[key] ? this.white[key][size] : null; this.artRedCache[ck] = fb; return fb; }
+    const out = document.createElement('canvas');
+    out.width = size; out.height = size;
+    const o = out.getContext('2d');
+    o.imageSmoothingQuality = 'high';
+    o.drawImage(base, b[0], b[1], b[2], b[3], 0, 0, size, size);
+    o.globalCompositeOperation = 'source-in';
+    o.fillStyle = '#ff4040';
+    o.fillRect(0, 0, size, size);
+    this.artRedCache[ck] = out;
+    return out;
+  },
+
   // 实际图案在 SVG 原坐标系中的归一化包围盒（一次性测量，供 drawMob 直接矢量裁剪绘制）。
   // 用固定参考分辨率量一次即可——包围盒与分辨率无关。
   artRect(key) {
@@ -226,6 +273,60 @@ const SpriteStore = {
     return out;
   }
 };
+
+// 轮廓提取网格分辨率：越大越贴近外形，但每种贴图只算一次，96 已足够（成本 O(N²) 一次）。
+const CONTOUR_N = 96;
+
+// 从二值实心网格提取碰撞轮廓多边形。
+// 方法：逐行求实心格的【左右极值】，上边界从左到右、下边界从右到左拼成一条简单多边形。
+// 相比 marching squares 串环：
+//   · 不可能失败 —— 不依赖环的连通性。真实贴图的抗锯齿边界存在大量对角"掐点"
+//     （两个实心格只在对角相触），有向串环会在掐点处断掉，整条轮廓直接失效
+//     （表现为碰撞多边形偏到一角甚至为 null，碰撞箱形同虚设）。
+//   · 必然给出合法简单多边形，顶点数可控（行采样后约百个）。
+//   · 实心区内部若有空洞会被填实 —— 碰撞箱本就该是实心的，不该让玩家掉进生物体内的洞。
+//   · 对本项目的光滑外形（瓢虫等近似行凸）与原轮廓一致。
+// 返回 { pts: [[x,y],...], r } —— pts 归一化到 [-0.5,0.5]，r 为外接半径（归一化）。
+function contourFromGrid(g, N) {
+  // 1) 每行的实心左右极值
+  const rows = [];   // { j, l, r }
+  for (let j = 0; j < N; j++) {
+    const base = j * N;
+    let l = -1, r = -1;
+    for (let i = 0; i < N; i++) {
+      if (g[base + i]) { if (l < 0) l = i; r = i; }
+    }
+    if (l >= 0) rows.push({ j, l, r });
+  }
+  if (rows.length < 2) return null;
+
+  // 2) 行采样：网格 96 取约 48 行（误差亚像素级），同时保留首末行
+  const stride = Math.max(1, Math.floor(rows.length / 48));
+  const picked = [];
+  for (let k = 0; k < rows.length; k += stride) picked.push(rows[k]);
+  if (picked[picked.length - 1] !== rows[rows.length - 1]) picked.push(rows[rows.length - 1]);
+  if (picked.length < 2) return null;
+
+  // 3) 拼多边形：上边界（左极值，自上而下）+ 下边界（右极值，自下而上）
+  const raw = [];
+  for (let k = 0; k < picked.length; k++) raw.push([picked[k].l + 0.5, picked[k].j]);
+  for (let k = picked.length - 1; k >= 0; k--) raw.push([picked[k].r + 0.5, picked[k].j]);
+  if (raw.length < 3) return null;
+
+  // 4) 抽样简化：相邻点曼哈顿距离 < 1.2 格就合并（视觉上无差别）
+  const simple = [raw[0]];
+  for (let i = 1; i < raw.length; i++) {
+    const p = raw[i], q = simple[simple.length - 1];
+    if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) >= 1.2) simple.push(p);
+  }
+  if (simple.length < 3) return null;
+
+  // 5) 归一化到 [-0.5, 0.5]（与整图绘制同坐标系）
+  const norm = simple.map(([x, y]) => [x / N - 0.5, y / N - 0.5]);
+  let r = 0;
+  for (const [x, y] of norm) { const d = Math.hypot(x, y); if (d > r) r = d; }
+  return { pts: norm, r: r || 0.5 };
+}
 
 // 凸包（Andrew 单调链）。用于把粗采样出来的实心像素点收敛成一个凸多边形碰撞外形。
 function convexHull(points) {

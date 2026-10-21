@@ -33,5 +33,18 @@ window.I18N.addPack('en', {
   'rarity.legendary': 'Legendary',
   'rarity.mythic': 'Mythic',
   'rarity.ultra': 'Ultra',
-  'rarity.super': 'Super'
+  'rarity.super': 'Super',
+
+  // ---- 全局聊天 ----
+  // 官方 en_US 包未包含这些键，这里按官方英文文案补齐；
+  // lang.js 的查找顺序是「当前语言 -> en_US -> en」，所以中文模式下仍优先用中文包。
+  'Chat/Alone': 'No one is around to hear you.',
+  'Chat/BadChannel': 'You cannot do that.',
+  'Chat/Channel/Local': 'Local',
+  'Chat/Channel/Squad': 'Squad',
+  'Chat/Channel/Guild': 'Guild',
+  'Chat/Channel/Whisper': 'Whisper',
+  'UI/Chat/PromptTap': 'Tap here to chat',
+  'UI/Chat/PromptClick': 'Click here to chat',
+  'UI/Chat/PromptKeyboardOrClick': 'Press [ENTER] or click here to chat'
 });

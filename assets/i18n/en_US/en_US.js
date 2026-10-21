@@ -1863,5 +1863,11 @@ window.I18N_EN = {
 "UI/HelperText/Guild": "Guild",
 "UI/HelperText/Squad": "Squad",
 "UI/HelperText/You": "You",
-"UI/ChromeBug": "The Chrome version you're using has a massive performance issue.<n/>Until it is fixed, for the optimal experience, please use<n/>Google Chrome Canary, which contains the fix to this issue."
+"UI/ChromeBug": "The Chrome version you're using has a massive performance issue.<n/>Until it is fixed, for the optimal experience, please use<n/>Google Chrome Canary, which contains the fix to this issue.",
+"Chat/Command/summon/BadMobId": "Invalid mob id.",
+"Chat/Command/summon/BadRarity": "Invalid rarity.",
+"Chat/Command/summon/BadCount": "Invalid count.",
+"Chat/Command/summon/Done": "Mobs summoned.",
+"Chat/Command/resphere/Done": "Respawned in place.",
+"Chat/Command/Unknown": "Unknown command."
 };
