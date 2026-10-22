@@ -115,10 +115,7 @@ const CardRenderer = (function () {
     return loadRaw(svgId).then((txt) => {
       if (!txt) { _tinted[svgId] = null; return null; }
       let out = txt;
-      // 花瓣按素材原始 110×110 viewBox 渲染，保持图形"原比例"：
-      // 不再把 viewBox 收紧到内容包围盒，否则小图形（如 Stinger 的小三角）
-      // 会被放大铺满，实体/卡面都失真。铺满 viewBox 的花瓣（basic/rose）行为不变。
-      const vb = [0, 0, 110, 110];
+      const vb = metrics(svgId) ? metrics(svgId).vb : fitViewBox(svgId, txt);   // 收紧画布 -> 图形撑满
       if (vb) {
         out = /viewBox="[^"]*"/.test(out)
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb + '"')
@@ -348,9 +345,7 @@ const CardRenderer = (function () {
     if (!mt || !mt.t || !mt.vb) return;
     const name = st.name;
     if (!name) return;
-    // 素材按原始 110×110 viewBox 渲染（见 asset()），名称坐标也按同一坐标系换算，
-    // 这样小图形（Stinger）的名字落在底部、与图形对齐，铺满型花瓣（basic/rose）位置不变。
-    const vb = [0, 0, 110, 110];
+    const vb = mt.vb;
     const sx = dw / vb[2], sy = dh / vb[3];           // viewBox -> 卡面像素 的缩放
     const bx = ox - vb[0] * sx, by = oy - vb[1] * sy; // 平移
     const cx = bx + mt.t[0] * sx;

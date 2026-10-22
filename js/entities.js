@@ -603,7 +603,9 @@ class Player {
         const size = 15 * 0.9;
         const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-        drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+        const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
+        if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
+        else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
       }
       this._drawDeadBody(ctx);
       return;
@@ -617,7 +619,9 @@ class Player {
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);                // 出场：0.1s 渐显
-      drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
+      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);  // 回退
       // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
       if (pp.hurtT > 0) {
         ctx.save();
@@ -634,7 +638,9 @@ class Player {
       const size = 15 * 0.9;                         // 与在场花瓣同尺寸
       const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-      drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+      const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
+      if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
+      else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
     }
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
@@ -726,7 +732,9 @@ class Player {
       const size = 15 * 0.9;
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);
-      drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      const cv = CardRenderer.artCanvas(p.type.svg, 128);
+      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       if (pp.hurtT > 0) {
         ctx.save();
         ctx.globalAlpha = clamp(pp.hurtT / 0.3, 0, 1) * 0.4;
