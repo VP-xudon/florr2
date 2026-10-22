@@ -64,6 +64,9 @@ const PetalFX = {
       stats: petalStatsFor(body.card.type, body.card.rarity),
       dt,
       onOrbit: () => body.age >= this.ORBIT_T,
+      // 弹出"一点点"（约 1/3 弹道）：用于"加载即结算"类特效——不等飞满整圈固定位，
+      // 花瓣往外弹一点就被拉回主角中心（观感更优美）。
+      popped: () => body.age >= this.ORBIT_T * 0.34,
       // 回血：返回【实际回血量】（血量有缺口不足时小于 n；满血返回 0）。
       // 调用方应据此弹反馈，避免"想回 8 点但只回了 3 点却显示 8"。
       heal: (n) => {
@@ -99,7 +102,9 @@ const PetalFX = {
 //       （对应卡面冷却文本 "3.5s + 1.5s" 的后半段）。
 PetalFX.register('rose', {
   detect(ctx) {
-    return ctx.onOrbit() && (ctx.stats.heal || 0) > 0 && ctx.player.hp < ctx.player.maxHp;
+    // 加载即结算：不等回到满圈固定位，花瓣往外弹一点(orbit 1/3)就触发，
+    // 随即被拉回主角中心回血（弃用"回固定位再吸入"的复杂做法）。
+    return ctx.popped() && (ctx.stats.heal || 0) > 0 && ctx.player.hp < ctx.player.maxHp;
   },
   start(ctx) {
     ctx.petal.fx.state = { t: 0, fromX: ctx.petal.x, fromY: ctx.petal.y };

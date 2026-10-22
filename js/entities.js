@@ -4,6 +4,19 @@
 // 世界放大后（瓦片 24→384），移动速度按相同比例放大，保持手感一致。
 const SPEED_SCALE = 5;
 
+// 玩家基础最大移速（生物仇恨追击速度以此为基准 = 0.9 倍）
+const PLAYER_BASE_SPEED = 232 * SPEED_SCALE * 0.2;
+// 实体重量按【横截面积(直径²)】换算：直径差 N 倍 -> 重量差 N² 倍。
+// 例：super 直径约为 common 的 ~11 倍 -> ~121 倍重（用户要求面积而非线性）。
+// 障碍型生物 ×5；花朵本体 = unusual 重量；花瓣 = 对应稀有度重量。
+// MOB_DIAM/MOB_DIAM_BASE 在文件后段定义，这里用函数惰性取用（调用发生在实体构造期，晚于其定义）。
+function rarityWeight(rarity) {
+  const d = MOB_DIAM[rarity] || MOB_DIAM_BASE;
+  return Math.pow(d / MOB_DIAM.common, 2);
+}
+// 实体推挤的恢复系数（0=不弹，1=完全弹性）：低值主要表现为"推挤/阻力"而非弹飞
+const PUSH_RESTITUTION = 0.2;
+
 // 花朵本体数值（体伤 / 血量 / 受击保护）。集中在此，避免散落的魔法数。
 const FLOWER_BASE_HP     = 100;   // 花朵基础血量（装备花瓣不再额外增加 maxHp）
 const FLOWER_BODY_DMG    = 20;    // 花朵本体伤害（体伤）基础值
@@ -106,6 +119,7 @@ const PETAL_DETECT    = 0.5;    // detect 模式收缩系数：轨道半径 ×0.
 const PETAL_REACH    = 2;     // 花瓣中点到主角边缘的距离 = 主角直径(2r) -> reach = r + 2r
 const PETAL_R        = 14 * 0.9;  // 12.6：花瓣碰撞半径缩至原 0.9
 const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
+let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；全局，客户端/服务端共用保持同步）
 
 // 通用出场 / 退场动画（所有实体统一遵守，时长 0.5s）
 //   出场：大小不变，仅渐显
@@ -229,6 +243,30 @@ function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
   ctx.restore();
 }
 
+// 基于重量与动能的实体推挤（玩家↔生物、生物↔生物通用）。
+// 位置修正按反质量分配（重的一方几乎不动）；再把沿法线的"接近速度"以低恢复系数转成冲量，
+// 于是：小生物推不动大生物；重生物能推飞小生物；很快的玩家能推动"更大一点"重量的生物。
+function physicsPush(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const rr = a.r + b.r;
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr || d2 <= 1e-6) return;
+  const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+  const overlap = rr - d;
+  const invA = 1 / (a.weight || 1), invB = 1 / (b.weight || 1), sum = invA + invB;
+  // 位置修正：按反质量分配（重 = 少动）
+  const pa = overlap * invA / sum, pb = overlap * invB / sum;
+  a.x -= nx * pa; a.y -= ny * pa;
+  b.x += nx * pb; b.y += ny * pb;
+  // 冲量：接近速度 -> 低恢复推挤（快 = 推动更重的；重 = 难被推动）
+  const closing = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+  if (closing > 0) {
+    const j = (1 + PUSH_RESTITUTION) * closing / sum;
+    a.vx -= j * invA * nx; a.vy -= j * invA * ny;
+    b.vx += j * invB * nx; b.vy += j * invB * ny;
+  }
+}
+
 function moveEntity(entity, dt, map) {
   // 位移 = 自主移动速度 + 反弹冲量速度（kbX/kbY，由 tickKnockback 衰减）
   const dx = (entity.vx + (entity.kbX || 0)) * dt;
@@ -269,7 +307,8 @@ class Player {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
     this.r = 22 * 0.6;   // 主角半径 = 原来的 0.6 倍 (≈13.2)
     this.facing = 0;
-    this.baseSpeed = 232 * SPEED_SCALE * 0.2; this.speed = this.baseSpeed;  // 人物移速 = 当前(0.4倍)再放慢一半 = 0.5 倍于当前
+    this.baseSpeed = PLAYER_BASE_SPEED; this.speed = this.baseSpeed;  // 人物移速 = 当前(0.4倍)再放慢一半 = 0.5 倍于当前
+    this.weight = rarityWeight('unusual');   // 花朵本体视为 unusual 生物的重量（玩家也是实体，参与重量推挤）
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.damage = 0;
@@ -284,6 +323,7 @@ class Player {
     this.invulnSrc = {};        // 无敌来源表：{ 'spawn'|'hurt'|'petal:xxx': 到期时刻 }
     this.invulnTotal = 0;       // 本段无敌总时长（供光晕/血条做淡入淡出包络）
     this.invulnA = 0;           // 无敌视觉强度（平滑 0..1：光晕亮度、血条金白程度）
+    this.hurtInvuln = 0;        // 受伤无敌帧计时（只免伤、不出任何无敌特效）
     this.armor = 0;             // 花朵护甲：受击结算 = max(攻-甲, 0)
     this.bodyDmg = FLOWER_BODY_DMG;  // 花朵本体攻击（体伤）；recompute() 会再次同步
     this.hurtT = 0;             // 受伤红色滤镜剩余时间（0.1s）
@@ -330,10 +370,10 @@ class Player {
   // invuln > 0 时完全免伤（不扣血、不触发红闪）——出生无敌/受伤无敌帧/未来的无敌花瓣都走这里。
   hurt(dmg, src) {
     if (this.dead || dmg <= 0) return false;
-    if (this.invuln > 0) return false;
+    if (this.invuln > 0 || this.hurtInvuln > 0) return false;
     this.hp -= dmg;
     this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈，不再叠加白闪）
-    InvulnFX.add(this, 'hurt', FLOWER_HURT_INVULN);   // 挨打后给一段无敌，挡掉同帧/下一 tick 的连续扣血
+    this.hurtInvuln = FLOWER_HURT_INVULN;   // 受伤无敌帧：独立计时，只挡连续扣血，不产生任何无敌特效
     if (this.hp <= 0) {
       this.hp = 0;
       this.killedBy = (src && src.name) ? src.name : null;
@@ -398,11 +438,13 @@ class Player {
     this.breath += dt;
     this.age += dt;                  // 出场 Q 弹推进
     InvulnFX.tick(this, dt);            // 无敌时间推进（多来源，取最晚到期）
-    // 无敌视觉强度平滑跟随：进入/退出都是渐变，绝不硬切换（光晕亮度与血条金白共用它）
+    // 无敌视觉强度平滑跟随：进入/退出都是渐变，绝不硬切换（光晕亮度与血条金白共用它）。
+    // 只跟随 invuln（出生/召唤/花瓣类）；受伤无敌帧走独立的 hurtInvuln，不产生任何视觉。
     this.invulnA = damp(this.invulnA, this.invuln > 0 ? 1 : 0, 8, dt);
+    this.hurtInvuln = Math.max(0, this.hurtInvuln - dt);   // 受伤无敌帧衰减
     this.flash = Math.max(0, this.flash - dt);
 
-    this.spin += PETAL_SPIN * dt;
+    this.spin += PETAL_SPIN * ROT_SCALE * dt;
     // 装填计时必须在 _syncPetals 之前：新换上来的卡要先有 reload 状态（age=0 -> 未完成），
     // 这一步之后花瓣实体才会被放出来
     this._tickReload(dt);
@@ -561,9 +603,7 @@ class Player {
         const size = 15 * 0.9;
         const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-        const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-        if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-        else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+        drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
       }
       this._drawDeadBody(ctx);
       return;
@@ -577,9 +617,7 @@ class Player {
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);                // 出场：0.1s 渐显
-      const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
-      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
-      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);  // 回退
+      drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
       if (pp.hurtT > 0) {
         ctx.save();
@@ -596,9 +634,7 @@ class Player {
       const size = 15 * 0.9;                         // 与在场花瓣同尺寸
       const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-      const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-      if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-      else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+      drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
     }
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
@@ -690,9 +726,7 @@ class Player {
       const size = 15 * 0.9;
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);
-      const cv = CardRenderer.artCanvas(p.type.svg, 128);
-      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
-      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       if (pp.hurtT > 0) {
         ctx.save();
         ctx.globalAlpha = clamp(pp.hurtT / 0.3, 0, 1) * 0.4;
@@ -880,7 +914,16 @@ class Mob {
     this.hull = null;                   // 同一轮廓的凸包（墙体碰撞用，凹处不会卡）
     this.x = x; this.y = y; this.vx = 0; this.vy = 0;
     this.maxHp = baseHp; this.hp = baseHp;
-    this.dmg = baseDmg; this.speed = (type.speed || 0) * SPEED_SCALE;
+    this.dmg = baseDmg;
+    // 障碍型生物（registry type=障碍型生物 或 speed=0）：几乎不可移动
+    this.obstacle = (type.type === 'Obstacle') || !(type.speed > 0);
+    // 速度统一（瓢虫为原型，全体非障碍生物通用）：
+    //   仇恨追击 = 玩家最大移速 0.9 倍；随机游荡 = 追击速度 0.3~0.5 倍随机
+    this.chaseSpeed = 0.9 * PLAYER_BASE_SPEED;
+    this.wanderSpeed = this.obstacle ? 0 : this.chaseSpeed * rand(0.3, 0.5);
+    this.speed = this.wanderSpeed;
+    // 重量：按横截面积(直径²)；障碍型 ×5（几乎推不动）
+    this.weight = rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
     this.color = type.color; this.boss = !!type.boss;
     this.facing = rand(0, TAU);         // 朝向（无呼吸/浮动动画，用户要求生物保持静止姿态）
     const svgKey = String(this.svg);    // type.svg 是数字 id，查表统一转字符串

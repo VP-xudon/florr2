@@ -191,32 +191,22 @@ class LocalServer {
     for (const m of this.ents) m.update(dt, p, this.map);
     this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
 
-    // 3) 玩家 vs 生物：纯几何圆形碰撞推出（半径 m.r，已含贴图描边），彻底弃用贴图轮廓提取。
-    // 轮廓提取会丢描边，且首帧贴图未光栅化时会缓存残缺多边形 -> "碰撞不对 / 出生挤不出 / 乱飞" 的根源。
+    // 3) 玩家 vs 生物：按重量 + 动能推挤（physicsPush）。重的一方几乎不动、轻的被推飞；
+    //    很快的玩家能推动"更大一点"重量的生物；小生物再也推不动大生物。
     if (!p.dead) {
       for (const m of this.ents) {
         if (m.dead) continue;
-        const reach = m.r + p.r;
-        const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy);
-        if (d >= reach) continue;
-        if (d < 1e-3) { p.x = m.x + reach + 0.02; }   // 正好叠在怪中心：任取方向推出，避免 0 向量方向卡死
-        else { p.x = m.x + dx / d * (reach + 0.02); p.y = m.y + dy / d * (reach + 0.02); }
+        physicsPush(p, m);
       }
     }
 
-    // 4) 生物之间的互斥（圆形，成对推开各半）
+    // 4) 生物之间：同样按重量 + 动能推挤（替代原来"各半"的等权推开）
     const ms = this.ents;
     for (let i = 0; i < ms.length; i++) {
       const a = ms[i]; if (a.dead) continue;
       for (let j = i + 1; j < ms.length; j++) {
         const b = ms[j]; if (b.dead) continue;
-        const rr = a.r + b.r;
-        const dx = b.x - a.x, dy = b.y - a.y, dd = dx * dx + dy * dy;
-        if (dd >= rr * rr || dd <= 0) continue;
-        const d = Math.sqrt(dd), push = (rr - d) / 2;
-        const ux = dx / d, uy = dy / d;
-        a.x -= ux * push; a.y -= uy * push;
-        b.x += ux * push; b.y += uy * push;
+        physicsPush(a, b);
       }
     }
 
@@ -266,16 +256,16 @@ class LocalServer {
           if (hurt && !p.dead) {
             const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy) || 1;
             const ux = dx / d, uy = dy / d;
-            const kb = FLOWER_KNOCKBACK * p.r * 2;              // 双方总位移之和（恒定）
+            // 玩家被咬的弹开：沿"远离生物"方向（背后被追咬=向前窜；撞障碍=向后弹），
+            // 距离 = 随机 1/3~1/2 个主角直径 —— 像屁股被咬、窜出去一小截。
+            const playerKb = (1 / 3 + Math.random() * (1 / 6)) * p.r * 2;
+            // 生物份额：保留对生物的冲量（按稀有度查表），轻生物被撞开、重生物基本不动
+            const kb = FLOWER_KNOCKBACK * p.r * 2;
             const sh = KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common;
-            // 生物份额：给权威实体一个速度冲量（随后指数衰减 -> 平滑滑出去再停住）。
-            // 位置变化本身会随快照下发，客户端插值后同样是平滑的。
             if (!m.dead) applyKnockback(m, -ux, -uy, kb * sh[1]);
-            // 玩家份额：只下发「冲量」，客户端叠加到它的预测实体上（同样平滑衰减），
-            // 不再直接改坐标 —— 否则会看到人物位置瞬移一下。
-            applyKnockback(p, ux, uy, kb * sh[0]);
+            applyKnockback(p, ux, uy, playerKb);
             this._events.push({
-              kind: 'hurt', ux, uy, total: kb * sh[0], shake: true
+              kind: 'hurt', ux, uy, total: playerKb, shake: true
             });
           }
         }
@@ -340,8 +330,24 @@ class LocalServer {
   // 返回该频道能收到消息的实体（本地只有玩家自己一个"他人"之外的接收者）
   _recipients(channel, from) { return []; }
 
-  // /summon <mob_id(number)> <rarity(valid_rarity_string)> <count(number)>
-  //   在当前位置召唤对应生物；类型不匹配/缺失均走 i18n 系统提示；召唤者获 4s 无敌。
+  // 匹配玩家：全名 / 忽略大小写，以及 "#0333" -> "Guest #0333"（客人玩家）
+  _matchPlayer(input) {
+    if (!input) return null;
+    const cands = [];
+    if (this.player) cands.push(this.player);
+    if (Array.isArray(this.players)) for (const pl of this.players) cands.push(pl);
+    const q = String(input).trim(), ql = q.toLowerCase();
+    for (const pl of cands) {
+      const pn = pl && pl.name;
+      if (!pn) continue;
+      if (pn === q || pn.toLowerCase() === ql) return pl;
+      if (q[0] === '#' && pn.toLowerCase() === 'guest ' + ql) return pl;
+    }
+    return null;
+  }
+
+  // 服务端处理的指令：/summon、/kill、/kill-mob、/resphere。
+  // 其余指令均已在客户端 chat.js 本地实现；走到这里的一律按未知指令处理。
   _handleCommand(raw, channel) {
     const p = this.player;
     if (!p) return;
@@ -352,16 +358,13 @@ class LocalServer {
       const rarity = parts[2];
       const count = parseInt(parts[3], 10);
       if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadMobId' });
-        return;
+        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadMobId' }); return;
       }
       if (!rarity || RARITY_ORDER.indexOf(rarity) < 0) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadRarity' });
-        return;
+        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadRarity' }); return;
       }
       if (!Number.isFinite(count) || count < 1) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadCount' });
-        return;
+        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadCount' }); return;
       }
       const n = Math.max(1, Math.min(count, 50));   // 上限保护，避免一次刷太多
       const px = p.x, py = p.y;
@@ -372,6 +375,41 @@ class LocalServer {
       }
       InvulnFX.add(p, 'summon', 4);
       this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/Done' });
+    } else if (cmd === '/kill') {
+      // /kill <player>：杀死对应玩家（#0333 匹配 Guest #0333）；找不到报错
+      const target = this._matchPlayer(parts[1]);
+      if (!target) { this._events.push({ kind: 'sys', channel, text: 'Chat/CommandError/TargetNotFound' }); return; }
+      target.hp = 0;
+      if (typeof target.die === 'function') target.die();
+      this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill/Done', { 0: target.name }, 'Killed ' + target.name + '.') });
+    } else if (cmd === '/kill-mob') {
+      // /kill-mob <mob_id> <rarity|all> <near|all> [count]：count 仅 near 时必填
+      const mobId = parseInt(parts[1], 10);
+      const rarity = (parts[2] || '').toLowerCase();
+      const scope = (parts[3] || '').toLowerCase();
+      const countArg = parts[4];
+      if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadMobId' }); return; }
+      if (rarity !== 'all' && RARITY_ORDER.indexOf(rarity) < 0) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadRarity' }); return; }
+      if (scope !== 'near' && scope !== 'all') { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadScope' }); return; }
+      let count = Infinity;
+      if (scope === 'near') {
+        count = parseInt(countArg, 10);
+        if (!Number.isFinite(count) || count < 1) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return; }
+      } else if (countArg != null) {
+        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return;   // all 不接受 count
+      }
+      const NEAR_R = 900, px = p.x, py = p.y;
+      let killed = 0;
+      for (const m of this.ents) {
+        if (m.dead) continue;
+        if (m.type.id !== mobId) continue;
+        if (rarity !== 'all' && m.rarity !== rarity) continue;
+        if (scope === 'near' && (m.x - px) * (m.x - px) + (m.y - py) * (m.y - py) > NEAR_R * NEAR_R) continue;
+        this._hitMob(m, 1e9);
+        killed++;
+        if (killed >= count) break;
+      }
+      this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill-mob/Done', { 0: killed }, 'Killed ' + killed + ' mob(s).') });
     } else if (cmd === '/resphere') {
       if (!p.dead) return;            // 活着直接忽略，不报错
       this._respawnInPlace();

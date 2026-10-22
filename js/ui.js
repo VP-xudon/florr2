@@ -260,6 +260,11 @@ const UI = {
   showDeathScreen(cause) {
     if (this._deathEl) return;
     const t = (typeof I18N !== 'undefined') ? I18N.t : (k, fb) => fb;
+    // ① 晕影层：全屏径向灰黑渐变，置于所有 UI 之下、不挡交互（.death-vignette）
+    const vig = document.createElement('div');
+    vig.className = 'death-vignette';
+    document.body.appendChild(vig);
+    // ② 死亡面板：标题 + 死因 + Continue；容器不挡交互，仅按钮可点
     const wrap = document.createElement('div');
     wrap.className = 'death-overlay';
     const panel = document.createElement('div');
@@ -279,8 +284,9 @@ const UI = {
     wrap.appendChild(panel);
     document.body.appendChild(wrap);
     this._deathEl = wrap;
+    this._deathVig = vig;
     // 双 rAF 后再加 .on：确保初始样式先完成一帧渲染，transition 才会播放
-    requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add('on')));
+    requestAnimationFrame(() => requestAnimationFrame(() => { vig.classList.add('on'); wrap.classList.add('on'); }));
     btn.addEventListener('click', () => {
       this.hideDeathScreen();
       if (this.onRespawn) this.onRespawn();
@@ -288,10 +294,11 @@ const UI = {
   },
   hideDeathScreen() {
     const wrap = this._deathEl;
-    if (!wrap) return;
+    const vig = this._deathVig;
     this._deathEl = null;
-    wrap.classList.remove('on');          // 反向过渡：面板滑回下方 + 蒙版渐隐
-    setTimeout(() => wrap.remove(), 400); // 过渡播完再摘除
+    this._deathVig = null;
+    if (wrap) { wrap.classList.remove('on'); setTimeout(() => wrap.remove(), 400); }
+    if (vig) { vig.classList.remove('on'); setTimeout(() => vig.remove(), 450); }
   },
 
   hideLoading() {

@@ -34,7 +34,7 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 // 其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
 //   basic = id 1（Basic / 基本）
 //   rose  = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
-const ENABLED_PETAL_SLUGS = new Set(['basic', 'rose']);
+const ENABLED_PETAL_SLUGS = new Set(['basic', 'rose', 'stinger']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -119,17 +119,13 @@ function petalStatsFor(type, rarity) {
 }
 
 // ---------------- 生物 ----------------
-// registry 的 rarities 用的是中文键（普通/罕见/…），这里统一映射到英文稀有度键，
-// 与 RARITY_ORDER 对齐，方便按 RARITIES[rarity].color 取色、按 I18N 取译名。
-const MOB_RARITY_KEY = {
-  '普通': 'common', '罕见': 'unusual', '稀有': 'rare', '史诗': 'epic', '传奇': 'legendary',
-  '神话': 'mythic', '究极': 'ultra', '超级': 'super', '永恒': 'eternal', '唯一': 'unique'
-};
-// 注册表中文类型串 -> 仇恨代码
+// registry 已统一为英文（type / rarities 键均为英文），无需二次转译：
+//   · rarities 的键直接就是英文稀有度（与 RARITY_ORDER 对齐）；
+//   · type 为英文类型串，仅 被动/中立/敌对 需映射仇恨代码，其余（Obstacle/Friendly/NPC/…）按 neutral。
 const MOB_HOSTILITY = {
-  '被动型生物': 'passive',
-  '中立型生物': 'neutral',
-  '敌对型生物': 'hostile'
+  'Passive': 'passive',
+  'Neutral': 'neutral',
+  'Hostile': 'hostile'
 };
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
@@ -140,14 +136,13 @@ function buildMobTypes() {
     if (id >= FANMADE_MOB_FROM) { flagManual('mob', id, m.name, '二创/超范围内容已忽略（如需启用请手填 registry）'); continue; }
     if (m.fanmade) { flagManual('mob', id, m.name, '标记为二创，已忽略'); continue; }
     if (!m.name || !String(m.name).trim()) { flagManual('mob', id, ('#' + id), '名称缺失，已忽略（待手填）'); continue; }
-    // 各稀有度数值表：中文键 -> 英文稀有度键（hp/dmg/exp）
+    // 各稀有度数值表：键即英文稀有度（hp/dmg/exp/type）
     let rarityStats = null;
     if (m.rarities) {
       rarityStats = {};
-      for (const zh in m.rarities) {
-        const rk = MOB_RARITY_KEY[zh];
-        if (!rk) continue;
-        const v = m.rarities[zh] || {};
+      for (const rk in m.rarities) {
+        if (RARITY_ORDER.indexOf(rk) < 0) continue;   // 只认英文稀有度键
+        const v = m.rarities[rk] || {};
         rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0, armor: v.armor, hostility: MOB_HOSTILITY[v.type] };
       }
     }

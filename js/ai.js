@@ -36,7 +36,7 @@ const MobAI = {
     if (tgt && mob.hostility !== 'passive') {
       const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
       const d = Math.hypot(dx, dy) || 1;
-      return { x: dx / d * mob.speed, y: dy / d * mob.speed };
+      return { x: dx / d * mob.chaseSpeed, y: dy / d * mob.chaseSpeed };
     }
 
     if (ai.phase === 'walk') {
@@ -46,7 +46,7 @@ const MobAI = {
         ai.t = rand(2, 6);       // 原地停留 2~6 秒（更有昆虫的从容感）
         return { x: 0, y: 0 };
       }
-      return { x: ai.dirX * mob.speed, y: ai.dirY * mob.speed };
+      return { x: ai.dirX * mob.wanderSpeed, y: ai.dirY * mob.wanderSpeed };
     }
 
     // idle：等够了就换一个新方向，开始下一趟
@@ -57,7 +57,7 @@ const MobAI = {
       ai.walked = 0;
       ai.t = 8;                      // 超时兜底
       ai.phase = 'walk';
-      return { x: ai.dirX * mob.speed, y: ai.dirY * mob.speed };
+      return { x: ai.dirX * mob.wanderSpeed, y: ai.dirY * mob.wanderSpeed };
     }
     return { x: 0, y: 0 };
   },

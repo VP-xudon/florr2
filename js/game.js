@@ -2,9 +2,9 @@
 'use strict';
 
 const WORLD_R = 1500 * 0.75;  // 1125：地图/世界缩至原 0.75（主角不变）
-// 真实受伤时的屏幕抖动峰值（像素）。刻意压到极小：不特意注意基本意识不到，
-// 但只要在看画面就能"感觉到"刚才挨了一下。衰减沿用既有的 shake -= dt*30。
-const HURT_SHAKE = 2.6;
+// 真实受伤时的屏幕抖动峰值（像素）。按反馈放大到 2.3 倍（原 2.6 -> 5.98），更明显。
+// 衰减沿用既有的 shake -= dt*30。
+const HURT_SHAKE = 5.98;
 
 // 物理键位 -> 逻辑动作。用 e.code 而非 e.key：e.key 会被输入法吞成 'Process'、
 // 且受键盘布局影响；这里每个物理键各占一个标记，方向键之间互不干扰，
@@ -409,6 +409,14 @@ class Game {
     p.mode = (this.keys['mode1'] || this.keys['mouse1']) ? 'reach'
            : (this.keys['mode2'] || this.keys['mouse2']) ? 'detect' : 'normal';
 
+    // 鼠标移动模式：平滑地把朝向转向指针。停住/开窗口时 Player.update 不再更新朝向，
+    // 这里补上——做到"眼睛跟随鼠标但不走动"（玩家 facing 不在快照里，纯客户端表现）。
+    if (this.moveMode === 'mouse' && this.mouse) {
+      const mx = this.mouse.x + this.camera.x - this.W / 2;
+      const my = this.mouse.y + this.camera.y - this.H / 2;
+      p.facing = lerpAngle(p.facing, Math.atan2(my - p.y, mx - p.x), clamp(dt * 12, 0, 1));
+    }
+
     // —— 本地玩家：客户端预测（沿用原有 damp + moveEntity，手感与视觉零变化）——
     p.update(dt, dir, this.map, this.mobs);   // 传入生物视图：花瓣会与生物碰撞
 
@@ -426,14 +434,8 @@ class Game {
     if (!p.dead) {
       for (const m of this.mobs) {
         if (m.dead) continue;
-        // 纯几何圆形碰撞：碰撞半径用 m.r（= drawSize/2，正好撑满视觉圆，
-        // 瓢虫外圈描边自然被算进碰撞箱），彻底弃用贴图轮廓提取（circleVsMobPoly）。
-        // 贴图轮廓提取会丢描边、且贴图未光栅化时首帧会缓存残缺多边形，是"碰撞不对/乱飞"的根源。
-        const reach = m.r + p.r;
-        const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy);
-        if (d >= reach) continue;
-        if (d < 1e-3) { p.x = m.x + reach + 0.02; }   // 正好叠在怪中心：任取方向推出，避免 0 向量方向
-        else { p.x = m.x + dx / d * (reach + 0.02); p.y = m.y + dy / d * (reach + 0.02); }
+        // 与服务器同一套"反质量 + 动能"推挤（physicsPush）：重生物难推动，轻生物被推飞
+        physicsPush(p, m);
       }
     }
 
@@ -516,6 +518,8 @@ class Game {
   // 指针与人物的距离 -> 目标速度占比(0..1)，距离达 3×主角直径(=6r)即达到键盘最大速度，再远封顶。
   // 返回 dir 的模长 = 速度占比，由 Player.update 的 min(len,1) 缩放目标速度，
   // 并复用键盘同款 rate 9/4 平滑加减速；指针距人物极近时归零（平滑停下）。
+  // 有窗口打开（背包/图鉴）时【不传递移动欲望】(返回 0)，让人物按自然减速率渐停（不卡顿）；
+  // 朝向由 update() 单独平滑跟踪鼠标（眼睛跟随但不走动）。
   _readMouseDir() {
     const p = this.player;
     if (!this.mouse || !p) return { x: 0, y: 0 };
@@ -525,6 +529,9 @@ class Game {
     const dx = mx - p.x, dy = my - p.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1e-3) return { x: 0, y: 0 };
+    const winOpen = (typeof UI !== 'undefined') &&
+      ((UI.isBagVisible && UI.isBagVisible()) || (UI.isDexVisible && UI.isDexVisible()));
+    if (winOpen) return { x: 0, y: 0 };
     const frac = Math.min(dist / (3 * (2 * p.r)), 1);   // 3 倍主角直径封顶
     return { x: dx / dist * frac, y: dy / dist * frac };
   }
@@ -559,16 +566,14 @@ class Game {
       catch (e) { console.error('[drawGardenTiles]', e); }
     }
 
-    // 先画卡片（地面），再按 y 排序画生物与玩家
+    // 先画卡片（地面）
     for (const c of this.cards) c.draw(ctx);
-    const drawables = [];
-    for (const m of this.mobs) drawables.push(m);
-    // 玩家死亡也照画：Player.draw 的 dead 分支会画尸体（原地 X 眼+哭脸，保留到重生）
-    drawables.push(this.player);
-    drawables.sort((a, b) => a.y - b.y);
-    for (const d of drawables) {
-      try { d.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
-    }
+    // 层级定数：尸体固定在最底层，生物彼此按 y 排序，活玩家固定在最上层（不再忽上忽下）
+    const me = this.player;
+    if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
+    const mobs = this.mobs.slice().sort((a, b) => a.y - b.y);
+    for (const m of mobs) { try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
+    if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
 
     for (const pt of this.particles) pt.draw(ctx);
     for (const d of this.dmgTexts) d.draw(ctx);

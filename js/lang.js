@@ -47,12 +47,16 @@ window.I18N = (function () {
         if (vb && vb !== b) return vb;
         return va || vb || '';
       });
+      out = out.replace(/\{#([A-Za-z0-9_.\/]+)\}/g, function (m, k) {   // {#Key} 单井引用（如 /w 复用 /whisper 的 Args/Description）
+        const v = lookup(k);
+        return (v && v !== k) ? v : m;
+      });
       out = out.replace(/\{([A-Za-z0-9_.\/]+\/[A-Za-z0-9_.\/]+)\}/g, function (m, k) {
         const v = lookup(k);
         return (v && v !== k) ? v : m;
       });
     } while (out !== prev && guard++ < 8);
-    out = out.replace(/<c[^>]*>/g, '').replace(/<\/c>/g, '');
+    out = out.replace(/<c[ =][^>]*>/g, '').replace(/<\/c>/g, '');   // 仅清 <c ...>/<c=...> 颜色标签，勿误伤 <count> 等占位符
     return out;
   }
 

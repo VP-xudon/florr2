@@ -107,14 +107,21 @@ body {
   position: fixed; left: 0; top: 0; z-index: 500; pointer-events: none;
 }
 
-/* 死亡界面：半透明灰蒙版渐显（0.3s）+ 面板从屏幕下方滑入渐显（0.35s 回弹曲线）。
-   退出反向：去掉 .on 后过渡回初始状态，播完才摘除 DOM。 */
+/* 死亡效果：全屏径向灰黑晕影（置于所有 UI 之下、pointer-events:none 不挡交互）
+   + 面板从屏幕下方滑入渐显（0.35s 回弹曲线）。退出反向，播完再摘除 DOM。 */
+.death-vignette {
+  position: fixed; inset: 0; z-index: 10;   /* 高于 canvas(0)、低于所有 UI(45+) */
+  pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    rgba(0, 0, 0, 0) 50%, rgba(16, 16, 16, 0.6) 80%, rgba(6, 6, 6, 0.92) 100%);
+  opacity: 0; transition: opacity 0.45s ease;
+}
+.death-vignette.on { opacity: 1; }
 .death-overlay {
   position: fixed; inset: 0; z-index: 900;
-  background: rgba(45, 45, 45, 0.45);
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity 0.3s ease;
-  pointer-events: auto;
+  pointer-events: none;            /* 容器不挡交互，仅 Continue 按钮可点（可继续操作背包/卡槽） */
 }
 .death-overlay.on { opacity: 1; }
 .death-panel {
@@ -123,6 +130,7 @@ body {
   text-align: center;
   transform: translateY(64px); opacity: 0;
   transition: transform 0.35s cubic-bezier(0.22, 1.2, 0.36, 1), opacity 0.35s ease;
+  pointer-events: none;
 }
 .death-overlay.on .death-panel { transform: translateY(0); opacity: 1; }
 .death-title {
@@ -140,6 +148,7 @@ body {
   color: #fff; -webkit-text-stroke: 1px #000; paint-order: stroke fill;
   background: #2fc47a; border: 4px solid #1ea761; border-radius: 8px;
   cursor: pointer;
+  pointer-events: auto;            /* 死亡面板里唯一可点的元素 */
   transition: transform 0.15s ease, background 0.15s ease;
 }
 .death-continue:hover { background: #45d68d; transform: scale(1.06); }
@@ -262,14 +271,14 @@ body {
 #chat.collapsed { width: 235px; }   /* 与展开态同宽，点击展开时输入框不再变宽 */
 #chat.collapsed .chat-inputrow {
   display: inline-flex; width: 100%;
-  background: #2f7d4c;                 /* 纯色填充，不用任何渐变/高光 */
-  border: 2px solid #808080;           /* 无焦点态描边为灰色（聚焦态为黑，作区分） */
-  border-radius: 4px;
-  padding: 4px 9px;
+  background: rgba(0, 0, 0, 0.35);     /* 非焦点态：半透明黑底（与悬浮信息框同级） */
+  border: 2px solid transparent;       /* 预留与聚焦态相同的描边宽度(2px)：无焦点看着不再小一圈 */
+  border-radius: 5px;
+  padding: 2px 8px;                    /* 与聚焦态一致，保证两态内容区精确对齐 */
   box-shadow: none;
 }
 #chat.collapsed .chat-input {
-  flex: 1; min-width: 0; color: #fff; font-size: 11px;
+  flex: 1; min-width: 0; color: #fff; font-size: 13px;
 }
 #chat.collapsed .chat-input::placeholder {
   color: #fff; opacity: 1; font-weight: 700;
@@ -281,22 +290,48 @@ body {
 .chat-tab {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 5px; border: none; border-radius: 4px;
-  background: rgba(0, 0, 0, 0.35); color: #fff;
+  background: rgba(170, 170, 170, 0.45); color: #fff;
   font: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
   -webkit-text-stroke: 1.1px #000; paint-order: stroke fill;
 }
-.chat-tab:hover { background: rgba(0, 0, 0, 0.5); }
-.chat-tab.on { background: rgba(255, 255, 255, 0.18); }
-/* 频道标签前的小方块 checkbox：参考 notice2.PNG 为浅色实心方块（频道颜色只体现在文字上） */
+.chat-tab:hover { background: rgba(195, 195, 195, 0.55); }
+.chat-tab.on { background: rgba(255, 255, 255, 0.22); }
+/* 通用勾选框：外框(黑描边) + 内部填充块。填充块 inset:0 落在描边内侧，缩放时不覆盖描边。
+   未勾选 = 白/淡灰底；勾选稳定态 = 深灰；两段动画由 JS 加类触发（keyframes 见下）：
+   勾选 = 绿块从中心放大到满 -> 平滑变深灰；取消 = 先平滑变红 -> 再缩到中心直至看不见。 */
 .chat-tab .chat-box {
-  width: 9px; height: 9px; border-radius: 2px; display: inline-block;
-  background: rgba(255, 255, 255, 0.9);
-  outline: 1px solid rgba(0, 0, 0, 0.5);
+  position: relative;
+  width: 11px; height: 11px;
+  box-sizing: border-box;
+  display: inline-block;
+  background: #ececec;                 /* 未勾选：白/淡灰 */
+  border: 1px solid #000;              /* 勾选框描边（填充不覆盖它） */
+  border-radius: 2px;
+}
+.chat-tab .chat-box .chat-fill {
+  position: absolute; inset: 0;
+  background: #555;                    /* 勾选稳定态：深灰 */
+  border-radius: 1px;
+  transform: scale(0);
+  transform-origin: center;
+}
+.chat-tab.on .chat-box .chat-fill { transform: scale(1); }
+.chat-tab .chat-box .chat-fill.cbx-checking   { animation: cbx-check   0.36s cubic-bezier(.4,0,.2,1) forwards; }
+.chat-tab .chat-box .chat-fill.cbx-unchecking { animation: cbx-uncheck 0.36s cubic-bezier(.4,0,.2,1) forwards; }
+@keyframes cbx-check {
+  0%   { transform: scale(0); background: #3ecf5b; }   /* 绿，从中心出现 */
+  55%  { transform: scale(1); background: #3ecf5b; }   /* 放大到满（不覆盖描边） */
+  100% { transform: scale(1); background: #555; }       /* 平滑变深灰 */
+}
+@keyframes cbx-uncheck {
+  0%   { transform: scale(1); background: #555; }
+  40%  { transform: scale(1); background: #e0483a; }   /* 先平滑变红 */
+  100% { transform: scale(0); background: #e0483a; }   /* 再缩到中心直至看不见 */
 }
 
-/* ---- 历史区：深灰底、可滚动、保留登入以来全部消息 ---- */
+/* ---- 历史区：中浅灰半透明底（notice2.PNG）、可滚动、保留登入以来全部消息 ---- */
 .chat-log {
-  background: rgba(58, 58, 58, 0.72); border-radius: 4px;
+  background: rgba(150, 150, 150, 0.55); border-radius: 4px;
   padding: 6px 8px; margin-bottom: 5px;
   max-height: 168px; overflow-y: auto; overscroll-behavior: contain;
   font-size: 13px;
@@ -304,6 +339,14 @@ body {
 .chat-log::-webkit-scrollbar { width: 8px; }
 .chat-log::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.35); border-radius: 4px; }
 .chat-log::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+/* 指令提示：匹配的指令一条一个小半透明栏（命令格式 + 介绍） */
+.chat-log .chat-hint {
+  padding: 2px 6px; margin: 1px 0; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 12px; line-height: 1.4;
+}
+.chat-hint-cmd { color: #ffe763; font-weight: 700; -webkit-text-stroke: 1.2px #000; paint-order: stroke fill; }
+.chat-hint-desc { color: #ffffff; -webkit-text-stroke: 1.2px #000; paint-order: stroke fill; }
 
 /* ---- 强制换行：任何长度都不许撑破左右边界 ---- */
 .chat-line { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
@@ -317,6 +360,8 @@ body {
 }
 /* 系统消息：整行红字（约定：红色一律为系统） */
 .chat-line.sys .chat-sys { color: #FF0000; font-weight: 700; }
+/* 密语行：[@对象] 前缀用 rare 紫蓝区分 */
+.chat-line.whisper .chat-tag { color: #4D52E3; }
 
 /* ---- 输入行：白底黑字黑边。收起/展开完全同一款，左右边界与 #chat 一致 ---- */
 .chat-inputrow {
@@ -324,10 +369,11 @@ body {
   background: #ffffff; border: 2px solid #000; border-radius: 5px;
   padding: 2px 8px; width: 100%; box-sizing: border-box;
 }
-.chat-chan { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.chat-chan { font-size: 13px; font-weight: 700; white-space: nowrap; -webkit-text-stroke: 1px #000; paint-order: stroke fill; }
 .chat-input {
   flex: 1; min-width: 0; border: none; outline: none; background: transparent;
   font: inherit; font-size: 13px; color: #000;
+  -webkit-text-stroke: 0.6px #000; paint-order: stroke fill;   /* 与全局文字一致的描边（更粗实） */
 }
 .chat-input::placeholder { color: #333; opacity: 1; }
 /* 聚焦后隐藏提示文案：与 notice2.PNG 一致，只留 [Local] 前缀与光标 */
