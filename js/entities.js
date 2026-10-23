@@ -605,7 +605,7 @@ class Player {
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
         const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
         if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-        else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+        // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
       }
       this._drawDeadBody(ctx);
       return;
@@ -621,7 +621,8 @@ class Player {
       const a = spawnFade(pp.age);                // 出场：0.1s 渐显
       const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
       if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
-      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);  // 回退
+      // 未就绪【不画】也不能回退 drawSprite：那按原始 viewBox contain 绘制，
+      // 图形会缩得极小（"错误加载的大小"），就绪后由 artCanvas 统一管线补上。
       // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
       if (pp.hurtT > 0) {
         ctx.save();
@@ -640,7 +641,7 @@ class Player {
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
       if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-      else drawSprite(ctx, 'petal' + g.card.type.svg, size, g.x, g.y, rot, d.scale, d.alpha);
+      // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
     }
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
@@ -734,7 +735,7 @@ class Player {
       const a = spawnFade(pp.age);
       const cv = CardRenderer.artCanvas(p.type.svg, 128);
       if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
-      else drawSprite(ctx, 'petal' + p.type.svg, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
       if (pp.hurtT > 0) {
         ctx.save();
         ctx.globalAlpha = clamp(pp.hurtT / 0.3, 0, 1) * 0.4;

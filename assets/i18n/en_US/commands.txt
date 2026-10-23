@@ -71,3 +71,6 @@ Chat/Command/rot-speed/Description=Set petal rotation speed, from 0.0 to 1.0
 
 Chat/Command/print-players/Args=
 Chat/Command/print-players/Description=Lists the account id of the players near you
+
+Chat/Command/give/Args=<player> <petal_id> <rarity> [count]
+Chat/Command/give/Description=Give petal cards to a player's backpack (petal id or slug, rarity, optional count)

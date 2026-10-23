@@ -72,6 +72,9 @@ Chat/Command/rot-speed/Description=设置花瓣旋转速度，数值必须为从
 Chat/Command/print-players/Args=
 Chat/Command/print-players/Description=列出附近玩家的账号ID
 
+Chat/Command/give/Args=<玩家> <花瓣ID> <稀有度> [数量]
+Chat/Command/give/Description=将花瓣卡牌给予指定玩家的背包（花瓣ID或英文名、稀有度、可选数量）
+
 ##################################################################################
 # All the ones below do not need to be translated, they are admin-only commands: #
 ##################################################################################

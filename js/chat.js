@@ -291,6 +291,7 @@ const Chat = {
       case 'print-players': this._printPlayers(); break;
       case 'unblock': this._unblock(args[0]); break;
       case 'unblock-all': this._unblockAll(); break;
+      case 'give': this._give(args); break;          // /give <player> <petal_id> <rarity> [count]
       case 'resphere': this.send(text); break;   // 交服务端
       case 'summon': this.send(text); break;      // 管理员指令，交服务端
       case 'kill': this.send(text); break;        // 交服务端（匹配玩家并杀死）
@@ -382,6 +383,49 @@ const Chat = {
     const p = (this._net && this._net.server && this._net.server.player) || null;
     const name = (p && p.name) ? p.name : 'Guest';
     this._sys(I18N.tf('Chat/Command/PrintPlayers', { 0: name + ' (you)' }, 'Players near you: ' + name + ' (you)'));
+  },
+  // /give <player> <petal_id> <rarity> [count] —— 把花瓣卡发进目标玩家的"背包"
+  // （= 背包画廊数量，与拾取掉落同一落点：UI.addGalleryCount）。
+  // petal_id 支持数字 id 或 slug；rarity 为官方稀有度（common..unique）；count 缺省 1。
+  _give(args) {
+    if (!args[0] || !args[1] || !args[2]) { this._sys('Chat/Command/Give/Usage'); return; }
+    const pl = this._matchPlayer(args[0]);
+    const me = this._selfName();
+    if (!pl || pl.name !== me) {
+      this._sys(I18N.tf('Chat/CommandError/GivePlayerNotFound', { 0: args[0] },
+        'Player "' + args[0] + '" not found.'));
+      return;
+    }
+    // petal：数字 id / slug / key 均可
+    const q = String(args[1]).trim().toLowerCase();
+    const type = (typeof PETAL_TYPES !== 'undefined')
+      ? PETAL_TYPES.find((t) => String(t.id) === q || t.slug === q || t.key === q)
+      : null;
+    if (!type) {
+      this._sys(I18N.tf('Chat/CommandError/GiveInvalidPetal', { 0: args[1] },
+        'Unknown petal id: ' + args[1]));
+      return;
+    }
+    const rarity = String(args[2]).trim().toLowerCase();
+    const valid = (typeof RARITY_ORDER !== 'undefined') ? RARITY_ORDER.join(', ')
+      : Object.keys(RARITIES || {}).join(', ');
+    if (typeof RARITIES === 'undefined' || !RARITIES[rarity]) {
+      this._sys(I18N.tf('Chat/CommandError/GiveInvalidRarity', { 0: args[2], 1: valid },
+        'Unknown rarity: ' + args[2] + '. Valid: ' + valid));
+      return;
+    }
+    let count = 1;
+    if (args[3] != null) {
+      count = parseInt(args[3], 10);
+      if (!isFinite(count) || count < 1 || count > 999) { this._sys('Chat/CommandError/GiveInvalidCount'); return; }
+    }
+    for (let i = 0; i < count; i++) UI.addGalleryCount(type, rarity);
+    const g = window.__game;
+    if (g && UI.isBagVisible && UI.isBagVisible()) g.renderInventory();
+    const rarName = (typeof I18N !== 'undefined') ? I18N.t('Rarities/' + rarity + '/Name', rarity) : rarity;
+    this._sys(I18N.tf('Chat/Command/Give/Success',
+      { 0: count, 1: type.name, 2: rarName, 3: pl.name },
+      'Gave ' + count + '× ' + type.name + ' (' + rarName + ') to ' + pl.name + "'s backpack."));
   },
   _unblock(name) {
     if (!name) { this._sys('Chat/Command/Unknown'); return; }
