@@ -179,7 +179,7 @@ const UI = {
       <div id="inventory" class="window hidden">
         <div class="win-head">
           <span class="win-title">${I18N.t('UI/Inventory/Title', 'Inventory')}</span>
-          <div class="win-subtitle">${I18N.t('UI/Inventory/Subtitle', 'Drag a petal to equip it')}</div>
+          <div class="win-subtitle">${I18N.t('UI/Inventory/Instructions', 'Drag a petal to equip it')}</div>
           <button class="win-close" data-close="bag">
             <img src="assets/ui/btn-close.svg?v=2" alt="">
           </button>
