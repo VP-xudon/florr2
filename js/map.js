@@ -68,7 +68,9 @@ function createMap(R) {
     R, radiusAt, poly, clampTo, isInside, randomPoint, spawnPointAwayFrom,
     slowAt: () => false,
     spawnZones: [], zoneAt: () => null, randomPointInZone: () => null,
-    checkpoints: [], checkpointAt: () => -1, checkpointSpawnPoint: () => ({ x: 0, y: 0 })
+    checkpoints: [], checkpointAt: () => -1,
+    checkpointSpawnPoint: () => ({ x: 0, y: 0 }),
+    spawnCheckpointPoint: () => null
   };
 }
 
@@ -715,6 +717,13 @@ function createGardenMap(data) {
     return { x: cp.cx, y: cp.cy };
   }
 
+  // 出生点 = 等级最低的那个复活区域（checkpoints 已按 level/距离排序）。
+  // 客户端开局与服务端"未解锁任何复活区时的复活"都用它 —— 不再固定落在世界原点 (0,0)。
+  function spawnCheckpointPoint() {
+    if (!checkpoints.length) return null;
+    return checkpointSpawnPoint(checkpoints[0]);
+  }
+
   // ---- 减速瓦片（地形效果）----
   // foliage / seaweed / vine 系列（树叶、海草、藤蔓）会拖慢玩家并把花瓣打回"待加载"。
   // 关键：这些瓦片的美术只覆盖格子的【一部分】（如 foliage_tl_0 只占左上角约 56%），
@@ -796,7 +805,7 @@ function createGardenMap(data) {
     name: data.name || 'map',
     slowAt,
     spawnZones, zoneAt, randomPointInZone,
-    checkpoints, checkpointAt, checkpointSpawnPoint,
+    checkpoints, checkpointAt, checkpointSpawnPoint, spawnCheckpointPoint,
     buildCollision
     };
     }

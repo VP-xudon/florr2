@@ -97,11 +97,10 @@ class LocalServer {
     this._combatAcc = 0;
     this._started = false;
     this._inited = false;      // 是否已按生成表初始化过（每张地图只自动跑一次）
-    // 复活点状态（见 _ensureCheckpoints）
+    // 复活点（检查点）状态，见 _ensureCheckpoints
     this.cpOf = null;          // 当前绑定的 checkpoints 数组（换图时重算）
-    this.cpUnlocked = [];
-    this.cpMax = -1;
-    this.cpIdx = 0;
+    this.cpMax = -1;           // 走到过的最远检查点下标
+    this.cpIdx = 0;            // 当前复活点下标
     this.cpStays = CP_RESPAWN_STAYS;
     this.cpAcc = 0;
   }
@@ -188,16 +187,16 @@ class LocalServer {
   }
 
   // ---------------- 复活点（地图 checkpoints 区域） ----------------
-  // 地图顺序 = (level 升序, 距原点升序)，也就是由近及远的推进顺序。规则：
-  //   · 走进某个复活【区域】即解锁（区域不是点，是矩形）
-  //   · 解锁更远的点 -> 复活点重置为"它的上一个"，并【强制重新保底 3 次】
-  //   · 复活落在当前复活点；在该点满 3 次后重新结算：往前推一个（最多推到最远解锁点）
+  // 地图顺序 = (level 升序, 距原点升序)，也就是由近及远的推进顺序。
+  // 复活点是【检查点】（走过就记住位置），不是可"收集"的东西 —— 所以：
+  //   · 只有"走到过更远的检查点"才会改变复活策略，而且全程【不弹任何提示】
+  //   · 走到更远的检查点 -> 复活点重置为"它的上一个"，并【强制重新保底 3 次】
+  //   · 复活落在当前复活点；在该点满 3 次后重新结算：往前推一个（最多推到最远到访点）
   _ensureCheckpoints() {
     const cps = (this.map && this.map.checkpoints) || [];
     if (this.cpOf === cps) return;
     this.cpOf = cps;
-    this.cpUnlocked = new Array(cps.length).fill(false);
-    this.cpMax = -1;                        // 已解锁的最远点下标
+    this.cpMax = -1;                        // 走到过的最远检查点下标（-1 = 还没到过）
     this.cpIdx = 0;                         // 当前使用的复活点下标
     this.cpStays = CP_RESPAWN_STAYS;        // 当前复活点还剩几次保底
     this.cpAcc = 0;
@@ -208,24 +207,21 @@ class LocalServer {
     const p = this.player;
     if (!p || p.dead || !this.map || !this.map.checkpointAt) return;
     const i = this.map.checkpointAt(p.x, p.y);
-    if (i < 0 || this.cpUnlocked[i]) return;
-    this.cpUnlocked[i] = true;
-    if (i <= this.cpMax) return;            // 不是更远的点：只记已到访，不动保底
+    if (i < 0 || i <= this.cpMax) return;   // 没走进更远的检查点：什么都不做
     this.cpMax = i;
-    this.cpIdx = Math.max(0, i - 1);        // "最远点的上一个"
-    this.cpStays = CP_RESPAWN_STAYS;        // 解锁更远 -> 强制重新保底
-    const n = this.cpUnlocked.length;
-    this._events.push({
-      kind: 'sys', channel: 'local',
-      text: I18N.tf('Checkpoint/Unlocked', { 0: i + 1, 1: n },
-        'Checkpoint ' + (i + 1) + '/' + n + ' unlocked.')
-    });
+    this.cpIdx = Math.max(0, i - 1);        // "最远检查点的上一个"
+    this.cpStays = CP_RESPAWN_STAYS;        // 更远 -> 强制重新保底 3 次
   }
 
   _respawnPos() {
     this._ensureCheckpoints();
     const cps = (this.map && this.map.checkpoints) || [];
-    if (this.cpMax < 0 || !cps.length) return { x: 0, y: 0, idx: -1 };
+    if (!cps.length) return { x: 0, y: 0, idx: -1 };
+    if (this.cpMax < 0) {
+      // 还没走到过任何检查点：就在【等级最低的那个复活区域】复活（不固定回原点 0,0）
+      const base = this.map.checkpointSpawnPoint ? this.map.checkpointSpawnPoint(cps[0]) : { x: 0, y: 0 };
+      return { x: base.x, y: base.y, idx: 0 };
+    }
     if (this.cpStays <= 0) {                // 保底用完 -> 重新结算复活点
       this.cpIdx = Math.min(this.cpIdx + 1, this.cpMax);
       this.cpStays = CP_RESPAWN_STAYS;

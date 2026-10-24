@@ -217,7 +217,11 @@ class Game {
 
   _resetPlayer(full) {
     const p = this.player;
+    // 出生点 = 地图里【等级最低的那个复活区域】（不是世界原点 0,0）。
+    // 地图没有复活区（简易圆形地图）时才退回原点。
     p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;
+    const sp = (this.map && this.map.spawnCheckpointPoint) ? this.map.spawnCheckpointPoint() : null;
+    if (sp) { p.x = sp.x; p.y = sp.y; }
     p.hp = p.maxHp = 100; p.xp = 0; p.level = 1; p.xpNext = 24;
     p.dead = false; p.deathTimer = 0; p.flash = 0;
     p.invuln = 0; p.invulnSrc = {}; p.invulnTotal = 0; p.invulnA = 0;

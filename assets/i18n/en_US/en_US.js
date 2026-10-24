@@ -1911,7 +1911,6 @@ window.I18N_EN = {
 "Chat/Command/sure/Args": "",
 "Chat/Command/sure/Description": "Confirm a multi-step command",
 "Chat/Command/sure/Nothing": "Nothing to confirm.",
-"Checkpoint/Unlocked": "Checkpoint {0}/{1} unlocked.",
 "Chat/Command/init/Args": "<map>",
 "Chat/Command/init/Description": "Initialize the map: pre-spawn mobs from the map's spawn table",
 "Chat/Command/init/BadMap": "Invalid map. Current map: {0}",

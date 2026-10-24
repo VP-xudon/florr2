@@ -2332,7 +2332,6 @@ window.I18N_ZH_CN = {
 "Chat/Command/sure/Args": "",
 "Chat/Command/sure/Description": "确认一些多步骤指令",
 "Chat/Command/sure/Nothing": "当前没有待确认的指令。",
-"Checkpoint/Unlocked": "已解锁复活点 {0}/{1}。",
 "Chat/Command/init/Args": "<地图名>",
 "Chat/Command/init/Description": "初始化地图：按地图生成表预先生成生物",
 "Chat/Command/init/BadMap": "地图无效。当前地图：{0}",
