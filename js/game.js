@@ -50,6 +50,7 @@ class Game {
     this.camera = { x: 0, y: 0 };
     this.shake = 0;
     this.tpTarget = null;    // /tp 标出的待传送点（世界 + 小地图红点）
+    this.showCoord = false;  // /show-coord：左上角坐标读数开关
     this.last = 0;
     this.selectedSlot = 0;
 
@@ -741,9 +742,29 @@ class Game {
 
     ctx.restore();
 
+    // /show-coord 的坐标读数（屏幕空间，不受相机抖动影响）
+    this._drawCoord(ctx);
     // /tp 目标在屏幕外时，在屏幕边缘画一个红点指向它（保证"一定看得见"）
     this._drawTpEdge(ctx, camX, camY);
     this._drawMinimap();
+  }
+
+  // 左上角坐标读数：/show-coord 打开后每帧刷新（与按钮组同字体风格：白字黑描边）
+  _drawCoord(ctx) {
+    const p = this.player;
+    if (!this.showCoord || !p) return;
+    const txt = 'X ' + Math.round(p.x) + '   Y ' + Math.round(p.y);
+    ctx.save();
+    ctx.font = '800 14px ' + ((typeof CardRenderer !== 'undefined' && CardRenderer.FONT) ? CardRenderer.FONT : 'Ubuntu, sans-serif');
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(txt, 18, 66);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(txt, 18, 66);
+    ctx.restore();
   }
 
   // 屏幕边缘的传送指示点（只在目标离开视野时绘制）

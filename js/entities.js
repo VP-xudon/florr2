@@ -120,6 +120,10 @@ const PETAL_REACH    = 2;     // 花瓣中点到主角边缘的距离 = 主角�
 const PETAL_R        = 14 * 0.9;  // 12.6：花瓣碰撞半径缩至原 0.9
 const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
 let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；全局，客户端/服务端共用保持同步）
+// 主人物【最高移动速度】倍率（/speed 指令设置；1 = 默认）。
+// 用全局而不是每个 Player 实例各存一份：客户端预测副本与服务端权威副本必须同速，
+// 否则两边位移不一致（表现为持续被快照拉回/橡皮筋）。
+let MOVE_MULT = 1;
 
 // 地形减速瓦片（foliage / seaweed / vine，见 map.js slowAt）上的移速系数：
 // 默认速度的 40%；同时所有花瓣被打回"待加载"（见 Player._tickReload / reloadDone）。
@@ -438,7 +442,8 @@ class Player {
       // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。据此缩放目标速度，
       // 并复用下方同一套 rate 9/4 指数平滑加减速。
       const sc = Math.min(len, 1);
-      const spd = this.speed * (this.slowTile ? SLOW_TILE_SPEED : 1);   // 减速瓦片：×0.4
+      // 减速瓦片：×0.4；/speed 的倍率再整体乘上来（客户端/服务端共用同一个 MOVE_MULT）
+      const spd = this.speed * MOVE_MULT * (this.slowTile ? SLOW_TILE_SPEED : 1);
       tx = dir.x / len * spd * sc;
       ty = dir.y / len * spd * sc;
     }

@@ -289,6 +289,8 @@ const Chat = {
         break;
       case 'help': this._help(args[0]); break;
       case 'rot-speed': this._rotSpeed(args[0]); break;
+      case 'speed': this._speed(args[0]); break;              // /speed <倍数>：主人物最高移速倍率
+      case 'show-coord': this._showCoord(); break;            // /show-coord：切换坐标显示
       case 'print-players': this._printPlayers(); break;
       case 'unblock': this._unblock(args[0]); break;
       case 'unblock-all': this._unblockAll(); break;
@@ -411,6 +413,20 @@ const Chat = {
     if (!isFinite(n) || n < 0 || n > 1) { this._sys('Chat/Command/RotSpeed/Usage'); return; }
     ROT_SCALE = n;
     this._sys(I18N.tf('Chat/Command/RotSpeed/Set', { 0: n }, 'Petal rotation speed set to ' + n + '.'));
+  },
+  // /speed <num>：主人物最高移动速度 = 默认速度 × num（MOVE_MULT，客户端与服务端共用）
+  _speed(v) {
+    const n = parseFloat(v);
+    if (!isFinite(n) || n <= 0 || n > 10) { this._sys('Chat/Command/speed/Usage'); return; }
+    MOVE_MULT = n;
+    this._sys(I18N.tf('Chat/Command/speed/Set', { 0: n }, 'Movement speed set to ' + n + 'x default.'));
+  },
+  // /show-coord：开关左上角的坐标读数（状态存在 Game 上，渲染时每帧取最新坐标）
+  _showCoord() {
+    const g = window.__game;
+    if (!g) { this._sys('Chat/CommandError/InternalError'); return; }
+    g.showCoord = !g.showCoord;
+    this._sys(g.showCoord ? 'Chat/Command/show-coord/On' : 'Chat/Command/show-coord/Off');
   },
   _printPlayers() {
     const p = (this._net && this._net.server && this._net.server.player) || null;
