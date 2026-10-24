@@ -155,20 +155,31 @@ const UI = {
     const root = document.createElement('div');
     root.id = 'ui';
     root.innerHTML = `
-      <div id="hud">
-        <div id="topbar"><span id="pname">${I18N.t('ui.pname', 'Flower')}</span></div>
-      </div>
+      <div id="hud"></div>
 
-      <!-- 左下角图标列：背包（真实矢量化按钮图）；图鉴按钮独立定位到左上角 -->
+      <!-- 左下角图标列：背包（真实矢量化按钮图） -->
       <div id="dockBtns">
         <button id="bagBtn" class="dockbtn">
           <img src="assets/ui/btn-bag.svg?v=2" alt="">
         </button>
       </div>
-      <!-- 生物图鉴：左上角（玩家名下方） -->
-      <button id="dexBtn" class="dockbtn">
-        <img src="assets/ui/btn-bee.svg?v=2" alt="">
-      </button>
+      <!-- 左上角按钮组：设置（最左）+ 生物图鉴（排在第二、整体右移） -->
+      <div id="topBtns">
+        <!-- 设置按钮：内联 SVG（而非 <img>），这样才能只让中间那个白色齿轮旋转 -->
+        <button id="setBtn" class="dockbtn">
+          <svg class="setbtn-svg" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path fill="#8c8c8c" fill-rule="evenodd" d="M9.50 2.00 5.44 3.56 2.94 6.38 2.00 9.19 2.00 54.81 3.56 58.56 7.00 61.38 9.50 62.00 54.19 62.00 58.56 60.44 61.38 57.00 62.00 54.19 62.00 9.50 60.44 5.44 57.62 2.94 54.81 2.00ZM9.19 6.06 54.81 6.06 57.62 7.94 57.94 55.12 56.06 57.62 9.19 57.94 6.38 56.06 6.06 9.19 7.00 7.00Z"/>
+            <path fill="#aaaaaa" fill-rule="evenodd" d="M9.50 6.06 7.00 7.00 6.06 9.19 6.38 56.06 9.19 57.94 56.06 57.62 57.94 55.12 57.62 7.94 54.81 6.06Z"/>
+            <g class="gear">
+              <path fill="#aaaaaa" fill-rule="evenodd" d="M29.50 12.94 35.75 13.56 36.69 14.81 36.69 17.94 37.94 18.88 40.44 16.69 43.56 16.69 47.62 20.75 47.62 22.94 45.12 26.38 45.75 27.31 49.19 27.31 50.75 28.88 50.75 34.81 50.12 36.06 45.75 36.69 45.12 38.25 47.62 40.75 47.62 43.25 42.31 47.94 40.75 47.62 38.56 45.12 37.00 45.44 36.69 49.19 34.81 50.75 28.25 50.44 27.31 49.19 27.31 45.75 26.38 45.12 25.44 45.12 23.25 47.62 20.75 47.62 19.50 46.69 16.38 42.94 16.69 40.44 18.88 38.56 18.56 37.00 14.81 36.69 12.94 34.19 13.25 28.56 14.81 27.31 18.56 27.31 18.88 26.69 18.88 25.44 17.62 24.81 16.38 22.62 17.62 19.19 21.38 16.38 23.56 16.69 25.44 18.88 27.31 18.56 27.31 14.50ZM31.06 27.31 27.94 29.50 27.31 33.25 29.81 36.06 32.62 36.69 35.44 35.12 36.69 31.38 34.50 27.94Z"/>
+              <path fill="#fefefe" fill-rule="evenodd" d="M29.81 12.94 27.31 14.50 27.31 18.56 25.44 18.88 23.56 16.69 21.38 16.38 17.62 19.19 16.38 22.62 17.62 24.81 18.88 25.44 18.88 26.69 18.56 27.31 14.81 27.31 13.25 28.56 12.94 34.19 14.19 36.38 18.56 37.00 18.88 38.56 16.69 40.44 16.38 42.94 19.50 46.69 20.75 47.62 23.25 47.62 25.44 45.12 26.38 45.12 27.31 45.75 27.31 49.19 28.25 50.44 34.81 50.75 36.69 49.19 37.00 45.44 38.56 45.12 40.75 47.62 42.31 47.94 47.62 43.25 47.62 40.75 45.12 38.25 45.75 36.69 50.12 36.06 50.75 34.81 50.75 28.88 49.19 27.31 45.75 27.31 45.12 26.38 47.62 22.94 47.62 20.75 44.81 17.62 42.94 16.38 41.38 16.38 37.94 18.88 36.69 17.94 36.69 14.81 35.75 13.56ZM30.75 27.31 34.50 27.94 36.38 30.44 36.38 33.56 33.88 36.38 30.44 36.38 27.31 33.25 27.94 29.50Z"/>
+            </g>
+          </svg>
+        </button>
+        <button id="dexBtn" class="dockbtn">
+          <img src="assets/ui/btn-bee.svg?v=2" alt="">
+        </button>
+      </div>
 
       <!-- 底部常驻快捷栏：上行 = 当前装备的卡（主槽），下行 = 副槽（临时存储，按 R 整排互换） -->
       <div id="quickbar">
@@ -206,6 +217,56 @@ const UI = {
         <div class="win-body"><div id="dexBody" class="dex-grid"></div></div>
       </div>
 
+      <!-- 设置窗口（主色 = 设置按钮主色 #aaaaaa，描边 #8c8c8c） -->
+      <div id="settings" class="window hidden">
+        <div class="win-head">
+          <span class="win-title">${I18N.t('UI/Settings/Title', 'Settings')}</span>
+          <button class="win-close" data-close="settings">
+            <img src="assets/ui/btn-close.svg?v=2" alt="">
+          </button>
+        </div>
+        <!-- 分栏顺序：Game / Controls / Graphics / Credits（Credits 放最后一栏） -->
+        <div class="set-tabs">
+          <button class="set-tab on" data-tab="game">${I18N.t('UI/Settings/Tab/Game', 'Game')}</button>
+          <button class="set-tab" data-tab="controls">${I18N.t('UI/Settings/Tab/Controls', 'Controls')}</button>
+          <button class="set-tab" data-tab="graphics">${I18N.t('UI/Settings/Tab/Graphics', 'Graphics')}</button>
+          <button class="set-tab" data-tab="credits">${I18N.t('UI/Settings/Tab/Credits', 'Credits')}</button>
+        </div>
+        <div class="win-body">
+          <div class="set-panel" data-panel="game">
+            <label class="set-row">
+              <span>${I18N.t('UI/Settings/Language', 'Language')}</span>
+              <select id="setLang">
+                <option value="en_US">English</option>
+                <option value="zh_CN">简体中文</option>
+              </select>
+            </label>
+            <div class="set-note">${I18N.t('UI/Settings/Restart', 'Restart the game to apply.')}</div>
+            <label class="set-row">
+              <span>${I18N.t('UI/Settings/Debug', 'Debug mode')}</span>
+              <!-- 通用勾选框（与聊天面板同款，见 CSS .set-check） -->
+              <span class="set-check" id="setDebug"><i class="set-box"><b class="set-fill"></b></i></span>
+            </label>
+          </div>
+          <div class="set-panel hidden" data-panel="controls">
+            <label class="set-row">
+              <span>${I18N.t('UI/Settings/KeyboardMove', 'Keyboard movement')}</span>
+              <span class="set-check" id="setKeyboard"><i class="set-box"><b class="set-fill"></b></i></span>
+            </label>
+            <div class="set-note">${I18N.t('UI/Settings/MouseNote', 'Unchecked: the flower follows the mouse cursor.')}</div>
+          </div>
+          <div class="set-panel hidden" data-panel="graphics">
+            <div class="set-note">${I18N.t('UI/Settings/GraphicsNote', 'More options coming soon.')}</div>
+          </div>
+          <div class="set-panel hidden" data-panel="credits">
+            <div class="set-credits">
+              ${I18N.t('UI/Settings/CreditsBy', 'Powered by VP_xudon')}<br>
+              ${I18N.t('UI/Settings/CreditsGithub', 'Github')}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="loading">${I18N.t('UI/Title/Loading', 'Loading...')}</div>
     `;
     document.body.appendChild(root);
@@ -213,10 +274,11 @@ const UI = {
 
     const $ = (id) => root.querySelector('#' + id);
     this.refs = {
-      pname: $('pname'),
-      bagBtn: $('bagBtn'), dexBtn: $('dexBtn'),
+      bagBtn: $('bagBtn'), dexBtn: $('dexBtn'), setBtn: $('setBtn'),
       inv: $('inventory'), invGallery: $('invGallery'),
       dex: $('dex'), dexBody: $('dexBody'), dexCount: $('dexCount'),
+      settings: $('settings'),
+      setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
       slotRow: $('slotRow'), subRow: $('subRow'),
       loading: $('loading')
     };
@@ -228,15 +290,20 @@ const UI = {
 
     this.refs.bagBtn.addEventListener('click', () => { if (this.onBagToggle) this.onBagToggle(); });
     this.refs.dexBtn.addEventListener('click', () => { if (this.onDexToggle) this.onDexToggle(); });
+    this.refs.setBtn.addEventListener('click', () => { if (this.onSettingsToggle) this.onSettingsToggle(); });
     // 按钮悬浮提示：原生 title 已移除，改用与卡牌同款式的 canvas 悬浮框
     this._bindSimpleTip(this.refs.bagBtn, () => I18N.t('UI/Inventory/Title', 'Inventory'));
     this._bindSimpleTip(this.refs.dexBtn, () => I18N.t('UI/MobGallery/Title', 'Mob Gallery'));
+    this._bindSimpleTip(this.refs.setBtn, () => I18N.t('UI/Settings/Title', 'Settings'));
+    this._initSettings();
     // 红色矢量叉 -> 关闭对应窗口
     root.querySelectorAll('.win-close').forEach((b) => {
       this._bindSimpleTip(b, () => I18N.t('UI/Close', 'Close'));
       b.addEventListener('click', () => {
-        if (b.dataset.close === 'bag') { if (this.onBagToggle) this.onBagToggle(); }
-        else { if (this.onDexToggle) this.onDexToggle(); }
+        const t = b.dataset.close;
+        if (t === 'bag') { if (this.onBagToggle) this.onBagToggle(); }
+        else if (t === 'dex') { if (this.onDexToggle) this.onDexToggle(); }
+        else if (t === 'settings') { if (this.onSettingsToggle) this.onSettingsToggle(); }
       });
     });
     // 兜底：窗口失焦/右键菜单时，清掉可能残留的拖拽幽灵
@@ -250,13 +317,82 @@ const UI = {
   // HUD 不再含等级/经验/血量（战斗系统已移除）
   updateHUD() {},
 
-  setBagVisible(v) { this.refs.inv.classList.toggle('hidden', !v); },
+  setBagVisible(v) { this.refs.inv.classList.toggle('hidden', !v); if (!v) this._hideTip(); },
   isBagVisible() { return !this.refs.inv.classList.contains('hidden'); },
   toggleBag() { if (this.onBagToggle) this.onBagToggle(); },
 
-  setDexVisible(v) { this.refs.dex.classList.toggle('hidden', !v); },
+  setDexVisible(v) { this.refs.dex.classList.toggle('hidden', !v); if (!v) this._hideTip(); },
   isDexVisible() { return !this.refs.dex.classList.contains('hidden'); },
   toggleDex() { if (this.onDexToggle) this.onDexToggle(); },
+
+  // ---------- 设置窗口 ----------
+  setSettingsVisible(v) { this.refs.settings.classList.toggle('hidden', !v); if (!v) this._hideTip(); },
+  isSettingsVisible() { return !this.refs.settings.classList.contains('hidden'); },
+  toggleSettings() { if (this.onSettingsToggle) this.onSettingsToggle(); },
+
+  // 是否有【任意窗口】打开。所有"窗口打开时应当暂停"的逻辑都走这一个入口，
+  // 以后新增窗口只要在这里加一项即可，不会出现"某个窗口忘了判断"的情况。
+  isAnyWindowOpen() {
+    return this.isBagVisible() || this.isDexVisible() || this.isSettingsVisible();
+  },
+
+  // 分栏切换 + 三个设置项（写 Cookie；移动方式 / 调试模式当场生效，语言需重启）
+  _initSettings() {
+    const r = this.refs;
+    // 分栏：Game / Controls / Graphics / Credits
+    this.root.querySelectorAll('.set-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const name = tab.dataset.tab;
+        this.root.querySelectorAll('.set-tab').forEach((t) => t.classList.toggle('on', t === tab));
+        this.root.querySelectorAll('.set-panel').forEach((p) => {
+          p.classList.toggle('hidden', p.dataset.panel !== name);
+        });
+      });
+    });
+    if (!r.setLang) return;
+    // 初始值 = 当前设置
+    const cur = (typeof Settings !== 'undefined')
+      ? Settings.all() : { lang: 'en_US', debug: false, keyboardMove: false };
+    r.setLang.value = cur.lang || 'en_US';
+    r.setLang.addEventListener('change', () => this._setSetting('lang', r.setLang.value));
+    // 勾选框：与聊天面板同款（黑描边外框 + 内部填充块）
+    this._bindCheck(r.setDebug, !!cur.debug, (v) => this._setSetting('debug', v));
+    this._bindCheck(r.setKeyboard, !!cur.keyboardMove, (v) => this._setSetting('keyboardMove', v));
+  },
+
+  // 单个设置项变更：写 Cookie + 立刻通知 Game 应用（不再需要重启）
+  _setSetting(key, value) {
+    if (typeof Settings !== 'undefined') Settings.set(key, value);
+    if (this.onSettingChange) this.onSettingChange(key, value);
+  },
+
+  // 通用勾选框：点击切换 + 复用聊天面板的 cbx-check / cbx-uncheck 动画
+  //   el = <span class="set-check"><i class="set-box"><b class="set-fill"></b></i></span>
+  _bindCheck(el, initial, onChange) {
+    if (!el) return null;
+    const fill = el.querySelector('.set-fill');
+    const apply = (v, anim) => {
+      el.classList.toggle('on', v);
+      if (!anim || !fill) return;
+      fill.classList.remove('cbx-checking', 'cbx-unchecking');
+      void fill.offsetWidth;               // 强制重排：保证同一动画能重复播放
+      fill.classList.add(v ? 'cbx-checking' : 'cbx-unchecking');
+      setTimeout(() => fill.classList.remove('cbx-checking', 'cbx-unchecking'), 400);
+    };
+    const toggle = () => { const v = !el.classList.contains('on'); apply(v, true); onChange(v); };
+    apply(initial, false);
+    el.addEventListener('click', (e) => { e.preventDefault(); toggle(); });
+    // 整行也能点（但下拉框/输入框/勾选框自身的点击不重复触发）
+    const row = el.closest ? el.closest('.set-row') : null;
+    if (row && row !== el) {
+      row.addEventListener('click', (e) => {
+        if (el.contains(e.target)) return;
+        if (e.target.closest && e.target.closest('select, input, textarea')) return;
+        toggle();
+      });
+    }
+    return el;
+  },
 
   // ---------------- 死亡界面 ----------------
   // 半透明灰色蒙版渐显 + 面板从屏幕下方滑入渐显（退出反向），符合全 UI 平滑过渡要求。
@@ -753,6 +889,8 @@ const UI = {
       el.addEventListener('mouseleave', () => this._hideTip());
     },
     _showTip(type, rarity, el) {
+        // 元素所在窗口已关闭时不再响应（隐藏窗口内部元素理论上收不到事件，这是第二道保险）
+        if (el && el.closest && el.closest('.window.hidden')) return;
         // 数值随稀有度换算（与装备/提示一致）
         let dmg = type.dmg || 0, hp = type.hp || 0, heal = type.heal || 0;
         // 有「各稀有度数值表」就整表取用（Rose）；否则退回倍率表（Basic）；再否则用基础值
@@ -789,6 +927,9 @@ const UI = {
       el.addEventListener('mouseleave', () => this._hideTip());
     },
     _showMobTip(mob, rarity, el) {
+      // 图鉴已关闭时不再弹（关闭后鼠标扫过原位置不应还有悬浮框）
+      if (el && el.closest && el.closest('.window.hidden')) return;
+      if (!this.isDexVisible()) return;
       const now = performance.now();
       this._tipSlide = !!(this._tipOn || (now - (this._tipHideAt || 0) < 120));
       if (this._tipSlide) this._tipAlpha = 1;
@@ -1929,7 +2070,7 @@ const UI = {
   },
 
   // 画在游戏主画布上（位置/尺寸/缩放均由 _mmTick 动画驱动）
-  drawMinimap(ctx, viewW, viewH, map, player, mobs) {
+  drawMinimap(ctx, viewW, viewH, map, player, mobs, tp) {
     const half = map.R || (map.width * (map.tile || 1)) / 2;
     const m = this._mm;
     if (!(half > 0) || !m || !(m.size > 0)) return;
@@ -2002,6 +2143,37 @@ const UI = {
         ctx.beginPath(); ctx.arc(mx, my, Math.max(1.1, dotR * 0.62), 0, TAU); ctx.fill();
       }
     }
+    // /tp 目标红点：在小地图视野内 -> 实心红点；在视野外 -> 贴边画空心环（不会"看不见"）
+    if (tp) {
+      let tmx = x0 + (tp.x - vx) / span * S;
+      let tmy = y0 + (tp.y - vy) / span * S;
+      const inView = tmx >= x0 && tmx <= x0 + S && tmy >= y0 && tmy <= y0 + S;
+      const pad = dotR * 1.8;
+      tmx = clamp(tmx, x0 + pad, x0 + S - pad);
+      tmy = clamp(tmy, y0 + pad, y0 + S - pad);
+      if (inView) {
+        // 与外圈白色底环错开：生物点是浅红小点，这里是"白色光圈 + 纯红实心 + 黑描边"，
+        // 一眼就能从一堆红点里认出来。
+        ctx.beginPath();
+        ctx.arc(tmx, tmy, dotR * 2.1, 0, TAU);
+        ctx.fillStyle = 'rgba(255,255,255,.85)';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(tmx, tmy, dotR * 1.25, 0, TAU);
+        ctx.fillStyle = '#ff2b2b';
+        ctx.fill();
+        ctx.lineWidth = Math.max(1, dotR * 0.4);
+        ctx.strokeStyle = '#000';
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(tmx, tmy, dotR * 1.6, 0, TAU);
+        ctx.lineWidth = Math.max(1.8, dotR * 0.7);
+        ctx.strokeStyle = '#ff2b2b';
+        ctx.stroke();
+      }
+    }
+
     // 玩家小点：Common 等级的草绿色 + 灰色描边（与 common 稀有度色 #7EEF6D 一致）
     const px = x0 + (player.x - vx) / span * S, py = y0 + (player.y - vy) / span * S;
     ctx.beginPath();

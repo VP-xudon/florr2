@@ -39,6 +39,7 @@ const Chat = {
   whisperTarget: null,    // 密语对象（whisper 范围时生效）
   lastWhisperFrom: null,  // 最近一次密语对象（/reply 用）
   blocked: null,          // 本地屏蔽名单（Set，/unblock 用）
+  pending: null,          // 待确认的多步骤指令（/tp 等；由 /sure 执行）
   history: [],            // 登入以来收到的全部可见消息（输入态显示，不删除）
   float: [],              // 漂浮态队列（带过期时间）
   inputMode: false,
@@ -292,6 +293,9 @@ const Chat = {
       case 'unblock': this._unblock(args[0]); break;
       case 'unblock-all': this._unblockAll(); break;
       case 'give': this._give(args); break;          // /give <player> <petal_id> <rarity> [count]
+      case 'tp': this._tp(args); break;            // /tp <x> <y>：标记目标点，等 /sure 确认
+      case 'sure': this._sure(); break;            // /sure：确认当前【多步骤指令】
+      case 'init': this.send(text); break;        // /init <map>：交服务端按生成表初始化地图
       case 'resphere': this.send(text); break;   // 交服务端
       case 'summon': this.send(text); break;      // 管理员指令，交服务端
       case 'kill': this.send(text); break;        // 交服务端（匹配玩家并杀死）
@@ -299,6 +303,35 @@ const Chat = {
       default: this._sys('Chat/Command/Unknown');
     }
   },
+  // /tp <x> <y>：先"标点"不传送 —— 地图上出现红点 + 红字提示，由 /sure 真正执行。
+  _tp(args) {
+    const x = Number(args[0]), y = Number(args[1]);
+    if (args.length < 2 || !isFinite(x) || !isFinite(y)) { this._sys('Chat/Command/tp/Usage'); return; }
+    this.pending = { kind: 'tp', x, y };
+    if (this.onTpTarget) this.onTpTarget(x, y);     // Game 负责在世界/小地图上画红点
+    this._sys(I18N.tf('Chat/Command/tp/Pending',
+      { 0: Math.round(x), 1: Math.round(y) },
+      'Teleport to (' + Math.round(x) + ', ' + Math.round(y) + ')? Type /sure to confirm.'));
+  },
+
+  // /sure：确认【当前待确认的多步骤指令】—— 不专属于 /tp，任何多步指令都走这里。
+  _sure() {
+    const pend = this.pending;
+    if (!pend) { this._sys('Chat/Command/sure/Nothing'); return; }
+    this.pending = null;
+    if (pend.kind === 'tp') {
+      const err = this.onTpConfirm ? this.onTpConfirm(pend.x, pend.y) : 'Chat/CommandError/InternalError';
+      if (err) {
+        if (this.onTpCancel) this.onTpCancel();
+        this._sys(err);                             // 含 "Walk there if you can."
+        return;
+      }
+      this._sys(I18N.tf('Chat/Command/tp/Done',
+        { 0: Math.round(pend.x), 1: Math.round(pend.y) },
+        'Teleported to (' + Math.round(pend.x) + ', ' + Math.round(pend.y) + ').'));
+    }
+  },
+
   // 切换发送范围（local / global / map / whisper）
   _setScope(scope, target) {
     this.channel = scope;

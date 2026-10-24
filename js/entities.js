@@ -121,6 +121,10 @@ const PETAL_R        = 14 * 0.9;  // 12.6：花瓣碰撞半径缩至原 0.9
 const PETAL_SPIN     = 1.375 * 2; // 2.75：默认花瓣转速 2 倍
 let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；全局，客户端/服务端共用保持同步）
 
+// 地形减速瓦片（foliage / seaweed / vine，见 map.js slowAt）上的移速系数：
+// 默认速度的 40%；同时所有花瓣被打回"待加载"（见 Player._tickReload / reloadDone）。
+const SLOW_TILE_SPEED = 0.4;
+
 // 通用出场 / 退场动画（所有实体统一遵守，时长 0.5s）
 //   出场：大小不变，仅渐显
 //   退场（死亡 / 被删除 / 卸下）：平滑放大到 1.5 倍，同时渐隐
@@ -344,6 +348,7 @@ class Player {
     this.petalWorld = [];
     this.reload = [];           // 主槽装填状态：{ card, age, dur } | null（与 slots 等长）
     this.reloadHold = [];       // 主槽装填暂停标记：换卡动画播放期间为 true（UI 置位/清除）
+    this.slowTile = false;      // 是否站在减速瓦片（foliage/seaweed/vine）上：移速 ×0.4 + 花瓣待加载
     this.name = 'Flower';
     // 模式状态：空格=reach、Shift=detect
     this.mode = 'normal';        // 'normal' | 'reach' | 'detect'
@@ -406,6 +411,10 @@ class Player {
       this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
       return;
     }
+    // 地形减速：站在 foliage / seaweed / vine 这类瓦片上时——
+    //   · 移动速度 = 默认值的 40%
+    //   · 所有花瓣强制回到"待加载"状态（装填进度清零、不生成实体），离开后重新装填
+    this.slowTile = !!(map && map.slowAt && map.slowAt(this.x, this.y));
     this.hurtT = Math.max(0, this.hurtT - dt);
     // 血条透明度：非满血 -> 0.3s 线性渐显；回到满血 -> 0.3s 线性渐隐
     const barTarget = this.hp < this.maxHp ? 1 : 0;
@@ -425,12 +434,13 @@ class Player {
     const len = Math.hypot(dir.x, dir.y);
     let tx = 0, ty = 0;
     if (len > 0) {
-      // dir 模长 = 目标速度占比(0..1)：鼠标移动(?movemode=mouse)用"指针距离"映射速度；
+      // dir 模长 = 目标速度占比(0..1)：鼠标移动模式用"指针距离"映射速度；
       // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。据此缩放目标速度，
       // 并复用下方同一套 rate 9/4 指数平滑加减速。
       const sc = Math.min(len, 1);
-      tx = dir.x / len * this.speed * sc;
-      ty = dir.y / len * this.speed * sc;
+      const spd = this.speed * (this.slowTile ? SLOW_TILE_SPEED : 1);   // 减速瓦片：×0.4
+      tx = dir.x / len * spd * sc;
+      ty = dir.y / len * spd * sc;
     }
     const rate = (len > 0) ? 9 : 4;   // 加速到默认速度约 0.3s（rate 9）；松开方向键沿用约 0.5s 减速（rate 4）
     this.vx = damp(this.vx, tx, rate, dt);
@@ -525,6 +535,15 @@ class Player {
         const dur = (c.type && c.type.reload != null)
           ? c.type.reload : Math.max(0, (c.type && c.type.spd) || 0);
         this.reload[i] = { card: c, age: 0, dur };
+      } else if (this.slowTile) {
+        // 减速瓦片（foliage / seaweed / vine）：所有花瓣强制回到"待加载"，进度清零。
+        r.age = 0;
+        r.frozen = true;
+      } else if (r.frozen) {
+        // 离开瓦片：不是"直接变好"，而是【重新计算 reload】—— 从 0 开始重新装填。
+        // 所有"待加载 -> 正常"的转换都遵循这条规则（不保留、不继承旧进度）。
+        r.frozen = false;
+        r.age = 0;
       } else if (!this.reloadHold[i]) {
         r.age += dt;
       }
@@ -532,6 +551,7 @@ class Player {
   }
   // 该主槽是否装填完成（dur<=0 视为无需装填，立即完成）
   reloadDone(i) {
+    if (this.slowTile) return false;      // 减速瓦片上：一律视为"待加载"
     const r = this.reload[i];
     return !!r && r.age >= r.dur;
   }
@@ -1329,6 +1349,7 @@ const DROP_SIZE = 36;            // 世界像素边长（与旧的地面卡片 3
 const DROP_FACE_PX = 144;        // 离屏卡面分辨率（4 倍超采样，缩小绘制仍然清晰）
 const DROP_PICK_R = 2;           // 拾取半径 = 2 × 玩家【直径】
 const DROP_FLY_T = 0.26;         // 飞回玩家中心并缩小的时长（秒）
+const DROP_POP_T = 0.34;         // 从死亡点弹到目标位置的时长（秒）
 const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal', 'unique']);   // 持续冒粒子的稀有度
 const _dropFaceCache = {};       // slug|rarity -> 已渲染好的卡面 canvas
 
@@ -1360,12 +1381,17 @@ function dropLayoutOffset(i, n, gap) {
 }
 
 class DropCard {
-  constructor(slug, svg, rarity, name, x, y) {
+  constructor(slug, svg, rarity, name, x, y, off) {
     this.slug = slug;
     this.svg = svg;
     this.rarity = rarity;
     this.name = name || slug;
+    // 出生在【生物死亡点】，再"弹"到各自的目标位置（不是直接出现在那里）
+    this.ox = x; this.oy = y;                    // 弹出起点 = 死亡点
+    this.tx = x + (off ? off.x : 0);             // 目标位置
+    this.ty = y + (off ? off.y : 0);
     this.x = x; this.y = y;
+    this.popT = 0;           // 弹出进度 0->1（easeOutBack：先冲出去、再轻轻回落）
     this.count = 1;          // 完全相同的卡牌堆叠在同一张卡上
     this.age = 0;
     this.size = DROP_SIZE;
@@ -1385,6 +1411,16 @@ class DropCard {
   }
   update(dt, player) {
     this.age += dt;
+    // ① 弹出阶段：从死亡点飞向目标位置（期间不可拾取）
+    if (this.popT < 1) {
+      this.popT = Math.min(1, this.popT + dt / DROP_POP_T);
+      const t = this.popT, c1 = 1.10158, c3 = c1 + 1;
+      const e = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);   // easeOutBack，轻微过冲
+      this.x = this.ox + (this.tx - this.ox) * e;
+      this.y = this.oy + (this.ty - this.oy) * e;
+      if (this.popT >= 1) { this.x = this.tx; this.y = this.ty; }
+      return;
+    }
     if (!this.fly) return;
     this.fly = Math.min(1, this.fly + dt / DROP_FLY_T);
     const t = this.fly;

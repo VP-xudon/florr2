@@ -18,13 +18,14 @@ for (const m of MOB_TYPES) {
 ASSET_LIST.push(['mob3', 'assets/entities/3_body.svg?v=' + ASSET_VER]);
 ASSET_LIST.push(['mob3ring', 'assets/entities/3_ring.svg?v=' + ASSET_VER]);
 
-// 调试参数：?mode=debug 开启开发者模式（背包卡牌显示 ∞，怎么拿都拿不空）。
-// 支持【逗号与 & 混搭】的自由组合：?mode=debug,hp=1000,lang=zh_cn 与 ?mode=debug&hp=1000 等价。
-// 全部解析结果存 window.__queryParams（小写键）；hp 参数由 game.js init() 应用到玩家血量。
+// 运行参数：仅保留开发用 ?hp=N（调试血量）。
+// 语言 / 移动方式 / 调试模式已全部移到【设置窗口】，存 Cookie（见 util.js -> Settings），
+// 不再支持 ?i18n= / ?lang= / ?movemode= / ?mode= 这些 URL 参数。
+// 支持逗号与 & 混搭的自由组合：?hp=1000 与 ?hp=1000 等价（其余键忽略）。
 const _params = new URLSearchParams(location.search.replace(/,/g, '&'));
 window.__queryParams = {};
 for (const [k, v] of _params) window.__queryParams[k.toLowerCase()] = v;
-window.__debug = _params.get('mode') === 'debug';
+window.__debug = !!(typeof Settings !== 'undefined' && Settings.get('debug'));
 
 async function boot() {
   let game = null;

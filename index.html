@@ -8,44 +8,33 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap" />
-  <link rel="stylesheet" href="css/style.css?v=61" />
-  <!-- 语言选择：必须在其它脚本之前【同步】确定。
-       支持 ?i18n=en_us / ?i18n=zh_cn，也支持逗号分隔（?mode=debug,i18n=zh_cn）。
-       之所以用 document.write：语言包必须在 data.js 之前注册（RARITIES/花瓣名在加载时就要取到译文），
-       而异步加载来不及。只有请求中文时才多拉一个包，英文用户零额外开销。 -->
-  <script>
-    (function () {
-      var q = location.search.replace(/,/g, '&');
-      var m = /[?&](?:i18n|lang)=([A-Za-z0-9_-]+)/.exec(q);
-      var code = m ? m[1].toLowerCase().replace(/-/g, '_') : '';
-      window.__i18nReq = code;                       // '' = 不指定（默认英文）
-      if (code === 'zh_cn' || code === 'zh') {
-        document.write('<script src="assets/i18n/zh_CN/zh_CN.js?v=9"><\/script>');
-      }
-    })();
-  </script>
+  <link rel="stylesheet" href="css/style.css?v=65" />
+  <!-- 语言不再由 URL 决定：所有语言包都在下方【同步】加载，具体用哪个由
+       用户设置（Cookie，见 util.js -> window.Settings）在 lang.js 里选定。
+       语言包必须在 data.js 之前注册（RARITIES/花瓣名在加载时就要取到译文）。 -->
 </head>
 <body>
   <canvas id="game"></canvas>
 
   <!-- 所有 HUD/面板均由 js/ui.js 动态生成，不在此写死固定元素 -->
-  <script src="js/util.js?v=9"></script>
+  <script src="js/util.js?v=10"></script>
   <script src="js/assets.js?v=15"></script>
-  <script src="assets/i18n/en_US/en_US.js?v=13"></script>
-  <script src="js/lang.js?v=9"></script>
+  <script src="assets/i18n/en_US/en_US.js?v=17"></script>
+  <script src="assets/i18n/zh_CN/zh_CN.js?v=13"></script>
+  <script src="js/lang.js?v=10"></script>
   <script src="assets/lang/en.js?v=5"></script>
   <script src="assets/registry.js?v=12"></script>
-  <script src="js/data.js?v=26"></script>
+  <script src="js/data.js?v=27"></script>
   <script src="assets/petal-metrics.js?v=1"></script>
-  <script src="js/cards.js?v=29"></script>
-  <script src="js/ui.js?v=76"></script>
-  <script src="js/map.js?v=19"></script>
+  <script src="js/cards.js?v=30"></script>
+  <script src="js/ui.js?v=83"></script>
+  <script src="js/map.js?v=23"></script>
   <script src="js/ai.js?v=5"></script>
   <script src="js/petal-effects.js?v=6"></script>
-  <script src="js/entities.js?v=89"></script>
-  <script src="js/net.js?v=18"></script>
-  <script src="js/chat.js?v=12"></script>
-  <script src="js/game.js?v=64"></script>
-  <script src="js/main.js?v=13"></script>
+  <script src="js/entities.js?v=92"></script>
+  <script src="js/net.js?v=25"></script>
+  <script src="js/chat.js?v=14"></script>
+  <script src="js/game.js?v=70"></script>
+  <script src="js/main.js?v=14"></script>
 </body>
 </html>

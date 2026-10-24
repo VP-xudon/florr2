@@ -63,7 +63,13 @@ function createMap(R) {
     return best;
   }
 
-  return { R, radiusAt, poly, clampTo, isInside, randomPoint, spawnPointAwayFrom };
+  // 简易圆形地图：没有地形瓦片（永不减速）、也没有生成区（由服务端按玩家周围兜底生成）
+  return {
+    R, radiusAt, poly, clampTo, isInside, randomPoint, spawnPointAwayFrom,
+    slowAt: () => false,
+    spawnZones: [], zoneAt: () => null, randomPointInZone: () => null,
+    checkpoints: [], checkpointAt: () => -1, checkpointSpawnPoint: () => ({ x: 0, y: 0 })
+  };
 }
 
 const TILED_GID_MASK = 0x0fffffff;
@@ -160,13 +166,61 @@ async function loadGardenData(url = 'assets/static/maps/garden.tmj') {
     layers.push({ name: layer.name, tiles, collisions: properties.collisions !== false });
   }
 
+  // ---- 生物生成区（地图自带）----
+  // objectgroup 里 type=spawn_mobs 的对象就是官方生成区：
+  //   · polygon     区域范围（可凹多边形）
+  //   · mobs        物种/组权重串，如 "rock:0.25;\nant_soldier:1;\ngarden:1;"
+  //   · difficulty  该区域难度（-5 ~ 75），决定稀有度分布
+  //   · density     密度系数
+  // 注意：地图只给【组名】（garden 之类），组成员在 florr 的服务端配置里，tmj 内没有。
+  const spawnZones = [];
+  for (const layer of tmj.layers || []) {
+    if (layer.type !== 'objectgroup' || !layer.visible) continue;
+    for (const obj of layer.objects || []) {
+      if (obj.type !== 'spawn_mobs') continue;
+      const polygon = obj.polygon;
+      if (!polygon || polygon.length < 3) continue;
+      const props = Object.fromEntries((obj.properties || []).map((p) => [p.name, p.value]));
+      spawnZones.push({
+        layer: layer.name,
+        mobs: String(props.mobs || ''),
+        density: parseFloat(props.density) || 1,
+        difficulty: parseFloat(props.difficulty) || 0,
+        // 保留 tmj 对象坐标，世界坐标换算放到 createGardenMap（那里才知道 half）
+        raw: polygon.map((pt) => [obj.x + pt.x, obj.y + pt.y])
+      });
+    }
+  }
+
+  // ---- 复活区域（地图自带）----
+  // objectgroup 里 type=checkpoint 的对象是【矩形区域】（不是点），带 level 属性；
+  // 顺序 = (level 升序, 距原点升序)，也就是玩家由近及远的推进顺序。
+  const checkpoints = [];
+  for (const layer of tmj.layers || []) {
+    if (layer.type !== 'objectgroup' || !layer.visible) continue;
+    for (const obj of layer.objects || []) {
+      if (obj.type !== 'checkpoint') continue;
+      const props = Object.fromEntries((obj.properties || []).map((p) => [p.name, p.value]));
+      const lv = parseInt(props.level, 10);
+      checkpoints.push({
+        level: Number.isFinite(lv) ? lv : 0,
+        // tmj 对象坐标（世界坐标换算放到 createGardenMap）
+        raw: [obj.x, obj.y, obj.width || 0, obj.height || 0]
+      });
+    }
+  }
+
   return {
+    // 地图名（如 garden）：/init <map> 用它校验；tmj 本身没有 name 字段，取文件名
+    name: (String(url).split('/').pop() || '').replace(/\.[^.]+$/, '') || 'map',
     width,
     height,
     tile: tmj.tilewidth,
     size: width * tmj.tilewidth,
     layers,
     collisionShapes,
+    spawnZones,
+    checkpoints,
     assets: [...usedAssets].map(([name, src]) => ['tile' + name, src])
   };
 }
@@ -573,12 +627,176 @@ function createGardenMap(data) {
   }
 
   buildCollision();
+
+  // ---- 生物生成区（世界坐标）----
+  // tmj 的对象坐标系是"每格 tmj.tilewidth(=512)px"（121 格 = 61952px），
+  // 世界是"每格 GARDEN_TILE(288)px"，所以统一乘 OBJ_SCALE、再平移 -half 换到世界坐标。
+  const OBJ_SCALE = GARDEN_TILE / (data.tile || 512);
+  function polyArea(pts) {
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+    }
+    return Math.abs(a) / 2;
+  }
+  const spawnZones = (data.spawnZones || []).map((z) => {
+    const pts = z.raw.map(([px, py]) => [px * OBJ_SCALE - half, py * OBJ_SCALE - half]);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) {
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+    return {
+      mobs: z.mobs, density: z.density, difficulty: z.difficulty,
+      pts, bbox: [x0, y0, x1, y1], area: polyArea(pts)
+    };
+  }).filter((z) => z.area > 1);
+
+  // 某世界坐标落在哪个生成区（后定义的覆盖先定义的：层顺序与 Tiled 一致）
+  function zoneAt(x, y) {
+    let hit = null;
+    for (const z of spawnZones) {
+      const b = z.bbox;
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      if (pointInPolygon(x, y, z.pts)) hit = z;
+    }
+    return hit;
+  }
+
+  // 在区域内的"玩家附近环带"取一个可站立点（不在实体内），取不到返回 null
+  function randomPointInZone(zone, cx, cy, rMin, rMax) {
+    const b = zone.bbox;
+    for (let i = 0; i < 120; i++) {
+      let x, y;
+      if (cx != null) {
+        const a = Math.random() * TAU, d = rMin + Math.random() * (rMax - rMin);
+        x = cx + Math.cos(a) * d;
+        y = cy + Math.sin(a) * d;
+      } else {
+        x = b[0] + Math.random() * (b[2] - b[0]);
+        y = b[1] + Math.random() * (b[3] - b[1]);
+      }
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      if (!pointInPolygon(x, y, zone.pts)) continue;
+      if (solidAtPoint(x, y)) continue;
+      return [x, y];
+    }
+    return null;
+  }
+
+  // ---- 复活区域（世界坐标）----
+  // 顺序 = (level 升序, 距原点升序)：服务端用这个顺序判断"下一个/上一个"复活点。
+  const checkpoints = (data.checkpoints || []).map((c) => {
+    const px = c.raw[0], py = c.raw[1], pw = c.raw[2], ph = c.raw[3];
+    const x = px * OBJ_SCALE - half, y = py * OBJ_SCALE - half;
+    const w = pw * OBJ_SCALE, h = ph * OBJ_SCALE;
+    const cx = x + w / 2, cy = y + h / 2;
+    return { level: c.level, x, y, w, h, cx, cy, dist: Math.hypot(cx, cy) };
+  }).sort((a, b) => (a.level - b.level) || (a.dist - b.dist));
+
+  // 某坐标落在哪个复活区域里（-1 = 不在任何复活区）
+  function checkpointAt(x, y) {
+    for (let i = 0; i < checkpoints.length; i++) {
+      const c = checkpoints[i];
+      if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) return i;
+    }
+    return -1;
+  }
+
+  // 复活落点：优先生效区域中心；中心不可站立时在区域内随机找一个可站立点
+  function checkpointSpawnPoint(cp) {
+    if (!cp) return { x: 0, y: 0 };
+    if (!solidAtPoint(cp.cx, cp.cy)) return { x: cp.cx, y: cp.cy };
+    for (let i = 0; i < 48; i++) {
+      const x = cp.x + Math.random() * cp.w;
+      const y = cp.y + Math.random() * cp.h;
+      if (!solidAtPoint(x, y)) return { x, y };
+    }
+    return { x: cp.cx, y: cp.cy };
+  }
+
+  // ---- 减速瓦片（地形效果）----
+  // foliage / seaweed / vine 系列（树叶、海草、藤蔓）会拖慢玩家并把花瓣打回"待加载"。
+  // 关键：这些瓦片的美术只覆盖格子的【一部分】（如 foliage_tl_0 只占左上角约 56%），
+  // 所以不能用"整格命中"判定 —— 否则人还没走进叶子就开始减速。
+  // 这里按素材【实际不透明像素】判定：首次访问某瓦片时把它的 SVG 采样成 16×16 的
+  // alpha 掩码并缓存，之后用亚格坐标（u,v）查表，精度 1/16 格。
+  const SLOW_TILE_PREFIXES = ['foliage', 'seaweed', 'vine'];
+  const SLOW_MASK_N = 16;
+  const _slowMaskCache = new Map();          // 瓦片名 -> Uint8Array(N*N) | null（素材未就绪）
+  const _slowOffCanvas = document.createElement('canvas');
+  _slowOffCanvas.width = _slowOffCanvas.height = SLOW_MASK_N;
+
+  function slowMaskFor(name) {
+    if (_slowMaskCache.has(name)) return _slowMaskCache.get(name);
+    let mask = null;
+    try {
+      const img = (typeof SpriteStore !== 'undefined' && SpriteStore.get) ? SpriteStore.get('tile' + name) : null;
+      if (img && img.complete && (img.naturalWidth || img.width)) {
+        const c = _slowOffCanvas.getContext('2d', { willReadFrequently: true });
+        c.clearRect(0, 0, SLOW_MASK_N, SLOW_MASK_N);
+        c.drawImage(img, 0, 0, SLOW_MASK_N, SLOW_MASK_N);
+        const px = c.getImageData(0, 0, SLOW_MASK_N, SLOW_MASK_N).data;
+        mask = new Uint8Array(SLOW_MASK_N * SLOW_MASK_N);
+        for (let i = 0; i < mask.length; i++) mask[i] = px[i * 4 + 3] > 40 ? 1 : 0;
+      }
+    } catch (e) {
+      mask = null;                            // 跨域/取不到像素：退回按后缀估算
+    }
+    _slowMaskCache.set(name, mask);           // 注意：null 也要缓存，否则每帧重试很浪费
+    return mask;
+  }
+
+  // 素材未就绪时的兜底：按官方命名后缀估算覆盖区域（数值来自实际掩码实测）
+  //   _c_   整格； _t_   顶部 56% 横带； _tl_ 左上 56% 方块； _bri_ 右下 56% 方块
+  function slowFallbackHit(name, u, v) {
+    const R = 0.5625;
+    if (name.indexOf('_bri') >= 0) return u >= R && v >= R;
+    if (name.indexOf('_tl') >= 0) return u < R && v < R;
+    if (name.indexOf('_t_') >= 0) return v < R;
+    return true;                              // 无后缀（整格图案）：整格都算
+  }
+
+  function slowAt(x, y) {
+    const fx = (x + half) / tile, fy = (y + half) / tile;
+    const tx = Math.floor(fx), ty = Math.floor(fy);
+    if (tx < 0 || ty < 0 || tx >= W || ty >= H) return false;
+    const idx = ty * W + tx;
+    let u = fx - tx, v = fy - ty;
+    for (let i = 0; i < data.layers.length; i++) {
+      const layer = data.layers[i];
+      const raw = layer.tiles && layer.tiles[idx];
+      if (!raw || raw === -1) continue;
+      let name = raw, flags = 0;
+      const hash = (typeof raw === 'string') ? raw.indexOf('#') : -1;
+      if (hash >= 0) { name = raw.slice(0, hash); flags = parseInt(raw.slice(hash + 1), 10) || 0; }
+      let slow = false;
+      for (let p = 0; p < SLOW_TILE_PREFIXES.length; p++) {
+        if (name.indexOf(SLOW_TILE_PREFIXES[p]) === 0) { slow = true; break; }
+      }
+      if (!slow) continue;
+      // 翻转位：掩码查询时把亚格坐标镜像回去，与实际显示一致
+      const uu = (flags & 1) ? 1 - u : u;
+      const vv = (flags & 2) ? 1 - v : v;
+      const mask = slowMaskFor(name);
+      if (!mask) { if (slowFallbackHit(name, uu, vv)) return true; continue; }
+      const mx = clamp(Math.floor(uu * SLOW_MASK_N), 0, SLOW_MASK_N - 1);
+      const my = clamp(Math.floor(vv * SLOW_MASK_N), 0, SLOW_MASK_N - 1);
+      if (mask[my * SLOW_MASK_N + mx]) return true;
+    }
+    return false;
+  }
+
   const poly = [[-half, -half], [half, -half], [half, half], [-half, half]];
   return {
     R: half, half, tile, width: W, height: H, size: data.size, solid, solidQuad, FW, FH, poly,
     isSolid, solidAtPoint, collide, move: moveCircle, moveShape, isInside, randomPoint, spawnPointAwayFrom,
     clampTo: (x, y, r) => collide(x, y, r || 22),
     minimapCanvas, drawCollisionRegion,
+    name: data.name || 'map',
+    slowAt,
+    spawnZones, zoneAt, randomPointInZone,
+    checkpoints, checkpointAt, checkpointSpawnPoint,
     buildCollision
     };
     }

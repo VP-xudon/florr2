@@ -8,6 +8,42 @@ const ASSET_VER = 5;
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
+// ---------------- 用户设置（Cookie 持久化） ----------------
+// 只存"重启后生效"的选项：语言、键盘移动、调试模式。
+// 之所以用 Cookie 而不是 URL 参数：这些是用户偏好，不该每次开游戏都拼一遍查询串。
+// 读取时机必须早于 lang.js（语言包要在 data.js 之前定下来），所以放在最靠前的 util.js。
+window.Settings = (function () {
+  const KEY = 'florr_settings';
+  const DEFAULTS = {
+    lang: 'en_US',        // 语言包代码（assets/i18n/<code>/<code>.js 的 <code>）
+    keyboardMove: false,  // false = 鼠标移动（默认），true = 键盘移动
+    debug: false          // 开发者模式（原 ?mode=debug）
+  };
+  function load() {
+    let raw = '';
+    try {
+      const m = document.cookie.match(new RegExp('(?:^|; )' + KEY + '=([^;]*)'));
+      raw = m ? decodeURIComponent(m[1]) : '';
+    } catch (e) { raw = ''; }
+    let obj = {};
+    if (raw) { try { obj = JSON.parse(raw) || {}; } catch (e) { obj = {}; } }
+    return Object.assign({}, DEFAULTS, obj);
+  }
+  let data = load();
+  function persist() {
+    try {
+      document.cookie = KEY + '=' + encodeURIComponent(JSON.stringify(data)) +
+        '; path=/; max-age=' + (60 * 60 * 24 * 365) + '; SameSite=Lax';
+    } catch (e) { /* Cookie 不可用（file:// 等）：本次会话内仍然生效 */ }
+  }
+  return {
+    DEFAULTS,
+    get(k) { return data[k]; },
+    set(k, v) { data[k] = v; persist(); },
+    all() { return Object.assign({}, data); }
+  };
+})();
+
 // ---------------- 数值显示：欧美小游戏风格压缩记法 ----------------
 // 只影响"显示"，底层数值永远保持精确原值。
 //   < 1000  -> 原样（整数照原样；小数最多保留一位）

@@ -49,6 +49,7 @@ class Game {
     this.keys = {};
     this.camera = { x: 0, y: 0 };
     this.shake = 0;
+    this.tpTarget = null;    // /tp 标出的待传送点（世界 + 小地图红点）
     this.last = 0;
     this.selectedSlot = 0;
 
@@ -109,8 +110,9 @@ class Game {
     // 失焦时清空按键：避免切窗后"松手了仍在移动 / 模式卡住"
     window.addEventListener('blur', () => { this._down.clear(); this.keys = {}; });
 
-    // —— 鼠标：① 左右键切换模式（左=reach / 右=detect，长按保持）；② ?movemode=mouse 鼠标移动 ——
-    this.moveMode = (window.__queryParams && window.__queryParams.movemode === 'mouse') ? 'mouse' : 'keyboard';
+    // —— 鼠标：① 左右键切换模式（左=reach / 右=detect，长按保持）；
+    //     ② 移动方式：默认【鼠标移动】，设置窗口里勾选"键盘移动"才切成 WASD/方向键 ——
+    this.moveMode = (typeof Settings !== 'undefined' && Settings.get('keyboardMove')) ? 'keyboard' : 'mouse';
     this.mouse = null;                       // 画布坐标指针位置（鼠标移动模式用）
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());   // 右键不弹系统菜单
     this.canvas.addEventListener('mousemove', (e) => {
@@ -135,6 +137,12 @@ class Game {
     // UI 由 ui.js 动态生成；绑定回调
     UI.onBagToggle = () => this.toggleBag();
     UI.onDexToggle = () => this.toggleDex();
+    UI.onSettingsToggle = () => this.toggleSettings();
+    // 设置项即时生效（Cookie 的写入在 UI 侧完成，这里只负责应用到运行时）
+    UI.onSettingChange = (key, value) => {
+      if (key === 'keyboardMove') this.moveMode = value ? 'keyboard' : 'mouse';
+      else if (key === 'debug') window.__debug = !!value;
+    };
     UI.onSlotClick = (i) => this.swapSlotColumn(i);         // 点击主槽卡 -> 与副槽同列互换（不再飞回背包）
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
     UI.onSubClick = (i) => this.swapSlotColumn(i);          // 点击副槽卡 -> 与主槽同列互换
@@ -165,7 +173,20 @@ class Game {
     this.net.connect();
 
     // 聊天走同一条网络通道（服务器全局设定）：上行发送、下行收事件
-    if (typeof Chat !== 'undefined') Chat.bindNet(this.net);
+    if (typeof Chat !== 'undefined') {
+      Chat.bindNet(this.net);
+      // /tp -> 先标点（世界 + 小地图红点）；/sure -> 交服务端校验后真正传送
+      Chat.onTpTarget = (x, y) => { this.tpTarget = { x, y }; };
+      Chat.onTpCancel = () => { this.tpTarget = null; };
+      Chat.onTpConfirm = (x, y) => {
+        const srv = this.net && this.net.server;
+        const err = (srv && srv.teleport) ? srv.teleport(x, y) : 'Chat/CommandError/InternalError';
+        if (err) return err;                 // 墙体/不可行走 -> 返回错误键，人不动
+        this.tpTarget = null;
+        this.camera.x = x; this.camera.y = y;   // 相机直接到位，避免长距离滑行
+        return null;
+      };
+    }
 
     // 玩家与初始装备
     this.player = new Player();
@@ -185,15 +206,13 @@ class Game {
     // 把地图与玩家初始状态交给服务端（此后权威状态归它管）
     this.net.server.attach(this.map, this.player);
     this.camera.x = this.player.x; this.camera.y = this.player.y;
-    // 注意：初始生物不再由客户端生成 —— 服务端在 start() 时 spawn，
-    // 客户端在第一个快照里按 id 镜像出视图实体（见 _applySnap）。
+    // 注意：生物一律由服务端按【地图自带的生成区】生成（tmj 的 mobs/mobs2 对象层），
+    // 客户端只在快照里按 id 镜像出视图实体（见 _applySnap）。
 
     this.buildBackground();
     this.updateHUD();
   }
 
-  // 初始生物：在玩家出生点附近生成 3 只 Ladybug（common / legendary / super）。
-  // 目前只做「实体 + 随机游走 + 名牌」，还没有伤害，所以不做仇恨与实体碰撞。
 
   _resetPlayer(full) {
     const p = this.player;
@@ -218,7 +237,13 @@ class Game {
   // 只重置生命状态并让所有花瓣重新装填（reload 从头结算，出场自带渐显+Q 弹）。
   respawn() {
     const p = this.player;
-    p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;         // 重生点
+    // 复活位置由【服务端】按地图复活区域结算（见 net.js _respawnPos）：
+    // 本地模拟服务端可以直接拿返回值，避免先跳到原点再被拽回来那一帧抖动。
+    let pos = null;
+    const srv = this.net && this.net.server;
+    if (srv && typeof srv.requestRespawn === 'function') pos = srv.requestRespawn();
+    if (pos) { p.x = pos.x; p.y = pos.y; }
+    p.vx = 0; p.vy = 0;
     p.hp = p.maxHp;
     p.dead = false; p.deathTimer = 0;
     InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);   // 起身无敌：与出生同一套无敌表现
@@ -236,9 +261,10 @@ class Game {
     }
     this._deathShown = false;
     this._aggroCleared = false;      // 复位一次性标志：下次死亡要再清一次仇恨
-    this.camera.x = 0; this.camera.y = 0;
-    // 通知服务端重置它的权威副本（位置/血量/无敌/装填/仇恨）
-    if (this.net) this.net.send({ t: 'respawn' });
+    this.camera.x = p.x; this.camera.y = p.y;
+    // 非本地服务端（真实网络）：走消息让服务端结算并广播。
+    // 本地模拟服务端上面已经直接结算过，再发一次会多消耗一次保底次数。
+    if (!pos && this.net) this.net.send({ t: 'respawn' });
     // 仇恨豁免（兜底）：复活后再清一次，确保没有生物带着旧仇恨追杀过来
     this._clearAggro();
     this.updateHUD();
@@ -346,6 +372,14 @@ class Game {
       this.shake = Math.max(this.shake, HURT_SHAKE);   // 很轻微地抖一下
     } else if (ev.kind === 'chat' || ev.kind === 'sys') {
       if (typeof Chat !== 'undefined') Chat.push(ev);
+    } else if (ev.kind === 'respawned' || ev.kind === 'teleported') {
+      // 服务端把权威副本挪到了新位置（复活点/传送）：预测副本与相机一起搬过去，
+      // 否则下一帧快照会把人物硬拽过去（瞬移 + 相机滑行）。
+      const p = this.player;
+      if (!p) return;
+      p.x = ev.x; p.y = ev.y; p.vx = 0; p.vy = 0;
+      this.camera.x = ev.x; this.camera.y = ev.y;
+      if (ev.kind === 'teleported') this.tpTarget = null;
     }
   }
 
@@ -404,6 +438,7 @@ class Game {
 
   toggleBag() {
     UI.setDexVisible(false);            // 同一时刻只允许一个窗口
+    UI.setSettingsVisible(false);
     UI.setBagVisible(!UI.isBagVisible());
     if (UI.isBagVisible()) this.renderInventory();
   }
@@ -490,7 +525,7 @@ class Game {
     const pickR = (p.r * 2) * DROP_PICK_R;
     for (const d of this.drops) {
       d.update(dt, p);
-      if (!d.fly && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
+      if (!d.fly && d.popT >= 1 && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
       if (d.done) {
         const type = (typeof getPetal === 'function') ? getPetal(d.svg) : null;
         if (type) for (let i = 0; i < d.count; i++) this.pickupCard(type, d.rarity);
@@ -557,7 +592,7 @@ class Game {
     return { x: dx, y: dy };
   }
 
-  // 鼠标移动模式（?movemode=mouse）：花朵朝指针方向移动，实现精确角度；
+  // 鼠标移动模式（默认；设置窗口里勾选"键盘移动"可切换）：花朵朝指针方向移动，实现精确角度；
   // 指针与人物的距离 -> 目标速度占比(0..1)，距离达 3×主角直径(=6r)即达到键盘最大速度，再远封顶。
   // 返回 dir 的模长 = 速度占比，由 Player.update 的 min(len,1) 缩放目标速度，
   // 并复用键盘同款 rate 9/4 平滑加减速；指针距人物极近时归零（平滑停下）。
@@ -572,9 +607,11 @@ class Game {
     const dx = mx - p.x, dy = my - p.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1e-3) return { x: 0, y: 0 };
-    const winOpen = (typeof UI !== 'undefined') &&
-      ((UI.isBagVisible && UI.isBagVisible()) || (UI.isDexVisible && UI.isDexVisible()));
-    if (winOpen) return { x: 0, y: 0 };
+    // 只要【任意窗口】开着就停止鼠标驱动的移动（统一走 UI.isAnyWindowOpen，
+    // 以后新增窗口不必再逐个补判断 —— 之前漏了设置窗口就是这个问题）。
+    if (typeof UI !== 'undefined' && UI.isAnyWindowOpen && UI.isAnyWindowOpen()) {
+      return { x: 0, y: 0 };
+    }
     const frac = Math.min(dist / (3 * (2 * p.r)), 1);   // 3 倍主角直径封顶
     return { x: dx / dist * frac, y: dy / dist * frac };
   }
@@ -613,10 +650,11 @@ class Game {
     const gap = DROP_SIZE * 2.0;              // 卡与卡之间的间距（多张时进一步拉开，避免视觉粘连）
     for (let i = 0; i < n; i++) {
       const off = dropLayoutOffset(i, n, gap);
+      // 出生在死亡点，由 DropCard 自己"弹"到目标位置（见 DROP_POP_T）
       const d = new DropCard(fresh[i].slug, fresh[i].svg, fresh[i].rarity, fresh[i].name,
-        x + off.x, y + off.y);
+        x, y, off);
       this.drops.push(d);
-      this.dropSpark(d.x, d.y, d.rarity, 'burst', d.size * 0.5);   // 落地烟花（从卡面四周冒出）
+      this.dropSpark(x, y, d.rarity, 'burst', d.size * 0.5);   // 落地烟花在死亡点炸开
     }
   }
 
@@ -626,6 +664,32 @@ class Game {
     const col = (typeof RARITIES !== 'undefined' && RARITIES[rarity]) ? RARITIES[rarity].color : '#fff';
     const n = mode === 'burst' ? 14 : 1;
     for (let i = 0; i < n; i++) this.dropFx.push(new DropSpark(x, y, col, mode, half));
+  }
+
+  // /tp 目标标记：实心红点 + 一圈脉冲 + 四向短线（长距离也一眼能定位）
+  _drawTpMarker(ctx) {
+    const t = this.tpTarget;
+    if (!t) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const pulse = (now * 1.4) % 1;
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.globalAlpha = 0.55 * (1 - pulse);
+    ctx.strokeStyle = '#ff2b2b';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, 10 + pulse * 26, 0, TAU); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ff2b2b';
+    ctx.beginPath(); ctx.arc(0, 0, 7, 0, TAU); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,43,43,.85)';
+    ctx.beginPath();
+    ctx.moveTo(-16, 0); ctx.lineTo(-9, 0);
+    ctx.moveTo(9, 0); ctx.lineTo(16, 0);
+    ctx.moveTo(0, -16); ctx.lineTo(0, -9);
+    ctx.moveTo(0, 9); ctx.lineTo(0, 16);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // ---------- 渲染 ----------
@@ -656,11 +720,20 @@ class Game {
     for (const c of this.cards) c.draw(ctx);
     for (const s of this.dropFx) s.draw(ctx);
     for (const d of this.drops) { try { d.draw(ctx); } catch (e) { console.error('[draw drop]', e); } }
+    // /tp 的目标标记（地面红点 + 脉冲圈，在实体之下，不影响读图）
+    if (this.tpTarget) this._drawTpMarker(ctx);
     // 层级定数：尸体固定在最底层，生物彼此按 y 排序，活玩家固定在最上层（不再忽上忽下）
     const me = this.player;
     if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
     const mobs = this.mobs.slice().sort((a, b) => a.y - b.y);
-    for (const m of mobs) { try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
+    // 视口裁剪：全图上千只生物，只有屏幕（含 120px 余量）内的才真正绘制。
+    // 不做这层的话，1600+ 只生物每帧都会产生 canvas 调用，帧率会被拖垮。
+    const mx0 = camX - this.W / 2 - 120, mx1 = camX + this.W / 2 + 120;
+    const my0 = camY - this.H / 2 - 120, my1 = camY + this.H / 2 + 120;
+    for (const m of mobs) {
+      if (m.x < mx0 || m.x > mx1 || m.y < my0 || m.y > my1) continue;
+      try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
+    }
     if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
 
     for (const pt of this.particles) pt.draw(ctx);
@@ -668,7 +741,29 @@ class Game {
 
     ctx.restore();
 
+    // /tp 目标在屏幕外时，在屏幕边缘画一个红点指向它（保证"一定看得见"）
+    this._drawTpEdge(ctx, camX, camY);
     this._drawMinimap();
+  }
+
+  // 屏幕边缘的传送指示点（只在目标离开视野时绘制）
+  _drawTpEdge(ctx, camX, camY) {
+    const t = this.tpTarget;
+    if (!t) return;
+    const dx = t.x - camX, dy = t.y - camY;
+    const hw = this.W / 2 - 20, hh = this.H / 2 - 20;
+    if (Math.abs(dx) <= hw && Math.abs(dy) <= hh) return;   // 屏幕内：世界里的红点已经画了
+    const k = Math.min(hw / Math.max(1, Math.abs(dx)), hh / Math.max(1, Math.abs(dy)));
+    const px = this.W / 2 + dx * k, py = this.H / 2 + dy * k;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, 7, 0, TAU);
+    ctx.fillStyle = '#ff2b2b';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#000';
+    ctx.stroke();
+    ctx.restore();
   }
 
   _blitBG(left, top) {
@@ -683,7 +778,8 @@ class Game {
   }
 
   _drawMinimap() {
-    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, this.mobs);
+    // 把 /tp 标记一起传进去（小地图是独立绘制的，不能靠全局变量取）
+    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, this.mobs, this.tpTarget);
   }
 
   // ---------- HUD / 背包 ----------
@@ -707,14 +803,23 @@ class Game {
 
   toggleDex() {
     UI.setBagVisible(false);            // 同一时刻只允许一个窗口
+    UI.setSettingsVisible(false);
     UI.setDexVisible(!UI.isDexVisible());
     if (UI.isDexVisible()) UI.renderDex(this);
   }
 
-  // 拖拽开始时关闭所有小窗口（背包/图鉴）
+  // 设置窗口：同样与背包/图鉴互斥
+  toggleSettings() {
+    UI.setBagVisible(false);
+    UI.setDexVisible(false);
+    UI.setSettingsVisible(!UI.isSettingsVisible());
+  }
+
+  // 拖拽开始时关闭所有小窗口（背包/图鉴/设置）
   closeAllWindows() {
     UI.setBagVisible(false);
     UI.setDexVisible(false);
+    UI.setSettingsVisible(false);
   }
 
   // ---------- 物品栏模型 ----------

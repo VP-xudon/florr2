@@ -16,8 +16,6 @@ body {
 
 /* HUD */
 #hud { position: absolute; inset: 0; pointer-events: none; }
-#topbar { position: absolute; top: 14px; left: 16px; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); }
-#pname { color: #cfe8c0; font-weight: 500; font-size: 15px; }
 
 /* 左下角图标列：使用 assets/ui 真实矢量化按钮贴图（层级高于窗口） */
 #dockBtns {
@@ -34,11 +32,21 @@ body {
 .dockbtn:active { filter: brightness(.82); transform: scale(.95); }
 /* 背包按钮：原 54px × 0.85 × 1.2 */
 #bagBtn { width: 55.2px; height: 55.2px; }
-/* 生物图鉴按钮：移到左上角（玩家名下方），btn-bee 贴图，原 54px × 0.5 × 1.2 */
-#dexBtn {
-  position: absolute; left: 16px; top: 44px; z-index: 45;
-  width: 32.4px; height: 32.4px;
+/* 左上角按钮组：设置（最左）+ 生物图鉴（右移一格） */
+#topBtns {
+  position: absolute; left: 16px; top: 12px;
+  display: flex; align-items: center; gap: 3px;   /* 两个图标靠得更近 */
+  pointer-events: auto; z-index: 45;
 }
+/* 生物图鉴按钮：原 32.4px × 1.4 = 45.36px */
+#dexBtn { width: 45.36px; height: 45.36px; }
+/* 设置按钮：与图鉴同级；内联 SVG 便于单独转动中间齿轮 */
+#setBtn { width: 45.36px; height: 45.36px; }
+.setbtn-svg { width: 100%; height: 100%; display: block; }
+/* 只有中间那个白色齿轮转：外框与底板保持不动 */
+#setBtn .gear { transform-box: view-box; transform-origin: 50% 50%; }
+#setBtn:hover .gear { animation: gearSpin 2.6s linear infinite; }
+@keyframes gearSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 /* 底部常驻快捷栏：仅一行 = 当前装备的卡（空位为灰色半透明圆角块，无描边；层级高于窗口） */
 #quickbar {
@@ -165,19 +173,90 @@ body {
 }
 /* 关闭态：完全滑回屏幕下方外并淡出（保持 flex 布局，仅覆盖全局 .hidden 的 display:none） */
 .window.hidden { display: flex !important; opacity: 0; transform: translateY(100%); pointer-events: none; }
+/* 关闭的窗口【连同内部所有元素】都不许再接收鼠标事件。
+   仅靠父级 pointer-events:none 不够：内部卡牌 canvas 自带 pointer-events:auto（见 .card），
+   会把命中测试重新打开 —— 于是窗口关掉后，鼠标扫过原位置仍会弹出格子的悬浮框。 */
+.window.hidden, .window.hidden * { pointer-events: none !important; }
 
 /* ---- 生物图鉴窗口 ----
    主色 = 图鉴按钮（btn-bee.svg）的黄 #dbd74b，描边同背包算法（darken 0.18 = #b3b03d）。
    动画与背包完全一致（.window 上的 0.3s transform/opacity），只是方向改为从左上角弹出。 */
 #dex {
-  left: 60px; top: 40px; bottom: auto;      /* 紧贴左上角的图鉴按钮（left 16 / top 44，宽 32.4） */
+  left: 16px; top: 64px; bottom: auto;      /* 紧贴左上角按钮组（top 12 + 45.36 高）下方，避免盖住按钮 */
   width: 530.7px;                                 /* 上一版 408.24 × 1.3；每格约 51.9px */
   min-height: 0;
   max-height: 408px;                              /* 与背包窗口同高，行多了在框内滚动 */
   background: #dbd74b; border-color: #b3b03d;
   transform-origin: left top;
 }
-#dex.window.hidden { transform: translate(-26px, -20px); opacity: 0; }
+/* 左上角窗口一律【水平】弹入/收回（只做 X 位移，绝不斜向移动） */
+#dex.window.hidden { transform: translateX(-26px); opacity: 0; }
+
+/* ---- 设置窗口 ----
+   主色 = 设置按钮（btn-gear-settings.svg）的内板灰 #aaaaaa，
+   描边 #8c8c8c（正是该素材的外框色），动效与图鉴一致：从左上角按钮位置弹出。 */
+#settings {
+  left: 16px; top: 68px; bottom: auto;
+  width: 306px; min-height: 0; max-height: 380px;
+  background: #aaaaaa; border-color: #8c8c8c;
+  transform-origin: left top;
+}
+#settings.window.hidden { transform: translateX(-18px); opacity: 0; }   /* 水平弹入 */
+
+/* 分栏标签：四等分的小按钮，选中项用白底深字 */
+.set-tabs { display: flex; gap: 4px; padding: 2px 12px 0; }
+.set-tab {
+  flex: 1 1 0; padding: 4px 0; border: none; border-radius: 3.4px; cursor: pointer;
+  background: rgba(0, 0, 0, .18); color: #fff;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 11.4px; font-weight: 800; line-height: 1.2;
+  -webkit-text-stroke: 1.5px #000; paint-order: stroke fill;
+}
+.set-tab:hover { background: rgba(0, 0, 0, .3); }
+.set-tab.on { background: #fefefe; color: #3b3b3b; -webkit-text-stroke: 0; }
+
+.set-panel { display: flex; flex-direction: column; gap: 10px; padding-top: 2px; }
+.set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 1.6px #000; paint-order: stroke fill; cursor: pointer;
+}
+.set-row select {
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 11.4px; font-weight: 800;
+  padding: 3px 6px; border-radius: 3.4px; border: 2px solid #8c8c8c;
+  background: #fefefe; color: #2b2b2b; cursor: pointer;
+  /* 描边是可继承属性：父级 .set-row 的 1.6px 黑描边会继承进下拉框，
+     在浅底深字上糊成一团（看起来像纯黑字），这里必须清零。 */
+  -webkit-text-stroke: 0;
+}
+.set-row select option { -webkit-text-stroke: 0; color: #2b2b2b; }
+
+/* 勾选框：与聊天面板【同款】——黑描边外框 + 内部填充块 + 勾选绿→深灰 / 取消红→缩没，
+   动画复用同一组 keyframes（cbx-check / cbx-uncheck）。
+   结构：<span class="set-check"><i class="set-box"><b class="set-fill"></b></i></span> */
+.set-check { display: inline-flex; align-items: center; cursor: pointer; }
+.set-check .set-box {
+  position: relative; width: 15px; height: 15px; box-sizing: border-box;
+  display: inline-block; background: #ececec; border: 1px solid #000; border-radius: 2px;
+  -webkit-text-stroke: 0;
+}
+.set-check .set-box .set-fill {
+  position: absolute; inset: 0; background: #555; border-radius: 1px;
+  transform: scale(0); transform-origin: center;
+}
+.set-check.on .set-box .set-fill { transform: scale(1); }
+.set-check .set-box .set-fill.cbx-checking   { animation: cbx-check   0.36s cubic-bezier(.4,0,.2,1) forwards; }
+.set-check .set-box .set-fill.cbx-unchecking { animation: cbx-uncheck 0.36s cubic-bezier(.4,0,.2,1) forwards; }
+
+/* 说明小字：与窗口标题一致的黑色描边（不能只有浅色字，浅底上会看不清） */
+.set-note {
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 10.4px; font-weight: 700; line-height: 1.35;
+  color: #fff; -webkit-text-stroke: 1.4px #000; paint-order: stroke fill;
+}
+.set-credits {
+  padding: 18px 0; text-align: center;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 13px; font-weight: 800; line-height: 1.9;
+  color: #fff; -webkit-text-stroke: 1.8px #000; paint-order: stroke fill;
+}
 
 /* 图鉴内容：一行一种生物，9 格从左到右稀有度递增 */
 .dex-grid { display: flex; flex-direction: column; gap: 3px; }

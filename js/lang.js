@@ -91,21 +91,16 @@ if (typeof window.I18N_EN !== 'undefined') {
 }
 
 // 注册官方简体中文包（由 assets/i18n/zh_CN/zh_CN.js 提供 window.I18N_ZH_CN）。
-// 该文件只在 ?i18n=zh_cn 时才会被加载（见 index.html 顶部的同步注入），所以这里是可选的。
+// 现在两个包都在 index.html 里【无条件同步加载】：设置窗口的语言下拉框需要在
+// 任意时刻都能切换/预览，不能再靠查询串决定加载哪个包。
 if (typeof window.I18N_ZH_CN !== 'undefined') {
   I18N.addPack('zh_CN', window.I18N_ZH_CN);
 }
 
-// 应用 URL 里请求的语言：?i18n=zh_cn / ?i18n=en_us（大小写、连字符、下划线都兼容）。
-// 请求中文但包没加载上时保持英文（绝不出空白）；请求的值无法识别时同样保持默认。
-(function applyRequestedLang() {
-  const req = (typeof window !== 'undefined' && window.__i18nReq) || '';
-  if (!req) return;
-  const want = String(req).toLowerCase().replace(/-/g, '_');
-  if (want === 'zh_cn' || want === 'zh') {
-    if (I18N.hasLang('zh_CN')) I18N.setLang('zh_CN');
-    else console.warn('[i18n] 请求了中文但 zh_CN 包未加载，保持英文');
-  } else if (want === 'en_us' || want === 'en') {
-    I18N.setLang('en_US');
-  }
+// 当前语言来自用户设置（Cookie，见 util.js 的 window.Settings），重启后生效。
+// 设置的值不可用（包没加载上/写错）时回退英文，绝不留空白。
+(function applySavedLang() {
+  const want = (typeof Settings !== 'undefined') ? Settings.get('lang') : 'en_US';
+  if (want && I18N.hasLang(want)) I18N.setLang(want);
+  else I18N.setLang('en_US');
 })();

@@ -329,8 +329,53 @@ function rollMobType(level) {
 const STARTER_PETAL_A = PETAL_TYPES[0] ? PETAL_TYPES[0].key : 'p1';
 const STARTER_PETAL_B = (PETAL_TYPES.find(t => t.kind === 'attack') || PETAL_TYPES[1] || PETAL_TYPES[0]).key;
 
-// 初始生物：出生点附近固定生成 3 只 Ladybug（id 3），稀有度各一只。
-// 距离取 190 世界像素 —— 既"间隔不要太远"，又不会和出生点重叠。
-const STARTER_MOB_ID = 3;
-const STARTER_MOB_RARITIES = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super'];
-const STARTER_MOB_RADIUS = 190;
+// ---------------- 生物生成（地图自带生成区） ----------------
+// garden.tmj 的 mobs / mobs2 对象层就是官方生成区：每个 spawn_mobs 对象带
+//   polygon(范围) + difficulty(难度) + density(密度) + mobs(物种权重串)。
+// 但 mobs 里像 "garden" 这样的项是【组名】，组成员在 florr 的服务端配置里，
+// 地图文件内并不包含 —— 所以这里按公开组成登记一张组表。
+// 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
+const MOB_GROUPS = {
+  garden: ['ladybug']
+};
+
+// 兜底物种（生成区解析不出任何有效物种时使用）
+const DEFAULT_SPAWN_SLUG = 'ladybug';
+
+// 难度 -> 稀有度。difficulty 由地图生成区提供（实测 -5 ~ 75）：
+// 每个稀有度有一个"门槛"，难度超过门槛越多，掷中的概率越接近 1（S 型曲线）。
+// 所以出生区(-5~0)几乎只有 common/unusual，高难区才会有 legendary 以上。
+const RARITY_DIFF_T = [0, 6, 14, 24, 38, 55, 75];   // unusual..super 的门槛
+function rollMobRarityByDifficulty(diff) {
+  const d = isFinite(diff) ? diff : 0;
+  let idx = 0;
+  for (let r = 0; r < RARITY_DIFF_T.length; r++) {
+    const p = 1 / (1 + Math.exp(-(d - RARITY_DIFF_T[r]) / 6));
+    if (Math.random() >= p) break;
+    idx = r + 1;
+  }
+  return RARITY_ORDER[Math.min(idx, RARITY_ORDER.length - 1)];
+}
+
+// 解析生成区的 mobs 权重串："rock:0.25;\nant_soldier:1;\ngarden:1;"
+//   · "名字:权重" -> 权重（省略按 1）
+//   · 纯组名 -> 展开 MOB_GROUPS
+// 返回 [{ type, weight }]（只保留 registry 里真实存在的生物）
+function parseSpawnMobs(str) {
+  const out = [];
+  const push = (slug, w) => {
+    const t = MOB_TYPES.find((m) => m.slug === slug);
+    if (!t) return;                      // 未收录的物种直接跳过，不臆造
+    out.push({ type: t, weight: w });
+  };
+  for (const rawLine of String(str || '').split(/[;\n]+/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const ci = line.indexOf(':');
+    const slug = (ci >= 0 ? line.slice(0, ci) : line).trim().toLowerCase().replace(/ /g, '_');
+    const w = ci >= 0 ? (parseFloat(line.slice(ci + 1)) || 1) : 1;
+    if (MOB_GROUPS[slug]) { for (const s of MOB_GROUPS[slug]) push(s, w); continue; }
+    push(slug, w);
+  }
+  return out;
+}

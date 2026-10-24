@@ -20,6 +20,18 @@
 const SNAP_HZ = 25;                 // 快照频率：与既有 combatAcc（25 tick/s）保持一致
 const SNAP_DT = 1 / SNAP_HZ;
 
+// ---- 生物生成参数（按地图生成表，服务端全局管理） ----
+// 【密度口径】所有数值都是"生物总只数"，与物种种类数无关：
+// 一个区先算出总目标，再按权重【挑】物种（每次生成只出一条），
+// 所以以后往 mobs 串里加多少物种，总密度都不变 —— 只会改变构成比例。
+const DENSITY_SCALE = 15.0;         // 整体密度倍率（唯一调参入口：下面三个上限都按它缩放）
+const PER_ZONE_MAX = Math.round(6 * DENSITY_SCALE);              // 90：单区目标上限
+const SPAWN_PER_TILE = 0.012 * DENSITY_SCALE;                    // 0.18：每格面积贡献的目标数量
+const GLOBAL_MAX_MOBS = Math.round(110 * DENSITY_SCALE);         // 1650：全图存活上限
+const SPAWN_INTERVAL = 0.1;         // 每 0.1s 补 1 只（总量变大，补缺口也要更快）
+const MOB_ACTIVE_R = 2200;          // 与玩家距离超过它 -> 生物休眠（不跑 AI、不参与推挤）
+const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
+
 // ---------------- 传输层抽象 ----------------
 // 只约定「消息」这一种形态：上行 send()、下行 onMessage()。
 // 快照是消息的一种（t:'snap'），事件也是（t:'evt'），聊天同样（t:'chat'）。
@@ -84,6 +96,14 @@ class LocalServer {
     this._events = [];          // 待投递事件（聊天、系统私信）
     this._combatAcc = 0;
     this._started = false;
+    this._inited = false;      // 是否已按生成表初始化过（每张地图只自动跑一次）
+    // 复活点状态（见 _ensureCheckpoints）
+    this.cpOf = null;          // 当前绑定的 checkpoints 数组（换图时重算）
+    this.cpUnlocked = [];
+    this.cpMax = -1;
+    this.cpIdx = 0;
+    this.cpStays = CP_RESPAWN_STAYS;
+    this.cpAcc = 0;
   }
 
   // 绑定地图与玩家副本；客户端在 init 后调用一次。
@@ -110,6 +130,9 @@ class LocalServer {
     InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);
     p.petals = []; p.petalWorld = [];
     this._slotSig = '';
+    // 地图/玩家就位后立刻按生成表把全图铺满（等价于 /init <map>），避免开局空场
+    this.spawnT = 0;
+    this._autoInit();
   }
 
   // 客户端装备发生变化时把最新 slots 同步给权威副本（按签名去重，避免每帧 recompute）
@@ -126,15 +149,32 @@ class LocalServer {
   start() {
     if (this._started) return;
     this._started = true;
-    this.spawnStarterMobs();
+    // 用【地图自带生成表】初始化生物；connect() 先于 attach()，
+    // 谁先就位由 _autoInit 自己判断，两处都调用也不会重复初始化。
+    this.spawnT = 0;
+    this._autoInit();
+  }
+
+  // 默认初始化：服务器（含本地模拟服务器）一就位就按生成表铺一遍，
+  // 之后交给 spawnOne 维持。地图或玩家还没绑定就跳过，等另一侧就位时再触发。
+  _autoInit() {
+    if (this._inited || !this.map || !this.player) return false;
+    const res = this.initMap();
+    this._inited = true;
+    if (res && res.ok) {
+      console.info('[spawn] init ' + (this.map.name || 'map') + ': ' + res.spawned +
+        '/' + res.total + ' mobs, alive=' + this.aliveMobs());
+    }
+    return !!(res && res.ok);
   }
 
   applyInput(input) { this._input = input; }
 
   requestRespawn() {
     const p = this.player;
-    if (!p) return;
-    p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;
+    if (!p) return null;
+    const pos = this._respawnPos();
+    p.x = pos.x; p.y = pos.y; p.vx = 0; p.vy = 0;
     p.hp = p.maxHp; p.dead = false; p.deathTimer = 0;
     InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);
     p.hurtT = 0; p.killedBy = null;
@@ -142,23 +182,249 @@ class LocalServer {
       ? { card: c, age: 0, dur: (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0) }
       : null);
     for (const m of this.ents) if (m.threat) m.threat.length = 0;   // 重生后仇恨豁免
+    // 客户端要跟着把预测副本搬到同一个点（否则会被下一帧快照硬拽过去）
+    this._events.push({ kind: 'respawned', x: pos.x, y: pos.y, cp: pos.idx });
+    return pos;
   }
 
-  // 生物生成：由服务端驱动（客户端只在快照里看到"多了一个 id"再镜像）
-  spawnStarterMobs() {
-    const type = MOB_BY_ID[STARTER_MOB_ID] || null;
-    if (!type) return;
-    for (let i = 0; i < STARTER_MOB_RARITIES.length; i++) {
-      const rarity = STARTER_MOB_RARITIES[i];
-      const m = new Mob(type, 0, 0, 1, rarity);
-      // 距离按体型加成：高稀有度直径可能是主角的 4~8 倍，放太近会直接盖住出生点
-      const d = STARTER_MOB_RADIUS + m.r * 0.9;
-      const a = (i / STARTER_MOB_RARITIES.length) * TAU + rand(-0.35, 0.35);
-      m.x = (this.player ? this.player.x : 0) + Math.cos(a) * d;
-      m.y = (this.player ? this.player.y : 0) + Math.sin(a) * d;
-      m.netId = this.nextId++;
-      this.ents.push(m);
+  // ---------------- 复活点（地图 checkpoints 区域） ----------------
+  // 地图顺序 = (level 升序, 距原点升序)，也就是由近及远的推进顺序。规则：
+  //   · 走进某个复活【区域】即解锁（区域不是点，是矩形）
+  //   · 解锁更远的点 -> 复活点重置为"它的上一个"，并【强制重新保底 3 次】
+  //   · 复活落在当前复活点；在该点满 3 次后重新结算：往前推一个（最多推到最远解锁点）
+  _ensureCheckpoints() {
+    const cps = (this.map && this.map.checkpoints) || [];
+    if (this.cpOf === cps) return;
+    this.cpOf = cps;
+    this.cpUnlocked = new Array(cps.length).fill(false);
+    this.cpMax = -1;                        // 已解锁的最远点下标
+    this.cpIdx = 0;                         // 当前使用的复活点下标
+    this.cpStays = CP_RESPAWN_STAYS;        // 当前复活点还剩几次保底
+    this.cpAcc = 0;
+  }
+
+  _checkCheckpoints() {
+    this._ensureCheckpoints();
+    const p = this.player;
+    if (!p || p.dead || !this.map || !this.map.checkpointAt) return;
+    const i = this.map.checkpointAt(p.x, p.y);
+    if (i < 0 || this.cpUnlocked[i]) return;
+    this.cpUnlocked[i] = true;
+    if (i <= this.cpMax) return;            // 不是更远的点：只记已到访，不动保底
+    this.cpMax = i;
+    this.cpIdx = Math.max(0, i - 1);        // "最远点的上一个"
+    this.cpStays = CP_RESPAWN_STAYS;        // 解锁更远 -> 强制重新保底
+    const n = this.cpUnlocked.length;
+    this._events.push({
+      kind: 'sys', channel: 'local',
+      text: I18N.tf('Checkpoint/Unlocked', { 0: i + 1, 1: n },
+        'Checkpoint ' + (i + 1) + '/' + n + ' unlocked.')
+    });
+  }
+
+  _respawnPos() {
+    this._ensureCheckpoints();
+    const cps = (this.map && this.map.checkpoints) || [];
+    if (this.cpMax < 0 || !cps.length) return { x: 0, y: 0, idx: -1 };
+    if (this.cpStays <= 0) {                // 保底用完 -> 重新结算复活点
+      this.cpIdx = Math.min(this.cpIdx + 1, this.cpMax);
+      this.cpStays = CP_RESPAWN_STAYS;
     }
+    this.cpStays--;
+    const cp = cps[Math.min(this.cpIdx, cps.length - 1)];
+    const pos = this.map.checkpointSpawnPoint ? this.map.checkpointSpawnPoint(cp) : { x: 0, y: 0 };
+    return { x: pos.x, y: pos.y, idx: this.cpIdx };
+  }
+
+  // /tp 确认后调用：只有"真正能站人"的坐标才传送，否则返回错误文案键（不挪人）。
+  teleport(x, y) {
+    const p = this.player;
+    if (!p || !this.map) return 'Chat/CommandError/InternalError';
+    const fx = Number(x), fy = Number(y);
+    if (!isFinite(fx) || !isFinite(fy)) return 'Chat/Command/tp/Usage';
+    if (this.map.isInside && !this.map.isInside(fx, fy)) return 'Chat/Command/tp/Blocked';
+    if (this.map.solidAtPoint && this.map.solidAtPoint(fx, fy)) return 'Chat/Command/tp/Blocked';
+    // 半径内压墙也算"到不了"：collide 会把圆心推开，推得明显就说明目标位置嵌在墙里
+    if (this.map.collide) {
+      const r = p.r || 22;
+      const c = this.map.collide(fx, fy, r);
+      if (Math.hypot(c.x - fx, c.y - fy) > 0.5) return 'Chat/Command/tp/Blocked';
+    }
+    p.x = fx; p.y = fy; p.vx = 0; p.vy = 0;
+    if (p.petals) for (const b of p.petals) { b.x = fx; b.y = fy; b.vx = 0; b.vy = 0; }
+    this._events.push({ kind: 'teleported', x: fx, y: fy });
+    return null;
+  }
+
+  // ---------------- 生物生成（按地图生成表，服务端全局管理） ----------------
+  // 生成表是【地图/服务端数据】，不围绕玩家转：
+  //   · 每个 spawn_mobs 区有自己的目标数量 = 面积(格) × density × SPAWN_PER_TILE（单区封顶）
+  //   · 全图总和超过 GLOBAL_MAX_MOBS 时按比例缩减（保持各区相对比例）
+  //   · /init <map> 一次性把全图补到目标；之后每 SPAWN_INTERVAL 秒补最缺的那一只
+  //   · 稀有度由该区 difficulty 决定；位置在区多边形内随机（不挑玩家附近）
+  //   · 远处生物休眠（只保留位置，不跑 AI），所以全图人口不等于全图负载
+  aliveMobs() {
+    let n = 0;
+    for (const m of this.ents) if (!m.dead) n++;
+    return n;
+  }
+
+  _zoneCount(zone) {
+    let n = 0;
+    for (const m of this.ents) if (!m.dead && m.spawnZone === zone) n++;
+    return n;
+  }
+
+  // 生成表 -> Map(zone -> 目标数量)；总和超过全局上限时等比缩减。
+  // 【密度口径：只按"总只数"算】—— 每个区只算一个总数，物种用权重【挑】（见 _pickSpawnType），
+  // 一次生成只出一条。所以一个区里写 1 个物种还是 10 个物种，总密度完全一样，
+  // 只是构成比例不同。以后扩表也不会把密度顶飞。
+  zoneTargets() {
+    const zones = (this.map && this.map.spawnZones) || [];
+    const raw = [];
+    let sum = 0;
+    for (const z of zones) {
+      const tiles = z.area / (GARDEN_TILE * GARDEN_TILE);
+      let want = Math.round(tiles * z.density * SPAWN_PER_TILE);
+      want = clamp(want, 0, PER_ZONE_MAX);
+      raw.push([z, want]);
+      sum += want;
+    }
+    const out = new Map();
+    const k = (sum > GLOBAL_MAX_MOBS) ? (GLOBAL_MAX_MOBS / sum) : 1;
+    let total = 0;
+    for (const [z, want] of raw) {
+      const v = (k === 1) ? want : Math.round(want * k);
+      out.set(z, v);
+      total += v;
+    }
+    return { map: out, total };
+  }
+
+  // 从该区的物种权重里【挑一个】—— 注意不是"每个物种各生成一批"，
+  // 否则密度会随物种数量线性膨胀（这正是要保持不变的东西）。
+  _pickSpawnType(zone) {
+    const list = zone ? parseSpawnMobs(zone.mobs) : [];
+    if (!list.length) {
+      const t = MOB_TYPES.find((m) => m.slug === DEFAULT_SPAWN_SLUG) || MOB_TYPES[0] || null;
+      return t ? { type: t, weight: 1 } : null;
+    }
+    let total = 0;
+    for (const it of list) total += it.weight;
+    let r = Math.random() * total;
+    for (const it of list) { if ((r -= it.weight) <= 0) return it; }
+    return list[list.length - 1];
+  }
+
+  // 在指定区里取一个生成点（全区随机；不落在玩家 180px 内，避免刷脸）
+  // 尝试次数刻意压小：取不到点说明这个区全是墙（地图里确实有这样的区），
+  // 由 _spawnInZone 记冷却，避免每 0.1s 重试几万次采样。
+  _zoneSpawnPoint(zone) {
+    const p = this.player;
+    let first = null;
+    for (let i = 0; i < 8; i++) {
+      const pos = this.map.randomPointInZone
+        ? this.map.randomPointInZone(zone)
+        : null;
+      if (!pos) continue;
+      if (!first) first = pos;
+      if (!p || dist(pos[0], pos[1], p.x, p.y) > 180) return pos;
+    }
+    // 8 次都落在玩家 180px 内（人就站在这个区的中间）：退而求其次也要生成，
+    // 否则这个区会白白进入 5s 冷却，越打越空。
+    return first;
+  }
+
+  // 在某个区里生成一只（内部用）
+  _spawnInZone(zone) {
+    const pick = this._pickSpawnType(zone);
+    if (!pick || !pick.type) return false;
+    const pos = this._zoneSpawnPoint(zone);
+    if (!pos) {
+      // 该区取不到可站立点（整块是墙）：冷却 5s，别在这儿空转
+      if (zone) zone.nextTry = (this.t || 0) + 5;
+      return false;
+    }
+    const rarity = rollMobRarityByDifficulty(zone ? zone.difficulty : 0);
+    const m = new Mob(pick.type, pos[0], pos[1], 1, rarity);
+    m.x = pos[0]; m.y = pos[1];
+    m.spawnZone = zone || null;
+    m.netId = this.nextId++;
+    this.ents.push(m);
+    return true;
+  }
+
+  // /init <map>：按生成表把全图一次性补到目标数量。
+  // 返回 { ok, spawned, total } 供指令回显；不 ok 时附原因键。
+  initMap(mapName) {
+    if (!this.map) return { ok: false, err: 'Chat/Command/init/NoMap' };
+    const name = String(this.map.name || '').toLowerCase();
+    if (mapName && name && String(mapName).toLowerCase() !== name) {
+      return { ok: false, err: 'Chat/Command/init/BadMap', cur: this.map.name };
+    }
+    const { map: targets, total } = this.zoneTargets();
+    // 一次性统计各区现存数量，后面用计数器推进 —— 否则 550 只 × 41 区 × 每轮回查会非常慢
+    const counts = new Map();
+    for (const zone of targets.keys()) counts.set(zone, this._zoneCount(zone));
+    let alive = this.aliveMobs();
+    let spawned = 0, guard = 0;
+    // 按缺口从大到小补，避免小区域的最后几只被上限挡住
+    const order = [...targets.entries()].sort((a, b) => (b[1] - counts.get(b[0])) - (a[1] - counts.get(a[0])));
+    let progress = true;
+    const now = this.t || 0;
+    while (progress && guard++ < 400) {
+      progress = false;
+      for (const [zone, want] of order) {
+        if (alive >= GLOBAL_MAX_MOBS) break;
+        if (counts.get(zone) >= want) continue;
+        if (zone.nextTry && zone.nextTry > now) continue;    // 整块是墙的区：冷却中
+        if (this._spawnInZone(zone)) {
+          spawned++; alive++; progress = true;
+          counts.set(zone, counts.get(zone) + 1);
+        }
+      }
+    }
+    this.spawnT = 0;
+    this._inited = true;
+    console.info('[spawn] init ' + (this.map.name || 'map') + ': spawned ' + spawned +
+      ' (target ' + total + '), alive=' + alive);
+    return { ok: true, spawned, total };
+  }
+
+  // 维持：每秒若干次，挑"缺口最大"的区补 1 只（全图轮转，不偏袒玩家附近）
+  spawnOne() {
+    if (!this.map || !this.player) return false;
+    if (this.aliveMobs() >= GLOBAL_MAX_MOBS) return false;
+    const { map: targets } = this.zoneTargets();
+    // 单趟统计各区现存数量（避免 "每区都扫一遍 ents" 的 O(区×生物)）
+    const counts = new Map();
+    for (const m of this.ents) {
+      if (m.dead || !m.spawnZone) continue;
+      counts.set(m.spawnZone, (counts.get(m.spawnZone) || 0) + 1);
+    }
+    let bestZone = null, bestGap = 0;
+    for (const [zone, want] of targets) {
+      if (zone.nextTry && zone.nextTry > (this.t || 0)) continue;   // 冷却中的区（整块是墙）
+      const gap = want - (counts.get(zone) || 0);
+      if (gap > bestGap) { bestGap = gap; bestZone = zone; }
+    }
+    if (bestZone) return this._spawnInZone(bestZone);
+    // 所有区都达标：不再额外补（★ 不能"玩家附近兜底"，那就是偏袒玩家、会持续超量）。
+    // 只有地图本身没有生成区（如简易圆形地图）时，才在玩家周围保底生成。
+    if (targets.size > 0) return false;
+    const p = this.player;
+    const a = Math.random() * TAU;
+    const d = 420 + Math.random() * 480;
+    const x = p.x + Math.cos(a) * d, y = p.y + Math.sin(a) * d;
+    if (this.map.solidAtPoint && this.map.solidAtPoint(x, y)) return false;
+    const pick = this._pickSpawnType(null);
+    if (!pick || !pick.type) return false;
+    const m = new Mob(pick.type, x, y, 1, rollMobRarityByDifficulty(0));
+    m.x = x; m.y = y;
+    m.spawnZone = null;
+    m.netId = this.nextId++;
+    this.ents.push(m);
+    return true;
   }
 
   addEnt(kind, typeId, rarity, level, x, y) {
@@ -187,6 +453,10 @@ class LocalServer {
       else p.update(dt, { x: 0, y: 0 }, this.map, this.ents);
     } finally { PetalFX._suppress = _sup; }
 
+    // 1.2) 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
+    this.cpAcc = (this.cpAcc || 0) + dt;
+    if (this.cpAcc >= 0.2) { this.cpAcc = 0; this._checkCheckpoints(); }
+
     // 1.5) 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
     // 【必须把坐标拉回花朵中心】：实体死亡时就地冻结，若复活时沿用旧坐标，
     // 它会在"死掉的那个位置"（往往正贴着生物）凭空出现并立刻判定命中 ——
@@ -205,24 +475,39 @@ class LocalServer {
     }
 
     // 2) 生物：AI + 移动 + 退场回收
-    for (const m of this.ents) m.update(dt, p, this.map);
+    //    远处生物【休眠】：全图人口按生成表铺开，但只有近距离的才跑 AI/物理，
+    //    所以"全图 100+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
+    const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
+    for (const m of this.ents) {
+      if (!m.dead && dist2(m.x, m.y, p.x, p.y) > actR2) { m.sleeping = true; continue; }
+      m.sleeping = false;
+      m.update(dt, p, this.map);
+    }
     this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
+
+    // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
+    this.spawnT = (this.spawnT || 0) + dt;
+    if (this.spawnT >= SPAWN_INTERVAL) {
+      this.spawnT -= SPAWN_INTERVAL;
+      this.spawnOne();
+    }
 
     // 3) 玩家 vs 生物：按重量 + 动能推挤（physicsPush）。重的一方几乎不动、轻的被推飞；
     //    很快的玩家能推动"更大一点"重量的生物；小生物再也推不动大生物。
     if (!p.dead) {
       for (const m of this.ents) {
-        if (m.dead) continue;
+        if (m.dead || m.sleeping) continue;      // 休眠生物离玩家很远，不可能接触
         physicsPush(p, m);
       }
     }
 
     // 4) 生物之间：同样按重量 + 动能推挤（替代原来"各半"的等权推开）
+    //    只算"醒着"的：远处休眠的既不动也不该参与，顺带把 O(n²) 压到近处规模。
     const ms = this.ents;
     for (let i = 0; i < ms.length; i++) {
-      const a = ms[i]; if (a.dead) continue;
+      const a = ms[i]; if (a.dead || a.sleeping) continue;
       for (let j = i + 1; j < ms.length; j++) {
-        const b = ms[j]; if (b.dead) continue;
+        const b = ms[j]; if (b.dead || b.sleeping) continue;
         physicsPush(a, b);
       }
     }
@@ -375,14 +660,34 @@ class LocalServer {
     return null;
   }
 
-  // 服务端处理的指令：/summon、/kill、/kill-mob、/resphere。
+  // 服务端处理的指令：/init、/summon、/kill、/kill-mob、/resphere。
   // 其余指令均已在客户端 chat.js 本地实现；走到这里的一律按未知指令处理。
   _handleCommand(raw, channel) {
     const p = this.player;
     if (!p) return;
     const parts = String(raw).trim().split(/\s+/).filter(Boolean);
     const cmd = (parts[0] || '').toLowerCase();
-    if (cmd === '/summon') {
+    if (cmd === '/init') {
+      // /init <map>：按地图生成表把全图一次性铺满，之后由 tick 维持
+      const res = this.initMap(parts[1]);
+      if (!res.ok) {
+        if (res.cur) {
+          this._events.push({
+            kind: 'sys', channel,
+            text: I18N.tf('Chat/Command/init/BadMap', { 0: res.cur }, 'Invalid map. Current map: ' + res.cur)
+          });
+        } else {
+          this._events.push({ kind: 'sys', channel, text: res.err || 'Chat/CommandError/InternalError' });
+        }
+        return;
+      }
+      this._events.push({
+        kind: 'sys', channel,
+        text: I18N.tf('Chat/Command/init/Done',
+          { 0: (this.map && this.map.name) || 'map', 1: res.spawned, 2: res.total },
+          'Initialized ' + ((this.map && this.map.name) || 'map') + ': spawned ' + res.spawned + ' mob(s) (target ' + res.total + ').')
+      });
+    } else if (cmd === '/summon') {
       const mobId = parseInt(parts[1], 10);
       const rarity = parts[2];
       const count = parseInt(parts[3], 10);
@@ -484,6 +789,7 @@ class LocalServer {
         slot: b.slotIndex, sub: b.sub || 0, hp: b.hp, maxHp: b.maxHp,
         hurtT: b.hurtT || 0, dead: !!b.dead
       })) : [],
+      // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
       ents: this.ents.map((m) => ({
         id: m.netId, typeId: m.type.id, rarity: m.rarity, level: m.level,
         x: m.x, y: m.y, facing: m.facing, hp: m.hp, maxHp: m.maxHp, dead: m.dead,
