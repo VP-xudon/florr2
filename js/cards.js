@@ -16,7 +16,8 @@
 const CardRenderer = (function () {
   const _tinted = {};   // svgId -> dataURL（已收紧画布的卡面素材）
   const _raw = {};      // svgId -> Promise<string|null>（petal/ 素材原文）
-  const _winH = {};     // svgId -> number（统一缩放窗口高度，drawName 字高换算用）
+  const _winW = {};     // svgId -> number（卡面统一窗口宽：多体花瓣直径换算用）
+  const _entWinW = {};  // svgId -> number（实体统一窗口宽：多体花瓣直径换算用）
 
   // 统一缩放参数见下方 PETAL_ART_REF（Basic vb = 所有花瓣共用的窗口尺寸）。
   // 装填阴影角位移的「缓入」参数（drawReload 用）：
@@ -109,6 +110,87 @@ const CardRenderer = (function () {
     return [cx - w / 2, cy - h / 2, w, h];
   }
 
+  // ---- 多体花瓣（Light）----
+  // Light 由 N 个相同小圆组成，N 随稀有度增长（官方维基 + 本作实装口径）：
+  //   common 1 / unusual,rare 2 / epic,legendary 3 / mythic,ultra 5 / super,eternal 6
+  //   —— 顶层 6 个对应 Duplicator 天赋的效果（10 个 super Light 槽 = 60 个光点）；
+  //      按约定【不存在 4 个】这种排布。
+  // 所有排布都以「单个 Light 的直径 D」为单位，卡面与实体共用同一套布局：
+  //   1 -> 单个居中
+  //   2 -> 平行并排，中间留缝，不越出卡面
+  //   3 -> 三角形
+  //   5 -> 五边形紧贴，中心留空
+  //   6 -> 更紧贴、轻微交叠，逐个叠压（风车感）
+  function lightCount(rarity) {
+    switch (rarity) {
+      case 'unusual': case 'rare': return 2;
+      case 'epic': case 'legendary': return 3;
+      case 'mythic': case 'ultra': return 5;
+      case 'super': case 'eternal': return 6;
+      default: return 1;
+    }
+  }
+  function lightRing(n, r, k, start) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = start + i * Math.PI * 2 / n;
+      out.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, k });
+    }
+    return out;
+  }
+  // x/y 以 D 为单位，k = 该实例相对单体的缩放
+  const LIGHT_LAYOUTS = {
+    1: [{ x: 0, y: 0, k: 1 }],
+    2: [{ x: -0.62, y: 0, k: 0.9 }, { x: 0.62, y: 0, k: 0.9 }],
+    3: [
+      { x: 0, y: -0.62, k: 0.85 },
+      { x: -0.537, y: 0.31, k: 0.85 },
+      { x: 0.537, y: 0.31, k: 0.85 }
+    ],
+    // 5 与 6【圆心距相同】（同一个 r），单体大小也相同 —— 差异只来自数量本身：
+    // 5 个相邻间距 0.80D -> 轻微重合；6 个间距 0.68D -> 重合得更多一些（风车叠压）
+    5: lightRing(5, 0.68, 0.88, -Math.PI / 2),
+    6: lightRing(6, 0.68, 0.88, -Math.PI / 2)
+  };
+
+  // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
+  // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
+  function lightSubCount(type, rarity) {
+    return (type && type.slug === 'light') ? lightCount(rarity) : 1;
+  }
+
+  // 该花瓣的多体布局（卡面用）；非多体花瓣返回 null
+  function multiLayout(svgId, rarity) {
+    const t = (typeof getPetal === 'function') ? getPetal(svgId) : null;
+    if (!t || t.slug !== 'light') return null;
+    return LIGHT_LAYOUTS[lightCount(rarity)] || null;
+  }
+
+  // 单个 Light 的直径占素材绘制矩形【宽】的比例：用实测 bbox / 统一窗口宽反推，
+  // 不写死数值。forEntity 区分卡面窗口（Basic vb 宽）与实体窗口（Basic 实测 bbox 宽）。
+  function lightDRatio(svgId, forEntity) {
+    const bb = _bb[svgId];
+    const winW = forEntity ? _entWinW[svgId] : _winW[svgId];
+    if (bb && winW) return bb[2] / winW;
+    // 兜底（测量/窗口尚未就绪）：Light 实测 ≈24.28，卡面窗口 68.26、实体窗口 32.86
+    return forEntity ? 0.7389 : 0.3558;
+  }
+
+  // 绘制多体花瓣：cv = 单体素材（canvas/Image），boxW×boxH = 单体素材该画多大，
+  // D = 单个 Light 的像素直径，layout = multiLayout() 的结果。
+  function drawMulti(ctx, cv, boxW, boxH, D, cx, cy, rot, scale, alpha, layout) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (rot) ctx.rotate(rot);
+    if (scale && scale !== 1) ctx.scale(scale, scale);
+    if (alpha != null) ctx.globalAlpha = alpha;
+    for (const s of layout) {
+      const w = boxW * s.k, h = boxH * s.k;
+      ctx.drawImage(cv, s.x * D - w / 2, s.y * D - h / 2, w, h);
+    }
+    ctx.restore();
+  }
+
   // 卡面布局参数（由 assets/petal-metrics.js 离线提供，运行时零测量）：
   //   vb = 卡面素材的 viewBox（原"图形+名称"整体包围盒按 1/ART_SCALE 放大）——
   //        仅 t（字母位置）用于名称字高换算；【窗口锚点不用它】（其中心被字母区拉低，
@@ -142,7 +224,8 @@ const CardRenderer = (function () {
         }
       }
       if (vb) {
-        _winH[svgId] = vb[3];       // 记下统一窗口高：drawName 的字高换算除数
+        // 记下统一窗口宽：多体花瓣（Light）的直径换算基准
+        _winW[svgId] = vb[2];
         out = /viewBox="[^"]*"/.test(out)
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb.join(' ') + '"')
           : out.replace(/<svg\b/, '<svg viewBox="' + vb.join(' ') + '"');
@@ -172,6 +255,7 @@ const CardRenderer = (function () {
           if (b) { PETAL_ENT_REF = [b[2], b[3]]; rw = b[2]; rh = b[3]; }
         }
         const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
+        _entWinW[svgId] = v[2];      // 实体窗口宽：多体花瓣直径换算基准
         return /viewBox="[^"]*"/.test(txt)
           ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
           : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
@@ -284,27 +368,6 @@ const CardRenderer = (function () {
     el.style.webkitTextStrokeWidth = (fs * 0.115).toFixed(2) + 'px';
   }
 
-  // 名称字号：以「原素材字母的字高」为基准反推，而不是按 measureText 的墨迹包围盒反推。
-  //   原文字母高度 ≈ 0.72 × 字号（Ubuntu 的 cap height 比例）=> 字号 = 字高 / 0.72。
-  // 这样英文和中文拿到的是【同一个字号】—— 中文全角字形笔画更满，同字号下看起来自然比英文
-  // 大一点，绝不会出现"切到中文突然变得非常小"。
-  // （旧实现按 actualBoundingBoxAscent+Descent 反推：中文字形墨迹占比约 0.86、英文约 0.75，
-  //   同样字高下中文字号会被压小 15%+；而遇到不返回 actualBoundingBox* 的浏览器/回退字体时
-  //   h=0 直接 break，字号退化成"字高"本身（约小 28%），中文就显得特别小。）
-  // 之后再按可用宽度收缩一两次，保证长译名也不溢出卡面。
-  function fitNameFont(ctx, text, targetH, maxW) {
-    let fs = targetH / 0.72;
-    if (maxW > 0 && fs > 4) {
-      for (let i = 0; i < 3; i++) {
-        ctx.font = `800 ${fs}px ${FONT}`;
-        const w = ctx.measureText(text).width;
-        if (!(w > maxW)) break;
-        fs *= Math.max(0.55, maxW / w);
-      }
-    }
-    return fs;
-  }
-
   // 装填（reload）阴影：画在【内板之上、花瓣图形与名称之下】。
   // 因此阴影只压暗卡牌中部那一块底板，花瓣本体和名字完全不被遮盖（用户要求）。
   // 形状 = 一块"无阴影扇形"在长大，扇形之外是阴影；扇形两条边界（慢/快）同步加速，
@@ -359,28 +422,16 @@ const CardRenderer = (function () {
   // 卡牌名称：白字 + 黑描边（先描边后填充，等价于 SVG 的 paint-order:stroke fill），
   // Ubuntu 800。文本取自 i18N（Petals/<slug>/Name），切换译文包时卡面文字随之改变。
   // 布局（用户要求）：文字【强制在底部】，且图层在图形之上（drawCard 里先画图形、
-  // 再调本函数 -> 天然上层）；x 居中，【基线】贴 13% 底边距（基线对齐而非底部对齐，
-  // 见下方注释）；图形已按实测中心居中，此距为通用值。
-  // 字号：按预置 metrics 的字母高度 ×（实际绘制高度 / 统一窗口高）换算 —— 所有花瓣
-  // 同一把尺子；无 metrics 退回 0.2×内板高；再按 92% 宽度收缩防溢出。
-  // (p, iw, ih) = 内板矩形；dh = 素材实际绘制高度（用于单位换算）。
-  function drawName(ctx, st, p, iw, ih, dh) {
+  // 再调本函数 -> 天然上层）；x 居中，【基线】贴 13% 底边距（基线对齐而非底部对齐）。
+  // 字号：【全花瓣严格统一的固定值】—— 不读 metrics、不按宽度收缩、不做任何自适应
+  // 计算。曾按各花瓣的字母高度换算，导致 Light（t 高 19.3）比 Basic（15.6）大半圈。
+  const NAME_FS_RATIO = 0.27;        // 字号 = 内板高 × 0.27（Basic 的原生观感）
+  const NAME_BASE_RATIO = 0.13;      // 基线 = 内板底往上 13%
+  // (p, iw, ih) = 内板矩形。
+  function drawName(ctx, st, p, iw, ih) {
     const name = st.name;
     if (!name) return;
-    let targetH = ih * 0.2;
-    const mt = st.metrics;
-    // 除数用【统一窗口高】（asset() 时记下），不是各花瓣自己的 vb[3] —— 否则窗口统一后
-    // 字高换算仍按旧自适应窗口算，Stinger 的字会偏大（其 vb[3]=73.26 ≠ 窗口 79.38）。
-    const winH = _winH[st.svg] || PETAL_CARD_REF[1];
-    if (mt && mt.t && winH > 0) {
-      targetH = (mt.t[2] - mt.t[1]) * (dh / winH);
-    }
-    // 字号按 (名称, 目标字高) 缓存：装填期间每帧都会重绘，不能每次都跑 measureText 迭代
-    if (st._fsName !== name || st._fsH !== targetH) {
-      st._fs = fitNameFont(ctx, name, targetH, iw * 0.92);
-      st._fsName = name; st._fsH = targetH;
-    }
-    const fs = st._fs;
+    const fs = ih * NAME_FS_RATIO;
     if (!(fs > 2)) return;
     ctx.save();
     ctx.font = `800 ${fs}px ${FONT}`;
@@ -389,7 +440,7 @@ const CardRenderer = (function () {
     // 基线固定在底部边距处（【不】按字形 descender 补偿）：带下伸部的名字（如
     // Stinger 的 g）若按"底部对齐"会把基线抬高，与其他卡的文字不平行。
     // 统一基线对齐后所有卡面文字同线，下伸部自然伸进底边距内。
-    const baseY = p + ih - ih * 0.13;
+    const baseY = p + ih - ih * NAME_BASE_RATIO;
     ctx.lineWidth = fs * 0.115;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
@@ -431,10 +482,17 @@ const CardRenderer = (function () {
         ox = p + (iw - dw) / 2; oy = p + (ih - dh) / 2;
         // 花瓣本体略微上移（按内板高度取比例），给底部名称文字让位
         oy -= ih * ART_LIFT;
-        ctx.drawImage(im, ox, oy, dw, dh);
+        // 多体花瓣（Light）：按稀有度画 1~5 个相同小圆，布局见 LIGHT_LAYOUTS
+        const lay = multiLayout(st.svg, st.rarity);
+        if (lay) {
+          const D = lightDRatio(st.svg, false) * dw;    // 单个 Light 的像素直径
+          drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay);
+        } else {
+          ctx.drawImage(im, ox, oy, dw, dh);
+        }
       }
-      // 名称：强制底部，画在图形【上层】（本调用在 drawImage 之后）
-      drawName(ctx, st, p, iw, ih, dh);
+      // 名称：强制底部、固定字号，画在图形【上层】（本调用在 drawImage 之后）
+      drawName(ctx, st, p, iw, ih);
     }
     // 数量角标由 DOM（.card-count）负责，这里只同步文本与字号
     syncCount(cv, st);
@@ -485,6 +543,45 @@ const CardRenderer = (function () {
     return cv;
   }
 
+  // 离屏渲染一张卡面到给定 canvas（不插入 DOM、不依赖布局）。
+  // 悬浮框里的"掉落物卡面"用它 —— 与背包/卡槽里的卡【完全同一套绘制逻辑】：
+  // 同样的外框/内板比例、同样的名称文字（Ubuntu 800 + 黑描边）、同样的留白，
+  // 只是整张卡等比缩放到目标像素尺寸。
+  //   opts = { rarity, svg, px(像素边长), pad, radius }
+  function renderCardTo(cv, opts) {
+    const o = opts || {};
+    const px = Math.max(8, Math.round(o.px || 128));
+    if (cv.width !== px || cv.height !== px) { cv.width = px; cv.height = px; }
+    const st = cv._card || (cv._card = {});
+    st.rarity = o.rarity || 'common';
+    st.svg = (o.svg != null) ? o.svg : null;
+    st.count = null;                       // 掉落物卡不显示数量角标
+    st.pad = o.pad; st.radius = o.radius;
+    st.name = null; st.metrics = null; st.img = null;
+    if (o.name) st.name = String(o.name);       // 外部指定名称（未实装花瓣也能显示文字）
+    if (st.svg != null) {
+      const t = (typeof getPetal === 'function') ? getPetal(st.svg) : null;
+      if (!st.name && t && t.name) st.name = t.name;
+      const mt = metrics(st.svg);
+      if (mt) st.metrics = mt;
+      const u = _tinted[st.svg];
+      if (u != null) {
+        const im = imgFor(cv, u);
+        if (im.complete && im.naturalWidth > 0) st.img = im;
+        else im.addEventListener('load', () => { st.img = im; drawCard(cv, st); });
+      } else {
+        asset(st.svg).then((url) => {
+          if (!url) return;
+          const im = imgFor(cv, url);
+          if (im.complete && im.naturalWidth > 0) { st.img = im; drawCard(cv, st); }
+          else im.addEventListener('load', () => { st.img = im; drawCard(cv, st); });
+        });
+      }
+    }
+    drawCard(cv, st);                      // 先画纯色卡面（素材就绪后自动补画）
+    return cv;
+  }
+
   // 重绘所有已生成的卡（窗口尺寸/dpr 变化后调用）
   function repaintAll(root) {
     const list = (root || document).querySelectorAll('canvas.card');
@@ -497,5 +594,9 @@ const CardRenderer = (function () {
     document.fonts.load('800 16px Ubuntu').then(() => repaintAll()).catch(() => {});
   }
 
-  return { createCard, darken, rarityColor, artCanvas, repaintAll, paintCard: paint, FONT };
+  return {
+    createCard, darken, rarityColor, artCanvas, renderCardTo, repaintAll, paintCard: paint, FONT,
+    // 多体花瓣（Light）：卡面布局 / 直径换算 / 通用绘制 / 实体光点数
+    multiLayout, lightDRatio, drawMulti, lightSubCount
+  };
 })();

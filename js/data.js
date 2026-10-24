@@ -32,9 +32,10 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 // ---------------- 可用花瓣白名单 ----------------
 // 只有列在这里的花瓣会真正进入游戏（按 slug，slug = 英文名小写、空格转下划线）。
 // 其余已识别的花瓣视为「冗余素材」——文件保留但不加载，日后直接往此表加 slug 即可启用。
-//   basic = id 1（Basic / 基本）
-//   rose  = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
-const ENABLED_PETAL_SLUGS = new Set(['basic', 'rose', 'stinger']);
+//   basic  = id 1（Basic / 基本）
+//   light  = id 2（Light / 轻：外观同 Basic 但更小，按稀有度由 1 个圆组成 1~5 个）
+//   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
+const ENABLED_PETAL_SLUGS = new Set(['basic', 'light', 'rose', 'stinger']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -146,8 +147,11 @@ function buildMobTypes() {
         rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0, armor: v.armor, hostility: MOB_HOSTILITY[v.type] };
       }
     }
+    // slug = 官方英文名的小写下划线形式：i18n 的键（Mobs/<slug>/Name、Mobs/<slug>/Description）
+    // 与显示语言无关，必须用【原始英文名】算，不能拿翻译后的 name 反推。
+    const slug = (m.name || '').toLowerCase().replace(/ /g, '_');
     const t = {
-      id, name: I18N.t('Mobs/' + ((m.name || '').toLowerCase().replace(/ /g, '_')) + '/Name', m.name), zh: m.zh || '', svg: id,
+      id, slug, name: I18N.t('Mobs/' + slug + '/Name', m.name), zh: m.zh || '', svg: id,
       hp: m.hp, dmg: m.dmg, speed: m.speed, size: m.size, tier: m.tier,
       color: m.color || '#888', boss: !!m.boss,
       type: m.type || '', biome: m.biome || '', desc: m.desc || '',
@@ -170,6 +174,105 @@ const PETAL_TYPES = _petals.list;
 const MOB_TYPES = _mobs.list;
 const PETAL_BY_ID = _petals.byId;
 const MOB_BY_ID = _mobs.byId;
+
+// ---------------- 掉落物表 ----------------
+// 官方维基口径：【掉落稀有度分布只取决于生物的稀有度】，所有生物共用同一张表。
+//   key   = 生物稀有度
+//   value = [[掉落花瓣的稀有度, 概率(0~1)], ...]；概率之和 < 1 的部分表示"本次不掉落"
+const MOB_DROP_TABLE = {
+  common:    [['common', 0.598], ['unusual', 0.164]],
+  unusual:   [['common', 0.485], ['unusual', 0.512]],
+  rare:      [['common', 0.001], ['unusual', 0.834], ['rare', 0.165]],
+  epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+  legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+  mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+  ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+  super:     [['mythic', 0.357], ['ultra', 0.643]],
+  eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+  unique:    [['mythic', 0.357], ['ultra', 0.643]]
+};
+
+// 每种生物掉哪些花瓣（顺序 = 悬浮框里的展示顺序）。
+// Mana Orb 是日后魔法变种的专属掉落：**只登记在数据表里**，
+// 既不出现在悬浮框、也不参与实际掷骰掉落（见 DROP_HIDDEN_SLUGS）。
+const MOB_DROP_ITEMS = {
+  3: ['light', 'rose', 'mana_orb']       // Ladybug / 瓢虫
+};
+// 仅入库、不展示/不掉落的花瓣 slug。
+const DROP_HIDDEN_SLUGS = new Set(['mana_orb']);
+
+// 展示用花瓣素材索引：即使花瓣未实装（如 Mana Orb），悬浮框也要能画出它的卡面。
+// 直接扫 registry 建立 slug -> { svg, name }，与 ENABLED_PETAL_SLUGS 无关。
+const PETAL_ART_BY_SLUG = {};
+(function buildPetalArtIndex() {
+  const reg = (window.REGISTRY && window.REGISTRY.petals) ? window.REGISTRY.petals : [];
+  for (const p of reg) {
+    if (p.fanmade || p.id >= FANMADE_PETAL_FROM) continue;
+    const nm = p.name ? String(p.name).trim() : (p.zh || '');
+    if (!nm) continue;
+    const slug = (p.name ? String(p.name).trim() : nm).toLowerCase().replace(/ /g, '_');
+    if (PETAL_ART_BY_SLUG[slug]) continue;
+    PETAL_ART_BY_SLUG[slug] = { slug, svg: p.id, name: I18N.t('Petals/' + slug + '/Name', nm) };
+  }
+})();
+// 取某 slug 的展示素材；索引里没有时【现场回查 registry 并补进索引】——
+// 这样即使索引构建时 registry 尚未就绪（或漏项），悬浮框的掉落物也照样能显示。
+function petalArtOf(slug) {
+  const hit = PETAL_ART_BY_SLUG[slug];
+  if (hit) return hit;
+  const reg = (window.REGISTRY && window.REGISTRY.petals) ? window.REGISTRY.petals : [];
+  for (const p of reg) {
+    const nm = p.name ? String(p.name).trim() : (p.zh || '');
+    if (!nm) continue;
+    if (String(nm).toLowerCase().replace(/ /g, '_') !== slug) continue;
+    PETAL_ART_BY_SLUG[slug] = { slug, svg: p.id, name: I18N.t('Petals/' + slug + '/Name', nm) };
+    return PETAL_ART_BY_SLUG[slug];
+  }
+  return null;
+}
+
+// 某生物在某稀有度下的掉落物，按【花瓣种类】分组（悬浮框里一种一行）：
+//   [{ slug, name, svg, items: [{ rarity, chance }] }]
+function mobDropRows(mobId, rarity) {
+  // 键容错：registry 的 id 可能是数字也可能是字符串
+  const list = MOB_DROP_ITEMS[mobId] || MOB_DROP_ITEMS[String(mobId)];
+  const dist = MOB_DROP_TABLE[rarity];
+  if (!list || !list.length || !dist || !dist.length) return [];
+  const out = [];
+  for (const slug of list) {
+    if (DROP_HIDDEN_SLUGS.has(slug)) continue;   // Mana Orb 等：只入库，不在悬浮框显示
+    // 素材取不到也要出行（卡面缺失时只是没有贴图，概率照常显示）
+    const art = petalArtOf(slug) || { slug, svg: null, name: slug };
+    out.push({
+      slug, name: art.name, svg: art.svg,
+      items: dist.map(([r, c]) => ({ rarity: r, chance: c }))
+    });
+  }
+  return out;
+}
+
+// 掷骰掉落（生物死亡时调用）：**每种掉落物各自掷一次**——
+// 按该生物【当前稀有度】那一行的分布决定这一件掉落的稀有度，落在"不掉落"区间就没有这一件。
+// 返回 [{ slug, svg, name, rarity }, ...]（可能为空 = 这次什么都不掉）。
+function rollMobDrops(mobId, rarity) {
+  const list = MOB_DROP_ITEMS[mobId] || MOB_DROP_ITEMS[String(mobId)];
+  const dist = MOB_DROP_TABLE[rarity];
+  if (!list || !list.length || !dist || !dist.length) return [];
+  const out = [];
+  for (const slug of list) {
+    if (DROP_HIDDEN_SLUGS.has(slug)) continue;     // 只入库、不实际掉落
+    let r = Math.random();
+    let hit = null;
+    for (const [pr, ch] of dist) {
+      if (r < ch) { hit = pr; break; }
+      r -= ch;
+    }
+    if (!hit) continue;                            // 落在剩余区间：本次这件不掉
+    const art = petalArtOf(slug);
+    out.push({ slug, svg: art ? art.svg : null, name: art ? art.name : slug, rarity: hit });
+  }
+  return out;
+}
 
 function getPetal(id) { return PETAL_BY_ID[id] || null; }
 function getMob(id) { return MOB_BY_ID[id] || null; }

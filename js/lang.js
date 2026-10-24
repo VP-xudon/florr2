@@ -6,7 +6,8 @@
 //        {#A#B}            -> t(A)，缺失则 t(B)
 //        {Key/with/slash}  -> t(Key)（仅含 '/'，避开 {0} 这类占位符）
 //        <c val="...">..</c> -> 纯文本显示时去标签
-//   - 缺失时回退英文(en_US)，再缺失回退 fallback 参数或 key 本身（保证永不崩溃/空白）。
+//   - 缺失时回退英文(en_US)，再缺失显示 <键名>（不偏袒任何语言：
+//     绝不静默显示英文 fallback —— 缺失的键必须在界面上显眼可见，便于补充译文）。
 //   - 仅内置英文(en_US)；官方多语言包可在 assets/i18n/<code>/<code>.js 里调用
 //     I18N.addPack('<code>', {...}) 扩展，再 I18N.setLang('<code>') 切换。
 'use strict';
@@ -62,7 +63,9 @@ window.I18N = (function () {
 
   function t(key, fallback) {
     const raw = lookup(key);
-    const s = raw != null ? raw : (fallback != null ? fallback : key);
+    // 不偏袒任何语言：查不到键时显示 <键名>，而非回退 fallback（那会隐藏缺失问题）。
+    // 让缺失的键在界面上明显可见，开发者/用户能立刻发现并补充译文。
+    const s = raw != null ? raw : '<' + key + '>';
     return resolveRefs(s);
   }
   // 带参数：先替换 {0},{1}... 再解析引用
@@ -71,8 +74,14 @@ window.I18N = (function () {
     if (params) for (const k in params) s = String(s).split('{' + k + '}').join(params[k]);
     return s;
   }
+  // 可选文案：查不到就用默认值（不显示 <键名>）。用于"本来就可能没有"的内容
+  // （生物简介、额外说明等）—— 这类缺失不是错误，不该在界面上报警。
+  function opt(key, dflt) {
+    const raw = lookup(key);
+    return raw != null ? resolveRefs(raw) : (dflt == null ? '' : dflt);
+  }
 
-  return { packs, addPack, setLang, hasLang, lang, t, tf };
+  return { packs, addPack, setLang, hasLang, lang, t, tf, opt };
 })();
 
 // 注册官方英文包（由 assets/i18n/en_US/en_US.js 提供 window.I18N_EN）并设为当前语言

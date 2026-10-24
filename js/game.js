@@ -17,11 +17,13 @@ const KEY_ACTION = {
   Space: 'mode1',                        // reach
   ShiftLeft: 'mode2', ShiftRight: 'mode2' // detect
 };
-// 兜底：个别环境 e.code 缺失/异常时，用 e.key 再判一次（左右 Shift、空格、方向键、WASD）
-const KEY_ALIAS = {
-  w: 'up', arrowup: 'up', s: 'down', arrowdown: 'down',
-  a: 'left', arrowleft: 'left', d: 'right', arrowright: 'right',
-  ' ': 'mode1', shift: 'mode2'
+// 兜底：个别环境 e.code 缺失时，用 e.key 反查【物理键位】。
+// 注意这里必须映射成 e.code 的形式（KeyW / ArrowRight …），而不是直接的逻辑动作：
+// 方向由"按住的物理键位集合"推导，任何中间映射层都可能丢键（历史上右方向键就在这层丢失）。
+const KEY_CODE_FALLBACK = {
+  w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD',
+  arrowup: 'ArrowUp', arrowdown: 'ArrowDown', arrowleft: 'ArrowLeft', arrowright: 'ArrowRight',
+  ' ': 'Space', shift: 'ShiftLeft'
 };
 
 // 背包堆叠：同类（类型+稀有度）合并为 { type, rarity, count }；种类槽上限 max
@@ -54,9 +56,11 @@ class Game {
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
     this.mobViews = new Map();   // netId -> 视图 Mob（快照差分创建/销毁用）
     this.cards = [];
+    this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
+    this.dropFx = [];        // 掉落物粒子（正方形小块）
     this.particles = [];
     this.dmgTexts = [];
-    this.dex = {};   // 图鉴：mobId -> Set(level)
+    this.dex = {};   // 图鉴：mobId -> Set(已击败的稀有度)
 
     this.gardenData = window.GARDEN_DATA || null;
     this.map = (this.gardenData && this.gardenData.layers.length)
@@ -69,29 +73,41 @@ class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
-    // 输入：按「物理键位」(e.code) 注册，与输入法/键盘布局无关。
-    // 每个物理键占一个独立标记，因此方向键之间、以及方向键与空格/Shift 之间可以任意组合，
-    // 不会出现"按住 Shift 后右方向键和其他方向键组合失效"。
+    // 输入：把"当前按住的物理键位"记进 _down 集合，方向直接由集合推导（见 _readDir）。
+    // 用集合而不是"逻辑动作布尔值"：任意多个方向键可以同时按住且互不覆盖，
+    // 与 Shift/空格等修饰键组合也不会互相干扰（右方向键曾经在别名映射层被吃掉）。
+    this._down = new Set();
+    const codeOf = (e) => e.code || KEY_CODE_FALLBACK[(e.key || '').toLowerCase()] || '';
     window.addEventListener('keydown', (e) => {
-      const act = KEY_ACTION[e.code] || KEY_ALIAS[e.key.toLowerCase()];
+      const code = codeOf(e);
+      if (!code) return;
+      const act = KEY_ACTION[code];
       if (act) {
-        this.keys[act] = true;
-        if (e.code === 'Space' || e.key === ' ') e.preventDefault();   // 只拦空格（整页滚动）
+        if (act === 'up' || act === 'down' || act === 'left' || act === 'right') {
+          this._down.add(code);
+          e.preventDefault();          // 方向键默认会滚动/移动焦点，一律拦掉
+        } else {
+          this.keys[act] = true;       // mode1(reach) / mode2(detect)
+        }
       }
-      const k = e.key.toLowerCase();
-      if (k === 'b' || k === 'z' || k === 'tab') { e.preventDefault(); this.toggleBag(); }
-      if (k === 'v') { e.preventDefault(); this.toggleDex(); }
+      if (e.repeat) return;            // 长按不重复触发开关类热键
+      const k = (e.key || '').toLowerCase();
+      // 背包热键：Z（B / Tab 已移除）；生物图鉴没有热键，只能点左下角按钮。
+      if (k === 'z') { e.preventDefault(); this.toggleBag(); }
       if (k === 'r') { e.preventDefault(); this.swapSlotRows(); }
       if (k === 'm') { e.preventDefault(); if (UI.cycleMinimapMode) UI.cycleMinimapMode(); }
       const d = '1234567890'.indexOf(e.key);   // 1-9 -> 第1~9槽，0 -> 第10槽
       if (d >= 0) { e.preventDefault(); this.swapSlotColumn(d); }
     });
     window.addEventListener('keyup', (e) => {
-      const act = KEY_ACTION[e.code] || KEY_ALIAS[e.key.toLowerCase()];
-      if (act) this.keys[act] = false;
+      const code = codeOf(e);
+      if (!code) return;
+      this._down.delete(code);
+      const act = KEY_ACTION[code];
+      if (act === 'mode1' || act === 'mode2') this.keys[act] = false;
     });
     // 失焦时清空按键：避免切窗后"松手了仍在移动 / 模式卡住"
-    window.addEventListener('blur', () => { this.keys = {}; });
+    window.addEventListener('blur', () => { this._down.clear(); this.keys = {}; });
 
     // —— 鼠标：① 左右键切换模式（左=reach / 右=detect，长按保持）；② ?movemode=mouse 鼠标移动 ——
     this.moveMode = (window.__queryParams && window.__queryParams.movemode === 'mouse') ? 'mouse' : 'keyboard';
@@ -265,8 +281,10 @@ class Game {
     // （客户端不跑战斗，必须靠这个才能看到花瓣掉血/红闪/碎掉重装）
     // 这里立即应用一次，不用等下一帧的 _syncPetals —— 否则掉血/碎裂会慢一帧才看到。
     if (snap.petals) {
+      // 一张卡可能对应多个独立实体（Light 的每个光点）：用 "槽位|子序号" 做键，
+      // 否则同槽只留最后一条，其余实体的血量/碎裂状态全部丢失。
       const map = {};
-      for (const q of snap.petals) map[q.slot] = q;
+      for (const q of snap.petals) map[q.slot + '|' + (q.sub || 0)] = q;
       p.netPetals = map;
       p._applyNetPetalStates();
     }
@@ -316,7 +334,9 @@ class Game {
     if (ev.kind === 'dmg') {
       this.spawnText(ev.x + rand(-ev.r * 0.2, ev.r * 0.2), ev.y, ev.text, ev.color);
     } else if (ev.kind === 'kill') {
-      this.recordDefeat(ev.mobId, ev.level);
+      this.recordDefeat(ev.mobId, ev.rarity);
+      // 掉落：在生物死亡位置按【该生物稀有度】的掉落表逐种掷骰（可能与不掉落）
+      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y);
       this.updateHUD();
     } else if (ev.kind === 'hurt') {
       // 玩家份额的反弹：以【速度冲量】施加到预测实体上（随后指数衰减 -> 平滑滑出去），
@@ -465,7 +485,28 @@ class Game {
     }
     this.cards = this.cards.filter(c => !c.done);
 
-    // 粒子 / 伤害数字
+    // 掉落物：拾取范围 = 2 × 玩家直径；进入范围后缩小并飞向玩家中心，飞完才真正入包。
+    // Ultra 及以上在停留期间持续冒正方形粒子（Mythic 及以下只在落地时炸一次）。
+    const pickR = (p.r * 2) * DROP_PICK_R;
+    for (const d of this.drops) {
+      d.update(dt, p);
+      if (!d.fly && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
+      if (d.done) {
+        const type = (typeof getPetal === 'function') ? getPetal(d.svg) : null;
+        if (type) for (let i = 0; i < d.count; i++) this.pickupCard(type, d.rarity);
+        this.syncInventory();
+        continue;
+      }
+      if (!d.fly && DROP_FX_CONT.has(d.rarity)) {
+        d.sparkT -= dt;
+        if (d.sparkT <= 0) { d.sparkT = 0.07; this.dropSpark(d.x, d.y, d.rarity, 'rise', d.size * 0.5); }
+      }
+    }
+    this.drops = this.drops.filter((d) => !d.done);
+
+    // 掉落物粒子 / 普通粒子 / 伤害数字
+    for (const s of this.dropFx) s.update(dt);
+    this.dropFx = this.dropFx.filter((s) => s.life > 0);
     for (const pt of this.particles) pt.update(dt);
     this.particles = this.particles.filter(pt => pt.life > 0);
     for (const d of this.dmgTexts) d.update(dt);
@@ -499,18 +540,20 @@ class Game {
 
   // 昆虫死亡落地：记入图鉴（退场放大渐隐动画由 Mob.draw 负责）
   _onMobKilled(m) {
-    this.recordDefeat(m.type.id != null ? m.type.id : m.name, m.level);
+    this.recordDefeat(m.type.id != null ? m.type.id : m.name, m.rarity);
     this.updateHUD();
   }
 
   _readDir() {
     if (this.moveMode === 'mouse') return this._readMouseDir();
+    // 方向 = 当前按住的所有方向键的组合（WASD 与方向键等价、可混按）。
+    // 逐个物理键独立判断：多个键同时按住就是对角移动，绝不互相覆盖。
+    const s = this._down || (this._down = new Set());
     let dx = 0, dy = 0;
-    const k = this.keys;
-    if (k['up']) dy -= 1;
-    if (k['down']) dy += 1;
-    if (k['left']) dx -= 1;
-    if (k['right']) dx += 1;
+    if (s.has('ArrowUp') || s.has('KeyW')) dy -= 1;
+    if (s.has('ArrowDown') || s.has('KeyS')) dy += 1;
+    if (s.has('ArrowLeft') || s.has('KeyA')) dx -= 1;
+    if (s.has('ArrowRight') || s.has('KeyD')) dx += 1;
     return { x: dx, y: dy };
   }
 
@@ -543,6 +586,48 @@ class Game {
     for (let i = 0; i < n; i++) this.particles.push(new Particle(x, y, color));
   }
 
+  // ---------- 地面掉落物 ----------
+  // 生物死亡：按 (生物 id, 稀有度) 的掉落表逐种掷骰 -> 在死亡位置生成掉落卡。
+  //   · 1 件：正中央；2 件：水平并排；3~6 件：环形（比 Light 排布更松散）
+  //   · 与附近已有的【完全相同卡牌】堆叠到同一张卡上（数量角标 +1）
+  //   · 每张新卡落地时炸一次正方形粒子；Ultra+ 之后持续冒（见 update）
+  spawnMobDrops(mobId, rarity, x, y) {
+    if (typeof rollMobDrops !== 'function') return;
+    if (x == null || y == null) return;
+    const got = rollMobDrops(mobId, rarity) || [];
+    if (!got.length) return;
+    const fresh = [];
+    for (const it of got) {
+      let merged = false;
+      for (const d of this.drops) {
+        if (d.fly || d.done) continue;
+        if (d.slug === it.slug && d.rarity === it.rarity && dist(d.x, d.y, x, y) < 120) {
+          d.count++;
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) fresh.push(it);
+    }
+    const n = fresh.length;
+    const gap = DROP_SIZE * 2.0;              // 卡与卡之间的间距（多张时进一步拉开，避免视觉粘连）
+    for (let i = 0; i < n; i++) {
+      const off = dropLayoutOffset(i, n, gap);
+      const d = new DropCard(fresh[i].slug, fresh[i].svg, fresh[i].rarity, fresh[i].name,
+        x + off.x, y + off.y);
+      this.drops.push(d);
+      this.dropSpark(d.x, d.y, d.rarity, 'burst', d.size * 0.5);   // 落地烟花（从卡面四周冒出）
+    }
+  }
+
+  // 生成掉落物粒子：burst = 一次炸开若干颗；rise = 单颗上冒（持续档每次调用一颗）
+  // half = 卡片半边长：粒子从卡面【四周边缘】冒出（不是从中心点冒出）
+  dropSpark(x, y, rarity, mode, half) {
+    const col = (typeof RARITIES !== 'undefined' && RARITIES[rarity]) ? RARITIES[rarity].color : '#fff';
+    const n = mode === 'burst' ? 14 : 1;
+    for (let i = 0; i < n; i++) this.dropFx.push(new DropSpark(x, y, col, mode, half));
+  }
+
   // ---------- 渲染 ----------
   render() {
     const ctx = this.ctx;
@@ -566,8 +651,11 @@ class Game {
       catch (e) { console.error('[drawGardenTiles]', e); }
     }
 
-    // 先画卡片（地面）
+    // 地面层：世界卡片 -> 掉落物粒子 -> 生物掉落物
+    // （粒子在掉落卡【之下】，掉落卡整体又在实体与玩家尸体之下）
     for (const c of this.cards) c.draw(ctx);
+    for (const s of this.dropFx) s.draw(ctx);
+    for (const d of this.drops) { try { d.draw(ctx); } catch (e) { console.error('[draw drop]', e); } }
     // 层级定数：尸体固定在最底层，生物彼此按 y 排序，活玩家固定在最上层（不再忽上忽下）
     const me = this.player;
     if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
@@ -605,11 +693,17 @@ class Game {
   }
 
   // ---------- 图鉴 ----------
-  recordDefeat(mobId, level) {
+  // 记录"打过的生物"：dex[生物 id] = 已击败的【稀有度】集合。
+  // 图鉴按"一行一种生物、9 格对应 9 个稀有度"展示，所以这里必须按稀有度记，
+  // 而不是按等级（等级只影响强度，不决定格子位置）。
+  recordDefeat(mobId, rarity) {
+    if (!rarity) return;
     if (!this.dex[mobId]) this.dex[mobId] = new Set();
-    this.dex[mobId].add(level);
+    this.dex[mobId].add(rarity);
+    // 图鉴开着时即时刷新（关着则下次打开时自然重新构建）
+    if (typeof UI !== 'undefined' && UI.isDexVisible && UI.isDexVisible()) UI.renderDex(this);
   }
-  isDefeated(mobId, level) { return !!(this.dex[mobId] && this.dex[mobId].has(level)); }
+  isDefeated(mobId, rarity) { return !!(this.dex[mobId] && this.dex[mobId].has(rarity)); }
 
   toggleDex() {
     UI.setBagVisible(false);            // 同一时刻只允许一个窗口

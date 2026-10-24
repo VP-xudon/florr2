@@ -187,6 +187,23 @@ class LocalServer {
       else p.update(dt, { x: 0, y: 0 }, this.map, this.ents);
     } finally { PetalFX._suppress = _sup; }
 
+    // 1.5) 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
+    // 【必须把坐标拉回花朵中心】：实体死亡时就地冻结，若复活时沿用旧坐标，
+    // 它会在"死掉的那个位置"（往往正贴着生物）凭空出现并立刻判定命中 ——
+    // 表现为"新装填的 light 从生物身上/背后冒出，玩家拉开距离也照样打得到"。
+    for (const b of p.petals) {
+      if (!b.dead || !(b.respawnT > 0)) continue;
+      b.respawnT -= dt;
+      if (b.respawnT <= 0) {
+        b.respawnT = 0;
+        b.dead = false;
+        b.hp = b.maxHp;
+        b.hurtT = 0;
+        b.x = p.x; b.y = p.y;      // 回到花朵中心，再从花瓣轨道飞出去
+        b.vx = 0; b.vy = 0;
+      }
+    }
+
     // 2) 生物：AI + 移动 + 退场回收
     for (const m of this.ents) m.update(dt, p, this.map);
     this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
@@ -290,7 +307,11 @@ class LocalServer {
     if (r.killed) {
       // 击杀：立刻把累计真实伤害作为一条飘字弹出（不等聚合窗口），再发击杀事件
       this._flushDmg(m);
-      this._events.push({ kind: 'kill', id: m.netId, mobId: (m.type.id != null ? m.type.id : m.name), level: m.level });
+      this._events.push({
+        kind: 'kill', id: m.netId, mobId: (m.type.id != null ? m.type.id : m.name),
+        level: m.level, rarity: m.rarity,
+        x: m.x, y: m.y                       // 掉落物出现在生物死亡位置
+      });
     }
   }
 
@@ -305,12 +326,20 @@ class LocalServer {
     m.pendDmg = 0; m.dmgTextT = 0;
   }
 
+  // 花瓣实体被打碎：
+  //   · 单体卡（一张卡 = 一个实体）-> 整槽进入 reload（卡面扇形阴影）；
+  //   · 多体卡（Light 等：一张卡 = N 个实体）-> 只让【这一个实体】进入自己的重装填
+  //     （respawnT），卡片本身【不】进入 reload —— 其余实体继续正常飞舞。
   _destroyPetal(b) {
     b.dead = true;
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
     const p = this.player;
-    if (p) p.reload[b.slotIndex] = { card: c, age: 0, dur };
+    if (!p) return;
+    const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
+      ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
+    if (cnt > 1) { b.respawnT = dur; return; }
+    p.reload[b.slotIndex] = { card: c, age: 0, dur };
   }
 
   // ---- 聊天：服务器全局设定。按频道路由；Local 只投给半径内的接收者。 ----
@@ -450,8 +479,9 @@ class LocalServer {
       } : null,
       // 花瓣战斗状态：客户端不跑战斗，只按这里的 hp/hurtT/dead 做表现。
       // 少了这一段，服务端花瓣掉血甚至碎掉，客户端都看不到（表现为"花瓣不受伤"）。
+      // 一张卡可能对应多个独立实体（Light 的每个光点）：用 (slot, sub) 唯一定位
       petals: p ? p.petals.map((b) => ({
-        slot: b.slotIndex, hp: b.hp, maxHp: b.maxHp,
+        slot: b.slotIndex, sub: b.sub || 0, hp: b.hp, maxHp: b.maxHp,
         hurtT: b.hurtT || 0, dead: !!b.dead
       })) : [],
       ents: this.ents.map((m) => ({

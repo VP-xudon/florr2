@@ -243,6 +243,12 @@ function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
   ctx.restore();
 }
 
+// 绘制一片花瓣的图形。多体花瓣（Light）在实体里【不套用卡面的紧凑排布】：
+// 它的每个光点各占一个轨道位（见 _syncPetals 的 b.lights），这里只负责画单个光点。
+function drawPetalArt(ctx, cv, size, x, y, rot, scale, alpha) {
+  drawArt(ctx, cv, size, x, y, rot, scale, alpha);
+}
+
 // 基于重量与动能的实体推挤（玩家↔生物、生物↔生物通用）。
 // 位置修正按反质量分配（重的一方几乎不动）；再把沿法线的"接近速度"以低恢复系数转成冲量，
 // 于是：小生物推不动大生物；重生物能推飞小生物；很快的玩家能推动"更大一点"重量的生物。
@@ -386,6 +392,7 @@ class Player {
   die() {
     this.dead = true; this.deathTimer = 0;
     this.deathRot = rand(0, TAU);
+    // 每个花瓣实体各自转幽灵（多体花瓣本就是 N 个实体，无需特殊处理）
     for (const b of this.petals) this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
     this.petals = []; this.petalWorld = [];
     this.vx = 0; this.vy = 0;
@@ -462,6 +469,14 @@ class Player {
     b.dead = true;
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
+    const cnt = (CardRenderer.lightSubCount) ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
+    if (cnt > 1) {
+      // 多实体卡：只有这一个实体进入自己的重装填（服务端权威计时），卡片【不】进入
+      // reload —— 所以卡面不会出现扇形阴影；同槽其它实体照常飞舞。
+      // 死亡视觉：原地放大渐隐（此实体不会像单体卡那样从实体表里消失）。
+      this.petalGhosts.push({ card: c, x: b.x, y: b.y, age: 0 });
+      return;
+    }
     this.reload[b.slotIndex] = { card: c, age: 0, dur };
   }
 
@@ -471,12 +486,26 @@ class Player {
   _applyNetPetalStates() {
     if (!this.netPetals) return;
     for (const b of this.petals) {
-      const ns = this.netPetals[b.slotIndex];
+      // 按 (槽位, 子序号) 匹配：一张卡可能对应多个独立实体（Light 的每个光点）
+      const ns = this.netPetals[b.slotIndex + '|' + (b.sub || 0)]
+        || (typeof this.netPetals.find === 'function'
+          ? this.netPetals.find((x) => x.slot === b.slotIndex && (x.sub || 0) === (b.sub || 0))
+          : null);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
       // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
       if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
-      if (ns.dead && !b.dead) this._killPetalBody(b);
+      if (ns.dead && !b.dead) {
+        this._killPetalBody(b);
+      } else if (!ns.dead && b.dead) {
+        // 多实体卡的单个实体装填完成 -> 复活：Q 弹重生（age 归零）。
+        // 坐标同样拉回花朵中心：否则它会从"死亡处"（可能正贴着生物）原地冒出，
+        // 看起来就像从生物身上突然出现、而不是从花瓣中心飞出去。
+        b.dead = false;
+        b.age = 0;
+        b.x = this.x; b.y = this.y;
+        b.vx = 0; b.vy = 0;
+      }
     }
   }
 
@@ -527,30 +556,57 @@ class Player {
     }
     const n = equipped.length;
 
-    // 同步实体列表：同一张卡保留其运动状态；新出现的卡从人物中心出生。
-    // 只有【装填完成】的槽位才生成花瓣实体；ord 用 equipped 里的序号 -> 空位保留。
+    // Light 多体：一个槽由 N 个独立光点组成（等同装了 N 个单体 Light），
+    // 每个光点各占一个轨道位 —— 所以轨道总数 = Σ 各槽光点数。
+    const cntOf = (card) => (card && CardRenderer.lightSubCount)
+      ? CardRenderer.lightSubCount(card.type, card.rarity) : 1;
+    let totalSpots = 0;
+    for (let k = 0; k < n; k++) totalSpots += cntOf(this.slots[equipped[k]]);
+    const spotStep = totalSpots > 0 ? TAU / totalSpots : 0;
+
+    // 同步实体列表：同一张卡保留其运动状态；新出现的实体从人物中心出生。
+    // 【一张卡 ≠ 一个实体】：Light 这类多体花瓣，一个槽生成 N 个【独立实体】——
+    // 各自占一个轨道位、各自有血量、各自结算伤害与碰撞，等同装了 N 个单体花瓣。
+    // 只有【装填完成】的槽位才生成实体；轨道位按实体数分配 -> 空位保留。
     const bodies = [];
+    let spotBase = 0;
     for (let k = 0; k < n; k++) {
       const slotIndex = equipped[k];
       const card = this.slots[slotIndex];
+      const cnt = cntOf(card);
+      const myBase = spotBase;      // 该槽占用的第一个轨道位（装填中也照占，保持排布稳定）
+      spotBase += cnt;
       if (!this.reloadDone(slotIndex)) continue;    // 装填中：占位但不生成
-      let body = null;
-      for (const b of this.petals) if (b.slotIndex === slotIndex && b.card === card) { body = b; break; }
-      if (!body) {
-        const st = petalStatsFor(card.type, card.rarity);
-        const maxHp = st.hp || 30;
-        body = { slotIndex, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0 };
+      const st = petalStatsFor(card.type, card.rarity);
+      // 血量按【卡面总 hp】均分：一张卡有 N 个实体，每个实体占卡面 hp 的 1/N。
+      // 卡槽的"水缸"阴影则按存活实体的血量总和 / 卡面总 hp 计算（见 ui.js _reloadTick）。
+      const cardHp = st.hp || 30;
+      const maxHp = cnt > 1 ? cardHp / cnt : cardHp;
+      for (let sub = 0; sub < cnt; sub++) {
+        let body = null;
+        for (const b of this.petals) {
+          if (b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
+        }
+        if (!body) {
+          body = { slotIndex, sub, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0 };
+        }
+        body.age += dt;
+        body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
+        body.ord = k; body.n = n;
+        body.cnt = cnt; body.spot = myBase + sub;   // 该实体占用的轨道位
+        bodies.push(body);
       }
-      body.age += dt;
-      body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
-      body.ord = k; body.n = n;
-      bodies.push(body);
     }
-    // 本次已不在装备栏里的花瓣 -> 转为"退场幽灵"（卸下/删除 = 放大 + 渐隐）
+    // 本次已不在装备栏里的实体 -> 转为"退场幽灵"（卸下/删除 = 放大 + 渐隐）
     for (const b of this.petals) {
       let kept = false;
-      for (const nb of bodies) if (nb.slotIndex === b.slotIndex && nb.card === b.card) { kept = true; break; }
-      if (!kept) this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+      for (const nb of bodies) {
+        if (nb.slotIndex === b.slotIndex && nb.card === b.card && nb.sub === b.sub) { kept = true; break; }
+      }
+      // 多体卡的已碎实体：死亡瞬间已经单独生成过幽灵，这里不重复
+      if (!kept && !(b.dead && (b.cnt || 1) > 1)) {
+        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+      }
     }
     this.petals = bodies;
 
@@ -565,10 +621,11 @@ class Player {
 
     // 花瓣特效引擎：对每片在轨花瓣跑 detect/update（玫瑰等特殊行为在此触发）。
     // 必须在弹簧之前：激活的特效会直接驱动 b.x/b.y，弹簧随后跳过它们。
-    for (const b of this.petals) PetalFX.tick(b, this, dt);
+    // 已碎的实体（多体卡的单个光点）不参与特效与运动。
+    for (const b of this.petals) { if (!b.dead) PetalFX.tick(b, this, dt); }
 
     // 计算应在位置，用欠阻尼弹簧吸附过去（帧率无关；目标突变时平滑追赶，绝不瞬移）
-    const step = n > 0 ? TAU / n : 0;
+    // 目标角 = 该实体自己的轨道位（多体花瓣的每个实体各占一位，独立飞舞）。
     // 花瓣距离：reach模式×2，detect模式×0.5，normal×1
     let reachMult = 1;
     if (this.mode === 'reach') reachMult = 1 + this.modeT;              // 1 -> 2
@@ -576,8 +633,9 @@ class Player {
     const reach = this.r * (1 + PETAL_REACH) * 1.105 * reachMult;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     for (const b of this.petals) {
+      if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       if (b.fxActive) continue;     // 特效驱动中（如玫瑰飞向主角）：位置由引擎接管
-      const ang = this.spin + b.ord * step;
+      const ang = this.spin + (b.spot || 0) * spotStep;
       const tx = this.x + Math.cos(ang) * reach;
       const ty = this.y + Math.sin(ang) * reach;
 
@@ -592,8 +650,12 @@ class Player {
       this._resolvePetal(b, b.vx * dtc, b.vy * dtc);
     }
 
-    // 供绘制与碰撞使用（hurtT：花瓣受伤红滤镜；fxActive：特效驱动中，图层在主角之上）
-    this.petalWorld = this.petals.map((b) => ({ x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age, hurtT: b.hurtT || 0, fxActive: !!b.fxActive }));
+    // 供绘制与碰撞使用（hurtT：花瓣受伤红滤镜；fxActive：特效驱动中，图层在主角之上；
+    // dead：该实体已碎、正在独立重装填 —— 不绘制）
+    this.petalWorld = this.petals.map((b) => ({
+      x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age,
+      hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead
+    }));
   }
 
   draw(ctx) {
@@ -604,7 +666,7 @@ class Player {
         const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
         const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-        if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
+        if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
         // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
       }
       this._drawDeadBody(ctx);
@@ -613,14 +675,14 @@ class Player {
     // 花瓣实体：出场渐显（大小不变）。特效驱动中的花瓣（如玫瑰飞向主角）
     // 延后到主角本体之后再画 —— 图层比人物高，"飞到脸上"的观感。
     for (const pp of this.petalWorld) {
-      if (pp.fxActive) continue;
+      if (pp.fxActive || pp.dead) continue;         // 已碎实体不绘制（等独立重装填）
       const p = this.slots[pp.index];
       const size = 15 * 0.9;                        // 13.5：花瓣视觉缩至原 0.9
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);                // 出场：0.1s 渐显
       const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
-      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      if (cv) drawPetalArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       // 未就绪【不画】也不能回退 drawSprite：那按原始 viewBox contain 绘制，
       // 图形会缩得极小（"错误加载的大小"），就绪后由 artCanvas 统一管线补上。
       // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
@@ -640,7 +702,7 @@ class Player {
       const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-      if (cv) drawArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
+      if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
       // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
     }
 
@@ -728,13 +790,13 @@ class Player {
     }
     // 特效驱动中的花瓣：画在主角本体之上（图层比人物高）
     for (const pp of this.petalWorld) {
-      if (!pp.fxActive) continue;
+      if (!pp.fxActive || pp.dead) continue;
       const p = this.slots[pp.index];
       const size = 15 * 0.9;
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);
       const cv = CardRenderer.artCanvas(p.type.svg, 128);
-      if (cv) drawArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
+      if (cv) drawPetalArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
       if (pp.hurtT > 0) {
         ctx.save();
@@ -833,7 +895,8 @@ const MOB_DIAM = (function () {
 const MOB_ART_ROT = {
   '3': Math.PI * 3 / 4,       // 瓢虫：头中心在图内朝 -135°，补偿 +135°
 };
-// 瓢虫描边圈独立图层（assets/mobs/3_ring.svg，main.js 预加载）：
+// 瓢虫描边圈独立图层（assets/entities/3_ring.svg，main.js 预加载）：
+// 渲染专用的生物素材统一放在 assets/entities/，assets/mobs/ 只存原始贴图。
 // 绘制顺序 = 本体(无圈) -> 随机圆点 -> 描边圈，圆点永远压在圈的下面。
 // RING_RECT = 圈在 base 贴图（3.svg）坐标系里的比例矩形（tools/_split_ring.py 算出）。
 const LADYBUG_RING_KEY = 'mob3ring';
@@ -1250,6 +1313,177 @@ class Card {
     ctx.globalAlpha = a;
     ctx.strokeStyle = this.color; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(this.x, this.y + bobY, (this.r + 4) * pop, 0, TAU); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---------------- 地面掉落物（生物死亡掉落） ----------------
+// 视觉 = 真实卡面（与背包/卡槽同一条 CardRenderer.renderCardTo 管线）+ 右上角数量角标。
+// 图层：全体掉落物都画在【实体与玩家尸体之下】（见 game.render 的绘制顺序）。
+const DROP_SIZE = 36;            // 世界像素边长（与旧的地面卡片 30 接近，略大一点便于辨认）
+const DROP_FACE_PX = 144;        // 离屏卡面分辨率（4 倍超采样，缩小绘制仍然清晰）
+const DROP_PICK_R = 2;           // 拾取半径 = 2 × 玩家【直径】
+const DROP_FLY_T = 0.26;         // 飞回玩家中心并缩小的时长（秒）
+const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal', 'unique']);   // 持续冒粒子的稀有度
+const _dropFaceCache = {};       // slug|rarity -> 已渲染好的卡面 canvas
+
+function dropFaceCanvas(slug, rarity, name, svg) {
+  const k = slug + '|' + rarity;
+  const hit = _dropFaceCache[k];
+  if (hit) return hit;
+  const cv = document.createElement('canvas');
+  if (typeof CardRenderer !== 'undefined' && CardRenderer.renderCardTo) {
+    CardRenderer.renderCardTo(cv, {
+      svg: (svg != null) ? svg : null, name: name || null,
+      rarity, px: DROP_FACE_PX, pad: 0.0756, radius: 0.0588
+    });
+  }
+  _dropFaceCache[k] = cv;
+  return cv;
+}
+
+// 多张掉落物的排布偏移（相对死亡点）：
+//   1 张  -> 正中央
+//   2 张  -> 水平并排（中间留 gap）
+//   3~6 张 -> 与 Light 多体同思路的环形排布，但半径更大（"离得远一点"）
+function dropLayoutOffset(i, n, gap) {
+  if (n <= 1) return { x: 0, y: 0 };
+  if (n === 2) return { x: (i - 0.5) * gap, y: 0 };
+  const R = gap * (n <= 4 ? 0.82 : 0.98);
+  const a = -Math.PI / 2 + (i * Math.PI * 2) / n;
+  return { x: Math.cos(a) * R, y: Math.sin(a) * R };
+}
+
+class DropCard {
+  constructor(slug, svg, rarity, name, x, y) {
+    this.slug = slug;
+    this.svg = svg;
+    this.rarity = rarity;
+    this.name = name || slug;
+    this.x = x; this.y = y;
+    this.count = 1;          // 完全相同的卡牌堆叠在同一张卡上
+    this.age = 0;
+    this.size = DROP_SIZE;
+    this.fly = 0;            // 0 = 停留；0~1 = 正在飞向玩家（同时缩小）
+    this.sx = 0; this.sy = 0;
+    this.done = false;
+    this.sparkT = 0;         // Ultra+ 持续粒子的发射计时
+    // 随机偏转：-15° ~ +15°（左右各 15 度），让掉在地上的卡看起来是"散落"而非整齐排列。
+    // 生成时定死，飞行拾取过程中不再变化。
+    this.rot = rand(-Math.PI / 12, Math.PI / 12);
+  }
+  // 开始拾取：记下起点，之后沿缓出曲线飞向玩家中心
+  pick() {
+    if (this.fly) return;
+    this.fly = 0.0001;
+    this.sx = this.x; this.sy = this.y;
+  }
+  update(dt, player) {
+    this.age += dt;
+    if (!this.fly) return;
+    this.fly = Math.min(1, this.fly + dt / DROP_FLY_T);
+    const t = this.fly;
+    const e = 1 - Math.pow(1 - t, 2);            // easeOut：起步快、末端吸附
+    this.x = this.sx + (player.x - this.sx) * e;
+    this.y = this.sy + (player.y - this.sy) * e;
+    if (t >= 1) this.done = true;
+  }
+  // 飞行中缩小到 0.18（看起来就是"被吸进背包"）
+  get scale() { return this.fly ? (1 - 0.82 * this.fly) : 1; }
+  draw(ctx) {
+    const pop = spawnPop(this.age);                 // 出场 Q 弹（与全局实体一致）
+    // 呼吸：幅度 1.2%、周期 ≈ 3.1s（0.4Hz）—— 只是"活着"的极轻微起伏，不抢视线
+    const breathe = 1 + 0.012 * Math.sin(this.age * 2.5);
+    const d = this.size * this.scale * pop * breathe;
+    if (d <= 0.5) return;
+    const cv = dropFaceCanvas(this.slug, this.rarity, this.name, this.svg);
+    ctx.save();
+    if (this.fly) ctx.globalAlpha = Math.max(0, 1 - this.fly * 0.85);
+    // 整张卡绕自身中心旋转 Math.rot（随机 ±15°），角标跟着一起转
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    if (cv) {
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(cv, -d / 2, -d / 2, d, d);
+    } else {
+      // 卡面素材尚未就绪：先用稀有度色块占位（不闪烁，拿不到真实卡面时才出现）
+      const col = (typeof RARITIES !== 'undefined' && RARITIES[this.rarity]) ? RARITIES[this.rarity].color : '#888';
+      ctx.fillStyle = col;
+      ctx.fillRect(-d / 2, -d / 2, d, d);
+    }
+    // 数量角标：与背包 .card-count 同一套样式（右上角、右倾 30°、白字黑描边、字号 0.236×卡宽）
+    if (this.count > 1) {
+      ctx.translate(d * 0.42, -d * 0.30);
+      ctx.rotate(Math.PI / 6);
+      const fs = Math.max(6, d * 0.236);
+      ctx.font = '800 ' + fs + 'px ' + CardRenderer.FONT;
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round'; ctx.miterLimit = 2;
+      ctx.lineWidth = fs * 0.115;
+      ctx.strokeStyle = '#000';
+      ctx.fillStyle = '#fff';
+      const txt = 'x' + fmtNum(this.count);
+      ctx.strokeText(txt, 0, 0);
+      ctx.fillText(txt, 0, 0);
+    }
+    ctx.restore();
+  }
+}
+
+// 掉落物粒子（正方形小块，稀有度色）：
+//   mode 'burst' = 落地瞬间向四周炸开（Mythic 及以下只有这一下，随后渐隐）
+//   mode 'rise'  = Ultra 及以上持续冒出（轻微上飘）
+// 出生点固定落在【卡片四周边缘】上（随机一条边、随机位置），并沿外法线方向飞出，
+// 所以看起来是从卡面四周冒出来，而不是从卡中心点冒出来。
+class DropSpark {
+  constructor(x, y, color, mode, half) {
+    const rise = mode === 'rise';
+    const h = Math.max(0, half || 0);
+    // 四周边缘取点：0=上 1=右 2=下 3=左（t = 沿该边的位置 -1..1）
+    const side = Math.floor(Math.random() * 4);
+    const t = rand(-1, 1);
+    let px, py;
+    if (side === 0) { px = t * h; py = -h; }
+    else if (side === 1) { px = h; py = t * h; }
+    else if (side === 2) { px = t * h; py = h; }
+    else { px = -h; py = t * h; }
+    this.x = x + px;
+    this.y = y + py;
+    this.color = color;
+    this.size = rand(5, 10);                        // 基础大小 ×2（原 2.5~5）
+    // 速度：沿该边的外法线飞出（±0.5rad 抖动）。
+    // 【不做任何竖直偏置】—— 四条边被等概率选中，于是上下左右四个方向的粒子数相等，
+    // 看起来是"平等地向四周冒出"，而不是总往上飘。
+    const nx = side === 1 ? 1 : (side === 3 ? -1 : 0);
+    const ny = side === 0 ? -1 : (side === 2 ? 1 : 0);
+    const sp = rise ? rand(26, 90) : rand(120, 300);
+    const ja = rand(-0.5, 0.5);
+    const ca = Math.cos(ja), sa = Math.sin(ja);
+    this.vx = (nx * ca - ny * sa) * sp;
+    this.vy = (nx * sa + ny * ca) * sp;
+    // 重力也压小（burst）／取消（rise）：重力方向单一，会把"向四周"拉成"向下坠"。
+    this.grav = rise ? 0 : 140;
+    this.rot = rand(0, TAU);
+    this.vr = rand(-8, 8);
+    this.life = rand(0.45, 0.85);
+    this.max = this.life;
+  }
+  update(dt) {
+    this.vy += this.grav * dt;
+    this.vx *= 0.97; this.vy *= 0.97;
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.rot += this.vr * dt;
+    this.life -= dt;
+  }
+  draw(ctx) {
+    const t = clamp(this.life / this.max, 0, 1);
+    const s = this.size * (0.55 + 0.45 * t);
+    ctx.save();
+    ctx.globalAlpha = t;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.fillStyle = this.color;
+    ctx.fillRect(-s / 2, -s / 2, s, s);
     ctx.restore();
   }
 }

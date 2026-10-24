@@ -534,21 +534,22 @@ const Chat = {
     for (let i = this.float.length - 1; i >= 0; i--) {
       if (now - this.float[i].born > CHAT_FADE_T * 1000) this.float.splice(i, 1);
     }
-    // DOM 与队列按索引对齐：不够就补、多了就删，内容变了才重填
-    while (layer.children.length < this.float.length) {
-      layer.appendChild(this._line(this.float[layer.children.length]));
-    }
+    // DOM 与队列按索引对齐：多了就删；某条消息变了就【整行替换】。
+    // 不能只换子节点：外层类名（.chat-line / .sys / .whisper / .chat-hint）是按消息
+    // 类型在 _line() 里决定的，复用旧元素会让系统消息丢掉 .sys -> 红字规则失效，
+    // 文字退回面板默认色（白色）——这就是"漂浮态偶发白字丢样式"的根因。
     while (layer.children.length > this.float.length) {
       layer.removeChild(layer.lastChild);
     }
     for (let i = 0; i < this.float.length; i++) {
       const m = this.float[i];
-      const el = layer.children[i];
-      if (el._msg !== m) {
-        el._msg = m;
-        el.textContent = '';
-        const src = this._line(m);
-        while (src.firstChild) el.appendChild(src.firstChild);
+      let el = layer.children[i];
+      if (!el || el._msg !== m) {
+        const fresh = this._line(m);
+        fresh._msg = m;
+        if (el) layer.replaceChild(fresh, el);
+        else layer.appendChild(fresh);
+        el = fresh;
       }
       const age = (now - m.born) / 1000;
       // 最后 1s 渐隐

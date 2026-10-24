@@ -80,6 +80,46 @@ window.REGISTRY = {
     "hp": 5.0,
     "spd": 0
    },
+   "rarityStats": {
+    "common": {
+     "dmg": 13,
+     "hp": 5
+    },
+    "unusual": {
+     "dmg": 19.5,
+     "hp": 7.5
+    },
+    "rare": {
+     "dmg": 58.5,
+     "hp": 22.5
+    },
+    "epic": {
+     "dmg": 117,
+     "hp": 45
+    },
+    "legendary": {
+     "dmg": 351,
+     "hp": 135
+    },
+    "mythic": {
+     "dmg": 631.8,
+     "hp": 243
+    },
+    "ultra": {
+     "dmg": 1895.4,
+     "hp": 729
+    },
+    "super": {
+     "dmg": 5686.2,
+     "hp": 2187
+    },
+    "eternal": {
+     "dmg": 17058.6,
+     "hp": 6561
+    }
+   },
+   "reload": 0.8,
+   "reloadText": "0.8s",
    "wiki": {
     "common": {
      "dmg": 13.0,
@@ -90,7 +130,7 @@ window.REGISTRY = {
    },
    "identified": true,
    "note": ""
-  },
+   },
   {
    "id": 3,
    "file": "assets/petals/3.svg",

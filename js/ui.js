@@ -51,6 +51,12 @@ function statLabel(key, fallback) {
   return s.replace(/\s*\{[^{}]*\}\s*$/, '').trim();
 }
 
+// 掉落概率文本：0.598 -> "59.8%"（官方维基口径，统一一位小数）
+function fmtChance(v) {
+  const p = (Number(v) || 0) * 100;
+  return (p >= 100 ? '100' : p.toFixed(1)) + '%';
+}
+
 // ================= 通用补间动画播放器 =================
 // 所有 UI 动画（卡槽互换、幽灵飞入、飞回背包…）都走这里：
 //   · 多个动画可在不同元素上【同时】播放，互不打断（同一元素上新动画会替换旧的）；
@@ -151,7 +157,6 @@ const UI = {
     root.innerHTML = `
       <div id="hud">
         <div id="topbar"><span id="pname">${I18N.t('ui.pname', 'Flower')}</span></div>
-        <div id="hint">${I18N.t('ui.hint', 'WASD / arrows move · Z/B backpack · V pokédex · R swap rows · 1-5 quick swap')}</div>
       </div>
 
       <!-- 左下角图标列：背包（真实矢量化按钮图）；图鉴按钮独立定位到左上角 -->
@@ -198,7 +203,7 @@ const UI = {
             <img src="assets/ui/btn-close.svg?v=2" alt="">
           </button>
         </div>
-        <div class="win-body"><div id="dexBody" class="gallery"></div></div>
+        <div class="win-body"><div id="dexBody" class="dex-grid"></div></div>
       </div>
 
       <div id="loading">${I18N.t('UI/Title/Loading', 'Loading...')}</div>
@@ -228,7 +233,7 @@ const UI = {
     this._bindSimpleTip(this.refs.dexBtn, () => I18N.t('UI/MobGallery/Title', 'Mob Gallery'));
     // 红色矢量叉 -> 关闭对应窗口
     root.querySelectorAll('.win-close').forEach((b) => {
-      this._bindSimpleTip(b, () => I18N.t('ui.close', 'Close'));
+      this._bindSimpleTip(b, () => I18N.t('UI/Close', 'Close'));
       b.addEventListener('click', () => {
         if (b.dataset.close === 'bag') { if (this.onBagToggle) this.onBagToggle(); }
         else { if (this.onDexToggle) this.onDexToggle(); }
@@ -541,39 +546,114 @@ const UI = {
     return group;
   },
 
-  // ---------------- 图鉴：花瓣陈列馆 ----------------
-  // 说明：florr 中花瓣本身不绑定单一稀有度（同一花瓣可有多种稀有度），稀有度是“卡牌实例”的属性。
-  // 图鉴：稀有度背景板展示 + 花瓣按类别(kind)陈列（均复用窗口内的分组样式）。
-  renderDex() {
-    if (this._dexBuilt) return;          // 图鉴内容静态：只构建一次
+  // ---------------- 图鉴：生物图鉴 ----------------
+  // 一行 = 一种生物，9 格 = 9 个稀有度（从左到右递增）。
+  // 只显示"打过"的生物（game.dex 有记录），行序 = 生物名（当前译文）字典序。
+  // 每格：灰色半透明槽；打过的那一格 = 该稀有度的空白卡面 + 生物贴图。
+  // 窗口高度随行数增长，上限约背包窗口的一半（见 css 里 #dex 的 max-height）。
+  renderDex(game) {
+    const g = game || window.__game;
     const body = this.refs.dexBody;
+    if (!body) return;
     body.innerHTML = '';
-    const sample = PETAL_TYPES[0];
-    const rarName = (r) => I18N.t('Rarities/' + r + '/Name', r);
-    let total = 0;
+    const dex = (g && g.dex) ? g.dex : {};
+    // 只留有记录的生物
+    const rowMobs = MOB_TYPES.filter((m) => {
+      const s = dex[m.id];
+      return !!(s && s.size);
+    });
+    // 字典序：按当前语言显示名排序（同分按 id 稳定）
+    rowMobs.sort((a, b) => String(a.name).localeCompare(String(b.name)) || (a.id - b.id));
 
-    // 1) 稀有度背景板展示：同一示例花瓣在各级稀有度下的拼接效果
-    for (const rar of RARITY_ORDER) {
-      const col = (RARITIES[rar] && RARITIES[rar].color) || '#fff';
-      body.appendChild(this._rarGroup(rarName(rar), col, [sample], rar));
+    for (const m of rowMobs) {
+      const row = document.createElement('div');
+      row.className = 'dex-row';
+      for (const rar of RARITY_ORDER) {
+        const cell = document.createElement('div');
+        cell.className = 'dex-cell';
+        if (g && g.isDefeated && g.isDefeated(m.id, rar)) {
+          cell.classList.add('on');
+          // 空白稀有度卡面（与花瓣卡同一套底板）+ 生物贴图
+          cell.appendChild(CardRenderer.createCard({
+            rarity: rar, svg: null, pad: 0.0756, radius: 0.0588
+          }));
+          const art = document.createElement('canvas');
+          art.className = 'dex-mob';
+          cell.appendChild(art);
+          this._paintMobArt(art, m, rar);
+          this._bindMobTip(cell, m, rar);      // 只有打过的格子才有悬浮框
+        }
+        row.appendChild(cell);
+      }
+      body.appendChild(row);
     }
-
-    // 2) 花瓣按类别陈列（中性 common 背景板）
-    const kinds = [];
-    const byKind = {};
-    for (const p of PETAL_TYPES) {
-      const k = p.kind || 'misc';
-      if (!byKind[k]) { byKind[k] = []; kinds.push(k); }
-      byKind[k].push(p);
+    if (this.refs.dexCount) {
+      this.refs.dexCount.textContent = I18N.tf('UI/MobGallery/Count',
+        { 0: fmtNum(rowMobs.length), 1: fmtNum(MOB_TYPES.length) });
     }
-    for (const k of kinds) {
-      const title = (k.charAt(0).toUpperCase() + k.slice(1)) + ' · ' + byKind[k].length;
-      const petals = byKind[k].slice().sort((a, b) => a.name.localeCompare(b.name));
-      body.appendChild(this._rarGroup(title, '#0d3a52', petals, 'common'));
-      total += petals.length;
-    }
-    this.refs.dexCount.textContent = I18N.tf('ui.dexCount', { n: fmtNum(total), m: fmtNum(total) }, 'Petals: {n}');
     this._dexBuilt = true;
+  },
+
+  // 图鉴格子里的生物贴图。
+  // 缩放口径（参照 83.svg 这类"图案自带圆角外框"的官方素材）：官方生物的图案本体在
+  // SVG 里本来就留了外圈空白，卡面上应保留同样的留白 —— 所以图案只占格子的 ART_FILL，
+  // 四角圆角与描边都在留白之内，绝不溢出；描边圈再按 RING_RECT 的外扩比例叠上去。
+  //   本体 0.78 × 圈外扩 1.1172 ≈ 0.87 → 连描边一起也落在格子里。
+  _paintMobArt(cv, mob, rarity, tries) {
+    const S = 96;
+    if (cv.width !== S) { cv.width = S; cv.height = S; }
+    const key = 'mob' + mob.svg;
+    // 用裁剪到图案包围盒的版本：条纹/斑点/轮廓都按实际图案等比铺开（不做非等比拉伸）
+    const body = (typeof SpriteStore !== 'undefined' && SpriteStore.artCanvas)
+      ? SpriteStore.artCanvas(key, S) : null;
+    if (!body) {
+      // 素材还没解码好：稍后重试（最多 25 次 ≈ 3s，避免无谓的空转）
+      const n = (tries || 0) + 1;
+      if (n <= 25) setTimeout(() => { if (cv.isConnected) this._paintMobArt(cv, mob, rarity, n); }, 120);
+      return;
+    }
+    const c = cv.getContext('2d');
+    c.clearRect(0, 0, S, S);
+    c.imageSmoothingQuality = 'high';
+    const bd = S * 0.78;                 // 图案本体直径（其余留白）
+    const bx0 = (S - bd) / 2, by0 = (S - bd) / 2;
+    c.drawImage(body, bx0, by0, bd, bd);
+    // 瓢虫：斑点 + 描边圈（与场景内 Mob.draw 完全同一顺序：本体 -> 斑点 -> 圈）
+    if (mob.svg === 3) {
+      this._paintLadybugDots(c, rarity, S, bd);
+      const ring = (typeof LADYBUG_RING_KEY !== 'undefined' && SpriteStore.artCanvas)
+        ? SpriteStore.artCanvas(LADYBUG_RING_KEY, S) : null;
+      if (ring) {
+        const k = (typeof LADYBUG_RING_RECT !== 'undefined' && LADYBUG_RING_RECT)
+          ? Math.max(LADYBUG_RING_RECT[2], LADYBUG_RING_RECT[3]) : 1.1172;
+        const rd = bd * k;
+        c.drawImage(ring, (S - rd) / 2, (S - rd) / 2, rd, rd);
+      }
+    }
+  },
+
+  // 瓢虫斑点（图鉴用）：与场景内 Mob._makeDots 同一套分布 —— 数量随稀有度 2..9、
+  // 均匀圆盘撒点、半径 0.11×直径浮动，裁剪在鞘翅内圈（0.48×直径）里。
+  // 用固定种子，保证同一格每次绘制完全一致。
+  _paintLadybugDots(c, rarity, S, bd) {
+    const idx = Math.max(0, RARITY_ORDER.indexOf(rarity));
+    const n = 2 + idx;
+    let s = 3 * 131 + idx * 17 || 1;
+    const rng = () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 8) & 0xffffff) / 0x1000000; };
+    c.save();
+    c.beginPath();
+    c.arc(S / 2, S / 2, bd * 0.48, 0, Math.PI * 2);
+    c.clip();
+    c.fillStyle = '#111';
+    for (let i = 0; i < n; i++) {
+      const a = rng() * Math.PI * 2;
+      const d = Math.sqrt(rng()) * 0.38;
+      const r = 0.11 * (0.65 + 0.7 * rng());
+      c.beginPath();
+      c.arc(S / 2 + Math.cos(a) * d * bd, S / 2 + Math.sin(a) * d * bd, r * bd, 0, Math.PI * 2);
+      c.fill();
+    }
+    c.restore();
   },
 
   // ---------------- 主槽装填（reload）阴影 ----------------
@@ -586,7 +666,7 @@ const UI = {
   //     扇形宽度 = 2π -> 覆盖整圈 -> 阴影消失；
   //   · 整个过程时长 = 该花瓣的 reload 秒数（type.spd），装填完成后才会生成花瓣实体。
   // 实现：每帧把装填进度写进 canvas 状态并重绘那一张卡（按进度取 key 去重，没变就不重绘）。
-  _reloadTick() {
+  _reloadTick(dt) {
     const g = window.__game;
     const p = g && g.player;
     const row = this.refs.slotRow;
@@ -614,14 +694,33 @@ const UI = {
       if (p.dead) {
         hpTarget = 1;
       } else if (!active) {
-        const b = p.petals ? p.petals.find((x) => x.slotIndex === i && !x.dead) : null;
-        if (b && b.maxHp > 0) hpTarget = 1 - Math.max(0, Math.min(1, b.hp / b.maxHp));
+        // 水位 = 1 - 存活实体血量总和 / 【卡面总 hp】。
+        // 一张卡可能对应多个独立实体（Light 的每个光点，各自占卡面 hp 的 1/N）：
+        // 死掉的光点不计血量，装填好一个就回涨 1/N。
+        const arr = p.petals ? p.petals.filter((x) => x.slotIndex === i) : null;
+        if (arr && arr.length) {
+          const card = p.slots[i];
+          const st = (typeof petalStatsFor === 'function' && card) ? petalStatsFor(card.type, card.rarity) : null;
+          const total = (st && st.hp > 0) ? st.hp : arr.reduce((s, b) => s + b.maxHp, 0);
+          let hpSum = 0;
+          for (const b of arr) if (!b.dead) hpSum += Math.max(0, b.hp);
+          if (total > 0) hpTarget = 1 - Math.max(0, Math.min(1, hpSum / total));
+        }
       }
-      let cur = hpTarget;
-      if (p.dead) {
-        // 仅死亡爬坡保留平滑（约 0.3s 到全阴影）：从上一次显示值快速过渡
-        const prev = (cv._hpShadowSm != null) ? cv._hpShadowSm : 1;
-        cur = prev + (hpTarget - prev) * Math.min(1, 8 / 60);
+      // —— 平滑过渡（上升/下降都要能感知）——
+      // 统一用指数逼近：cur += (target - cur) * (1 - e^(-dt/τ))，帧率无关；
+      // τ ≈ 0.25s 让"掉血变深 / 回血变浅"都看得见，而不是瞬间跳变。
+      // reload 扇形激活期间直接归零（扇形本身代表进度，避免两层 0.5 alpha 叠加变深，
+      // 那正是旧版"颜色略有不同"的来源）。
+      let cur;
+      const prev = (cv._hpShadowSm != null) ? cv._hpShadowSm : hpTarget;
+      if (active) {
+        cur = 0;
+      } else {
+        const d = Math.max(0, Math.min(0.1, dt || 0.016));
+        const k = 1 - Math.exp(-d / 0.25);      // τ = 0.25s
+        cur = prev + (hpTarget - prev) * k;
+        if (Math.abs(hpTarget - cur) < 0.002) cur = hpTarget;   // 收敛后吸附，避免长期重绘
       }
       cv._hpShadowSm = cur;
       // 合并去重 key：reload 进度或阴影值任一变化才重绘那一张卡
@@ -683,7 +782,40 @@ const UI = {
         };
         this._tipOn = true;
       },
-      _hideTip() { if (this._tipOn) this._tipHideAt = performance.now(); this._tipOn = false; },
+      // ---------------- 生物悬浮框（图鉴格子） ----------------
+    // 与卡牌悬浮框同一块面板；右上角把"冷却文字 + 旋转图标"换成"菱形 + XP Reward 数值"。
+    _bindMobTip(el, mob, rarity) {
+      el.addEventListener('mouseenter', () => this._showMobTip(mob, rarity, el));
+      el.addEventListener('mouseleave', () => this._hideTip());
+    },
+    _showMobTip(mob, rarity, el) {
+      const now = performance.now();
+      this._tipSlide = !!(this._tipOn || (now - (this._tipHideAt || 0) < 120));
+      if (this._tipSlide) this._tipAlpha = 1;
+      const rs = (mob.rarityStats && mob.rarityStats[rarity]) || {};
+      // 必须用 registry 里的【官方英文名】算 slug：mob.name 是当前语言的译文，
+      // 拿它反推会得到 "瓢虫" 之类的键，简介永远查不到（这就是介绍不显示的原因）。
+      const slug = mob.slug || String(mob.name || '').toLowerCase().replace(/ /g, '_');
+      this._tip = {
+        mob: true,
+        name: mob.name || '',
+        rarityName: I18N.t('Rarities/' + rarity + '/Name', rarity),
+        rarityColor: (RARITIES[rarity] && RARITIES[rarity].color) || '#fff',
+        // 简介可能缺条目：用 opt（缺失不显示 <键名>）
+        desc: I18N.opt('Mobs/' + slug + '/Description', ''),
+        xp: rs.exp || 0,
+        // 数值：与花瓣悬浮框同款式（Health / Damage / Armor）
+        hp: rs.hp || 0,
+        dmg: rs.dmg || 0,
+        armor: rs.armor || 0,
+        // 掉落物：一种花瓣一行，行内是该花瓣各掉落稀有度（卡面 + 下方概率）
+        drops: (typeof mobDropRows === 'function') ? mobDropRows(mob.id, rarity) : [],
+        anchor: el
+      };
+      this._tipOn = true;
+    },
+
+    _hideTip() { if (this._tipOn) this._tipHideAt = performance.now(); this._tipOn = false; },
 
   // ---------------- 简易文字悬浮框（按钮提示） ----------------
   // 样式与卡牌悬浮框一致：同底色透明度、同渐变高光；单行、宽度自适应
@@ -725,17 +857,24 @@ const UI = {
         const F = CardRenderer.FONT;
         const measure = (size, str) => { ctx.font = `${W_ALL} ${size}px ${F}`; return ctx.measureText(str).width; };
         const desc = String(t.desc || '');
-        // 冷却展示：优先用 reloadText（如 "3.5s + 1.5s"）；否则按秒数生成
-        const reload = t.reloadText || (t.reload > 0 ? (fmtNum(t.reload) + 's') : '');
+        // 冷却展示：优先用 reloadText（如 "3.5s + 1.5s"）；否则按秒数生成。
+        // 生物悬浮框没有冷却，右上角改为"菱形 + XP Reward"，所以这里为空。
+        const reload = t.mob ? '' : (t.reloadText || (t.reload > 0 ? (fmtNum(t.reload) + 's') : ''));
+        // 生物右上角：菱形 + "数值 XP"（XP 是两种语言下的通用单位，不额外翻译）
+        const xpTxt = t.mob ? (fmtNum(t.xp) + ' XP') : '';
         const titleW = measure(FS_TITLE, t.name);
         const rarW = measure(FS_RAR, t.rarityName);
         const reloadW = reload ? measure(FS_RELOAD, reload) : 0;
-        // Heal 只有部分花瓣才有：没有就不占一行
-        const rows = [
+        // 数值行：花瓣 = Health/Damage/(Heal)；生物 = Health/Damage/Armor
+        const rows = t.mob ? [
+          [statLabel('Mob/Attribute/Health', 'Health:'), t.hp],
+          [statLabel('Mob/Attribute/Damage', 'Damage:'), t.dmg],
+          [statLabel('Mob/Attribute/Armor', 'Armor:'), t.armor]
+        ] : [
           [statLabel('Petal/Attribute/Health', 'Health:'), t.hp],
           [statLabel('Petal/Attribute/Damage', 'Damage:'), t.dmg]
         ];
-        if (t.heal > 0) rows.push([statLabel('Petal/Attribute/Heal', 'Heal:'), t.heal]);
+        if (!t.mob && t.heal > 0) rows.push([statLabel('Petal/Attribute/Heal', 'Heal:'), t.heal]);
         const statW = Math.max.apply(null,
           rows.map((r) => measure(FS_STAT, r[0] + ' ' + fmtNum(r[1]))));
         // 介绍：宽度够就单行（不换行），超上限才折行
@@ -758,14 +897,33 @@ const UI = {
         for (const l of lines) contentW = Math.max(contentW, measure(FS_DESC, l));
         let W = Math.max(MIN_W, PADX * 2 + contentW);
         if (reload) W = Math.max(W, PADX + titleW + 14 + reloadW + 8 + ICON + RH);
+        // 生物：右上角 = 菱形图标 + 右侧 XP 数值（两者都要塞进标题右侧）
+        if (t.mob) W = Math.max(W, PADX + titleW + 14 + measure(FS_RELOAD, xpTxt) + 8 + ICON + RH);
         W = Math.min(MAX_W, W);
         // 介绍上下各空出一行；数值统一在左下角，自上而下：Health / Damage / (Heal)
         const descTop = rarityY + 22 + BLANK;
         const descBottom = descTop + Math.max(0, lines.length - 1) * LH;
         const statY = [];
         for (let i = 0; i < rows.length; i++) statY.push(descBottom + 22 + BLANK + i * 21);
-        const H = statY[statY.length - 1] + 12;
+        // ---- 掉落物区（仅生物悬浮框）----
+        // 每种花瓣一行；行内并排该花瓣的各掉落稀有度卡面，卡面下方标概率。
+        // CS = 背包卡（44.544px）的 0.8 倍再换算到参考空间：44.544×0.8÷0.6 ≈ 59.4
+        const drops = (t.mob && t.drops) ? t.drops : [];
+        const CS = 59.4, CGAP = 8, PCT_H = 23, DROP_GAP = 12;   // 参考空间尺寸（绘制时整体 × S）
+        const lastStat = statY.length ? statY[statY.length - 1] : descBottom;
+        const dropTop = lastStat + 32;
+        const dropRowH = CS + PCT_H + DROP_GAP;
+        if (drops.length) {
+          let wMax = 0;
+          for (const d of drops) {
+            wMax = Math.max(wMax, d.items.length * CS + (d.items.length - 1) * CGAP);
+          }
+          W = Math.max(W, PADX * 2 + wMax);
+        }
+        // 高度：有掉落物 -> 末尾掉落行之后；否则数值行之后
+        const H = (drops.length ? dropTop + (drops.length - 1) * dropRowH + CS + PCT_H : lastStat) + 16;
         return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, rows, statY, W_ALL,
+          xpTxt, drops, dropTop, dropRowH, CS, CGAP,
           FS_TITLE, FS_RELOAD, FS_RAR, FS_DESC, FS_STAT };
       },
 
@@ -864,6 +1022,30 @@ const UI = {
         };
         // 名称（左上）
         text(t.name, bx, y + L.titleY * S, L.FS_TITLE, L.W_ALL, '#ffffff');
+        // 生物：右上角 = 菱形（稀有度色 + 黑描边）+ 右侧 XP 数值
+            if (t.mob) {
+              const cy = y + L.reloadY * S;
+              const icon = L.ICON * S, gap = 6 * S;
+              const txt = L.xpTxt || fmtNum(t.xp);
+              // 先量宽度（与 text() 用同一字体/字号），才能把菱形排在数值左边
+              ctx.font = `${L.W_ALL} ${Math.round(L.FS_RELOAD * S * 100) / 100}px ${CardRenderer.FONT}`;
+              const vw = ctx.measureText(txt).width;
+              text(txt, rx, cy, L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
+              const dr = icon * 0.5;
+              const dcx = rx - vw - gap - dr, dcy = cy - L.FS_RELOAD * S * 0.34;
+              ctx.save();
+              ctx.translate(dcx, dcy);
+              ctx.beginPath();
+              ctx.moveTo(0, -dr); ctx.lineTo(dr, 0); ctx.lineTo(0, dr); ctx.lineTo(-dr, 0);
+              ctx.closePath();
+              ctx.lineJoin = 'round';
+              ctx.lineWidth = Math.max(1.2, icon * 0.16);
+              ctx.strokeStyle = '#000';
+              ctx.stroke();
+              ctx.fillStyle = t.rarityColor || '#fff';
+              ctx.fill();
+              ctx.restore();
+            }
         // 冷却（白字）+ 后面紧跟一个表示旋转的静态图标
             if (t.reload > 0) {
               const cy = y + L.reloadY * S;
@@ -904,6 +1086,8 @@ const UI = {
         // Health / Damage / Heal：统一排在左下角，标签彩色 + 数值白色（字号与介绍一致）
         // 治疗用专用粉色，不与伤害(红)/生命(绿)共用颜色（与玫瑰回血飘字同色）
         const STAT_COLORS = ['#7fe08a', '#ff6b6b', HEAL_TEXT_COLOR];
+        // 生物：Health / Damage / Armor（Armor 用中性灰蓝，避免与治疗的粉色混淆）
+        const MOB_STAT_COLORS = ['#7fe08a', '#ff6b6b', '#b8c6d1'];
         const statLine = (label, color, val, refY) => {
           const size = Math.round(L.FS_STAT * S * 100) / 100;
           ctx.font = `${L.W_ALL} ${size}px ${CardRenderer.FONT}`;
@@ -911,10 +1095,50 @@ const UI = {
           text(label, bx, y + refY * S, L.FS_STAT, L.W_ALL, color);
           text(String(val), bx + lw + 6 * S, y + refY * S, L.FS_STAT, L.W_ALL, '#ffffff');
         };
+        const rowColors = t.mob ? MOB_STAT_COLORS : STAT_COLORS;
         for (let i = 0; i < L.rows.length; i++) {
-          statLine(L.rows[i][0], STAT_COLORS[i] || '#ffffff', fmtNum(L.rows[i][1]), L.statY[i]);
+          statLine(L.rows[i][0], rowColors[i] || '#ffffff', fmtNum(L.rows[i][1]), L.statY[i]);
+        }
+        // 掉落物：每种花瓣一行（紧接在数值行下方），行内是该花瓣的各掉落稀有度；
+        // 卡面 = 与背包卡完全同一条绘制管线（缩放 0.8 倍），概率标在卡面正下方。
+        if (L.drops && L.drops.length) {
+          const cs = L.CS * S, gap = L.CGAP * S;
+          for (let r = 0; r < L.drops.length; r++) {
+            const d = L.drops[r];
+            const rowY = y + (L.dropTop + r * L.dropRowH) * S;
+            for (let i = 0; i < d.items.length; i++) {
+              const it = d.items[i];
+              const px0 = bx + i * (cs + gap);
+              // 卡面：与背包/卡槽【完全同一条绘制管线】（外框、内板、名称文字、留白），
+              // 只是整张卡等比缩放到 0.8 倍于背包卡。
+              const card = this._dropCard(d.svg, it.rarity, d.name);
+              if (card) ctx.drawImage(card, px0, rowY, cs, cs);
+              // 概率：卡面正下方居中（与卡面留出空隙，避免压到卡片底边/名称）
+              text(fmtChance(it.chance), px0 + cs / 2, rowY + cs + 17 * S,
+                17, L.W_ALL, '#ffffff', 'center');
+            }
+          }
         }
         ctx.restore();
+      },
+
+      // 掉落物卡面（离屏渲染 + 缓存）。
+      // 与背包卡同一套 CardRenderer 绘制：稀有度外框 + 内板 + 花瓣贴图 + 底部名称文字，
+      // 内板/圆角比例也一致（pad 0.0756 / radius 0.0588）；这里只做 4 倍超采样，
+      // 绘制时缩到 0.8 × 背包卡尺寸（44.544 → 35.635px）。
+      _dropCard(svg, rarity, name) {
+        this._dc = this._dc || {};
+        const key = svg + '|' + rarity;
+        if (this._dc[key]) return this._dc[key];
+        const cv = document.createElement('canvas');
+        if (typeof CardRenderer.renderCardTo === 'function') {
+          CardRenderer.renderCardTo(cv, {
+            svg: (svg != null) ? svg : null, name: name || null,
+            rarity, px: 144, pad: 0.0756, radius: 0.0588
+          });
+        }
+        this._dc[key] = cv;
+        return cv;
       },
 
     // Enter 聊天热键：非输入态下按 Enter 进入聊天输入态。
@@ -973,7 +1197,7 @@ const UI = {
         const dt = this._mmLast ? Math.min(0.05, (now - this._mmLast) / 1000) : 0.016;
         this._mmLast = now;
         this._mmTick(dt);
-        this._reloadTick();   // 主槽装填阴影推进
+        this._reloadTick(dt);   // 主槽装填阴影 + 水缸阴影推进（带平滑）
         if (typeof Chat !== 'undefined') Chat.tick(dt);   // 聊天漂浮态渐隐推进
         const target = this._tipOn && this._tip ? 1 : 0;
         const cur = this._tipAlpha;
