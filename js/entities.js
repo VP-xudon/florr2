@@ -630,11 +630,16 @@ class Player {
     let reachMult = 1;
     if (this.mode === 'reach') reachMult = 1 + this.modeT;              // 1 -> 2
     else if (this.mode === 'detect') reachMult = 1 - (1 - PETAL_DETECT) * this.modeT;  // 1 -> 0.5
-    const reach = this.r * (1 + PETAL_REACH) * 1.105 * reachMult;
+    const baseReach = this.r * (1 + PETAL_REACH) * 1.105;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       if (b.fxActive) continue;     // 特效驱动中（如玫瑰飞向主角）：位置由引擎接管
+      // 逐个花瓣取倍率：标了 noReach 的花瓣（如 Rose）【不计算 reach 的延长】，
+      // 保持基础轨道距离（detect 的收拢仍然生效，因为它 ≤ 1）。
+      const noReach = !!(b.card && b.card.type && b.card.type.noReach);
+      const mult = noReach ? Math.min(1, reachMult) : reachMult;
+      const reach = baseReach * mult;
       const ang = this.spin + (b.spot || 0) * spotStep;
       const tx = this.x + Math.cos(ang) * reach;
       const ty = this.y + Math.sin(ang) * reach;

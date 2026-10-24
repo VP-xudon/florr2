@@ -36,6 +36,9 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 //   light  = id 2（Light / 轻：外观同 Basic 但更小，按稀有度由 1 个圆组成 1~5 个）
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
 const ENABLED_PETAL_SLUGS = new Set(['basic', 'light', 'rose', 'stinger']);
+// 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
+//   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
+const REACH_IMMUNE_SLUGS = new Set(['rose']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -97,6 +100,8 @@ function buildPetalTypes() {
       rarityMultipliers: p.rarityMultipliers || null,  // 稀有度倍率表（仅Basic有）
       rarityStats: p.rarityStats || null,        // 各稀有度数值表（Rose 有：dmg/hp/heal）
       kind: p.kind || 'misc',
+      // reach 模式免疫：轨道半径不随空格（reach）放大（见 entities.js _syncPetals）
+      noReach: REACH_IMMUNE_SLUGS.has(slug),
       identified: true,
       wiki: p.wiki || null
     };
