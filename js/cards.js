@@ -157,14 +157,22 @@ const CardRenderer = (function () {
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
   function lightSubCount(type, rarity) {
-    return (type && type.slug === 'light') ? lightCount(rarity) : 1;
+    if (!type) return 1;
+    if (type.slug === 'light') return lightCount(rarity);
+    // 数据驱动的多体（如 Pollen：common/unusual 1、rare 2、epic+ 3）
+    if (type.subCount) return type.subCount[rarity] || 1;
+    return 1;
   }
 
-  // 该花瓣的多体布局（卡面用）；非多体花瓣返回 null
+  // 该花瓣的多体布局（卡面用）；非多体花瓣返回 null。
+  // 不再写死 light：任何 lightSubCount > 1 的花瓣（Light、Pollen……）卡面都按
+  // 同样的 N 体布局绘制，卡面与实体数量严格一致。
   function multiLayout(svgId, rarity) {
     const t = (typeof getPetal === 'function') ? getPetal(svgId) : null;
-    if (!t || t.slug !== 'light') return null;
-    return LIGHT_LAYOUTS[lightCount(rarity)] || null;
+    if (!t) return null;
+    const n = lightSubCount(t, rarity);
+    if (n <= 1) return null;
+    return LIGHT_LAYOUTS[n] || null;
   }
 
   // 单个 Light 的直径占素材绘制矩形【宽】的比例：用实测 bbox / 统一窗口宽反推，

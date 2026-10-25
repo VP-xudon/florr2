@@ -59,6 +59,7 @@ class Game {
     this.mobViews = new Map();   // netId -> 视图 Mob（快照差分创建/销毁用）
     this.cards = [];
     this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
+
     this.dropFx = [];        // 掉落物粒子（正方形小块）
     this.particles = [];
     this.dmgTexts = [];
@@ -312,10 +313,11 @@ class Game {
     // （客户端不跑战斗，必须靠这个才能看到花瓣掉血/红闪/碎掉重装）
     // 这里立即应用一次，不用等下一帧的 _syncPetals —— 否则掉血/碎裂会慢一帧才看到。
     if (snap.petals) {
-      // 一张卡可能对应多个独立实体（Light 的每个光点）：用 "槽位|子序号" 做键，
-      // 否则同槽只留最后一条，其余实体的血量/碎裂状态全部丢失。
+      // 一张卡可能对应多个独立实体：用 "槽位|子序号|世代号" 做键。
+      // 世代号是滞留型花瓣（Pollen / Honey）的：同一槽脱轨后还会再来一批新实体，
+      // 少了它两批实体会互相串血/串碎裂状态。
       const map = {};
-      for (const q of snap.petals) map[q.slot + '|' + (q.sub || 0)] = q;
+      for (const q of snap.petals) map[q.slot + '|' + (q.sub || 0) + '|' + (q.gen || 0)] = q;
       p.netPetals = map;
       p._applyNetPetalStates();
     }
@@ -532,9 +534,12 @@ class Game {
       d.update(dt, p);
       if (!d.fly && d.popT >= 1 && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
       if (d.done) {
-        const type = (typeof getPetal === 'function') ? getPetal(d.svg) : null;
-        if (type) for (let i = 0; i < d.count; i++) this.pickupCard(type, d.rarity);
-        this.syncInventory();
+        // 只有"被捡走"的才进背包；到期渐隐消失的不给（d.picked 由 DropCard.pick 置位）
+        if (d.picked) {
+          const type = (typeof getPetal === 'function') ? getPetal(d.svg) : null;
+          if (type) for (let i = 0; i < d.count; i++) this.pickupCard(type, d.rarity);
+          this.syncInventory();
+        }
         continue;
       }
       if (!d.fly && DROP_FX_CONT.has(d.rarity)) {
@@ -725,18 +730,24 @@ class Game {
     for (const c of this.cards) c.draw(ctx);
     for (const s of this.dropFx) s.draw(ctx);
     for (const d of this.drops) { try { d.draw(ctx); } catch (e) { console.error('[draw drop]', e); } }
+
     // /tp 的目标标记（地面红点 + 脉冲圈，在实体之下，不影响读图）
     if (this.tpTarget) this._drawTpMarker(ctx);
     // 层级定数：尸体固定在最底层，生物彼此按 y 排序，活玩家固定在最上层（不再忽上忽下）
     const me = this.player;
     if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
     const mobs = this.mobs.slice().sort((a, b) => a.y - b.y);
-    // 视口裁剪：全图上千只生物，只有屏幕（含 120px 余量）内的才真正绘制。
-    // 不做这层的话，1600+ 只生物每帧都会产生 canvas 调用，帧率会被拖垮。
-    const mx0 = camX - this.W / 2 - 120, mx1 = camX + this.W / 2 + 120;
-    const my0 = camY - this.H / 2 - 120, my1 = camY + this.H / 2 + 120;
+    // 视口裁剪：屏幕【及其边缘外 2 倍长宽】范围内的生物都要绘制。
+    //   · 余量按屏幕尺寸算（左右各 2W、上下各 2H），快速移动/镜头缩放时不会突然消失
+    //   · 判定用「圆心 ± 半径」而不是只测圆心：大生物（legendary 蜜蜂直径 209px）
+    //     边缘露出屏幕时必须照常绘制，否则会出现"贴边直接不见"
+    // 全图 1600+ 只，这层裁剪仍然把 canvas 调用压到屏幕附近的几百只。
+    const padX = this.W * 2, padY = this.H * 2;
+    const mx0 = camX - this.W / 2 - padX, mx1 = camX + this.W / 2 + padX;
+    const my0 = camY - this.H / 2 - padY, my1 = camY + this.H / 2 + padY;
     for (const m of mobs) {
-      if (m.x < mx0 || m.x > mx1 || m.y < my0 || m.y > my1) continue;
+      const mr = (m.r || 0) + 4;
+      if (m.x + mr < mx0 || m.x - mr > mx1 || m.y + mr < my0 || m.y - mr > my1) continue;
       try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
     }
     if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }

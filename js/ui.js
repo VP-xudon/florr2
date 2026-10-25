@@ -48,7 +48,12 @@ const SWAP_DUR = '0.5s';                    // 主/副槽行互换动画时长
 // 所以要把末尾的 {0:tooltip} / {0} 之类的占位去掉，只留纯文本标签。
 function statLabel(key, fallback) {
   const s = String(I18N.t(key, fallback) || '');
-  return s.replace(/\s*\{[^{}]*\}\s*$/, '').trim();
+  // 官方值形如 "Max Mob Rarity: {#Rarities/{0}/NameColored}"（占位符里还有嵌套花括号），
+  // 旧的 /\{[^{}]*\}$/ 匹配不到嵌套结构，会把 "Max Mob Rarity: {#Rarities/{0}/NameColored}"
+  // 原样画出来（就是"只显示半个标签名"）。
+  // 标签部分一定在第一个 { 之前，直接截断最稳。
+  const i = s.indexOf('{');
+  return (i >= 0 ? s.slice(0, i) : s).trim();
 }
 
 // 掉落概率文本：0.598 -> "59.8%"（官方维基口径，统一一位小数）
@@ -916,6 +921,15 @@ const UI = {
           heal: Math.round(heal * 10) / 10,
           reload: (type.reload != null) ? type.reload : Math.max(0, type.spd || 0),
           reloadText: type.reloadText || null,
+          // Honey 的 Max Mob Rarity：标签固定 #d2eb34，值用【被吸引稀有度自己的颜色】
+          ...(() => {
+            const mr = (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(type, rarity) : null;
+            if (!mr) return {};
+            return {
+              maxMobRarityName: I18N.t('Rarities/' + mr + '/Name', mr),
+              maxMobRarityColor: (RARITIES[mr] && RARITIES[mr].color) || '#ffffff'
+            };
+          })(),
           anchor: el
         };
         this._tipOn = true;
@@ -1006,32 +1020,54 @@ const UI = {
         const titleW = measure(FS_TITLE, t.name);
         const rarW = measure(FS_RAR, t.rarityName);
         const reloadW = reload ? measure(FS_RELOAD, reload) : 0;
-        // 数值行：花瓣 = Health/Damage/(Heal)；生物 = Health/Damage/Armor
-        const rows = t.mob ? [
-          [statLabel('Mob/Attribute/Health', 'Health:'), t.hp],
-          [statLabel('Mob/Attribute/Damage', 'Damage:'), t.dmg],
-          [statLabel('Mob/Attribute/Armor', 'Armor:'), t.armor]
-        ] : [
-          [statLabel('Petal/Attribute/Health', 'Health:'), t.hp],
-          [statLabel('Petal/Attribute/Damage', 'Damage:'), t.dmg]
-        ];
-        if (!t.mob && t.heal > 0) rows.push([statLabel('Petal/Attribute/Heal', 'Heal:'), t.heal]);
-        const statW = Math.max.apply(null,
-          rows.map((r) => measure(FS_STAT, r[0] + ' ' + fmtNum(r[1]))));
-        // 介绍：宽度够就单行（不换行），超上限才折行
-        const descFull = desc ? measure(FS_DESC, desc) : 0;
-        let lines;
-        if (!desc) lines = [];
-        else if (descFull + PADX * 2 <= MAX_W) lines = [desc];
-        else {
-          const limit = MAX_W - PADX * 2;
-          lines = []; let cur = '';
-          for (const word of desc.split(' ')) {
-            const test = cur ? cur + ' ' + word : word;
-            if (cur && measure(FS_DESC, test) > limit) { lines.push(cur); cur = word; }
-            else cur = test;
+        // 数值行：{ label, value, labelColor?, valueColor? }
+        // 规则：这张卡**没有的数值整行不画**（Damage 为 0 就是没有伤害，如 Honey）。
+        const STAT_GAP = 6;                                     // 标签与数值的间距（参考空间）
+        const rows = [];
+        if (t.mob) {
+          rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp });
+          if (t.dmg > 0) rows.push({ label: statLabel('Mob/Attribute/Damage', 'Damage:'), value: t.dmg });
+          if (t.armor > 0) rows.push({ label: statLabel('Mob/Attribute/Armor', 'Armor:'), value: t.armor });
+        } else {
+          if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp });
+          if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg });
+          if (t.heal > 0) rows.push({ label: statLabel('Petal/Attribute/Heal', 'Heal:'), value: t.heal });
+          if (t.maxMobRarityName) {
+            rows.push({
+              label: statLabel('Petal/Attribute/MaxMobRarity', 'Max Mob Rarity:'),
+              value: t.maxMobRarityName,
+              labelColor: (typeof MAX_MOB_RARITY_COLOR !== 'undefined') ? MAX_MOB_RARITY_COLOR : '#d2eb34',
+              valueColor: t.maxMobRarityColor || '#ffffff'      // 稀有度名用它自己的颜色
+            });
           }
-          if (cur) lines.push(cur);
+        }
+        // 行宽 = 标签宽 + 间距 + 数值宽（与绘制时同一字体、同一算法，不会互相压字）
+        let statW = 0;
+        for (const r of rows) {
+          const w = measure(FS_STAT, r.label) + STAT_GAP
+            + measure(FS_STAT, (typeof r.value === 'number' ? fmtNum(r.value) : String(r.value)));
+          if (w > statW) statW = w;
+        }
+        // 介绍：先按官方的换行标记 <n/> 强制断行（Honey 等卡面的介绍里就带这个），
+        // 每段再按宽度折行；宽度够就单行。以前直接把 <n/> 当普通文字测宽 -> 界面上
+        // 原样显示 "<n/>"，所以这里必须先拆再排。
+        const limit = MAX_W - PADX * 2;
+        const lines = [];
+        if (desc) {
+          const paras = String(desc).split(/<n\s*\/?>|\r?\n/gi);
+          for (const raw of paras) {
+            const seg = raw.trim();
+            if (!seg) { if (lines.length) lines.push(''); continue; }   // 保留段落间空行
+            if (measure(FS_DESC, seg) <= limit) { lines.push(seg); continue; }
+            let cur = '';
+            for (const word of seg.split(' ')) {
+              const test = cur ? cur + ' ' + word : word;
+              if (cur && measure(FS_DESC, test) > limit) { lines.push(cur); cur = word; }
+              else cur = test;
+            }
+            if (cur) lines.push(cur);
+          }
+          while (lines.length && !lines[lines.length - 1]) lines.pop();   // 去掉尾部空行
         }
         // 宽度 = 最宽一行 + 左右留白；标题、冷却与旋转图标都不重叠
         let contentW = Math.max(titleW, rarW, statW);
@@ -1063,7 +1099,7 @@ const UI = {
         }
         // 高度：有掉落物 -> 末尾掉落行之后；否则数值行之后
         const H = (drops.length ? dropTop + (drops.length - 1) * dropRowH + CS + PCT_H : lastStat) + 16;
-        return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, rows, statY, W_ALL,
+        return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, rows, statY, W_ALL, STAT_GAP,
           xpTxt, drops, dropTop, dropRowH, CS, CGAP,
           FS_TITLE, FS_RELOAD, FS_RAR, FS_DESC, FS_STAT };
       },
@@ -1229,16 +1265,20 @@ const UI = {
         const STAT_COLORS = ['#7fe08a', '#ff6b6b', HEAL_TEXT_COLOR];
         // 生物：Health / Damage / Armor（Armor 用中性灰蓝，避免与治疗的粉色混淆）
         const MOB_STAT_COLORS = ['#7fe08a', '#ff6b6b', '#b8c6d1'];
-        const statLine = (label, color, val, refY) => {
+        const rowColors = t.mob ? MOB_STAT_COLORS : STAT_COLORS;
+        // 每行：标签（默认按行序取色，可被 row.labelColor 覆盖）+ 数值（默认白色，
+        // 可被 row.valueColor 覆盖，例如 Max Mob Rarity 用被吸引稀有度自己的颜色）。
+        // 标签宽度用【与 text() 完全相同的字体】量，数值跟在后面不会压住标签。
+        const gapPx = L.STAT_GAP * S;
+        for (let i = 0; i < L.rows.length; i++) {
+          const row = L.rows[i];
           const size = Math.round(L.FS_STAT * S * 100) / 100;
           ctx.font = `${L.W_ALL} ${size}px ${CardRenderer.FONT}`;
-          const lw = ctx.measureText(label).width;
-          text(label, bx, y + refY * S, L.FS_STAT, L.W_ALL, color);
-          text(String(val), bx + lw + 6 * S, y + refY * S, L.FS_STAT, L.W_ALL, '#ffffff');
-        };
-        const rowColors = t.mob ? MOB_STAT_COLORS : STAT_COLORS;
-        for (let i = 0; i < L.rows.length; i++) {
-          statLine(L.rows[i][0], rowColors[i] || '#ffffff', fmtNum(L.rows[i][1]), L.statY[i]);
+          const lw = ctx.measureText(row.label).width;
+          const ty = y + L.statY[i] * S;
+          text(row.label, bx, ty, L.FS_STAT, L.W_ALL, row.labelColor || rowColors[i] || '#ffffff');
+          text(typeof row.value === 'number' ? fmtNum(row.value) : String(row.value),
+            bx + lw + gapPx, ty, L.FS_STAT, L.W_ALL, row.valueColor || '#ffffff');
         }
         // 掉落物：每种花瓣一行（紧接在数值行下方），行内是该花瓣的各掉落稀有度；
         // 卡面 = 与背包卡完全同一条绘制管线（缩放 0.8 倍），概率标在卡面正下方。

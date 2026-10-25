@@ -25,15 +25,30 @@ const MobAI = {
     };
   },
 
-  // 推进状态机并返回本帧的移动欲望
+  // 推进状态机并返回本帧的移动欲望。
+  // 走 S 型路线的生物（蜜蜂）在这里统一做「摆头」后处理：
+  // 把欲望速度整体旋转一个随时间正弦变化的角度 —— 速度大小不变，
+  // 于是一边前进一边左右绕，路径变成蛇形（推进速度比直线追击略慢）。
   step(ai, dt, mob, player) {
+    const v = MobAI._step(ai, dt, mob, player);
+    if (!mob || !mob.sPath || (!v.x && !v.y)) return v;
+    ai.sT = (ai.sT || 0) + dt;
+    const a = Math.sin(ai.sT * (mob.sHz || 0.85) * TAU) * (mob.sAmp || 0.6);
+    const c = Math.cos(a), s = Math.sin(a);
+    return { x: v.x * c - v.y * s, y: v.x * s + v.y * c };
+  },
+
+  // 原始状态机（不含 S 型摆动）
+  _step(ai, dt, mob, player) {
     if (!ai || !mob) return { x: 0, y: 0 };
     ai.t -= dt;
 
     // 仇恨追击：中立/敌对生物优先冲向【累计伤害最高】的来源（被动型 passive 永不追击）。
     // 仇恨在死亡前永久保留；花瓣造成的伤害由调用方统一记到玩家头上。
+    // 被蜜（Honey）吸引的目标是特例：连被动型生物也会主动过去攻击，
+    // 否则瓢虫这类 passive 生物永远不会理会地上的蜜（看起来就像"蜜没有吸引效果"）。
     const tgt = mob.topThreat ? mob.topThreat() : null;
-    if (tgt && mob.hostility !== 'passive') {
+    if (tgt && (mob.hostility !== 'passive' || tgt.honey)) {
       const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
       const d = Math.hypot(dx, dy) || 1;
       return { x: dx / d * mob.chaseSpeed, y: dy / d * mob.chaseSpeed };

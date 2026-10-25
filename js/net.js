@@ -31,6 +31,8 @@ const GLOBAL_MAX_MOBS = Math.round(110 * DENSITY_SCALE);         // 1650：全�
 const SPAWN_INTERVAL = 0.1;         // 每 0.1s 补 1 只（总量变大，补缺口也要更快）
 const MOB_ACTIVE_R = 2200;          // 与玩家距离超过它 -> 生物休眠（不跑 AI、不参与推挤）
 const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
+const HONEY_PULL_R = 430;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
+const HONEY_IMMUNE_T = 40;          // 被蜜影响累计满 40s -> 该生物永久免疫所有蜜
 
 // ---------------- 传输层抽象 ----------------
 // 只约定「消息」这一种形态：上行 send()、下行 onMessage()。
@@ -128,6 +130,7 @@ class LocalServer {
     // 外观上就是"无敌期内没有碰撞箱、一碰就死"。
     InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);
     p.petals = []; p.petalWorld = [];
+    p._petalGen = [];                // 一卡多批（Pollen / Honey）的世代号，换人/换图清零
     this._slotSig = '';
     // 地图/玩家就位后立刻按生成表把全图铺满（等价于 /init <map>），避免开局空场
     this.spawnT = 0;
@@ -180,6 +183,8 @@ class LocalServer {
     p.reload = p.slots.map((c) => c
       ? { card: c, age: 0, dur: (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0) }
       : null);
+    // 死亡即清空所有花瓣实体（含放在地上的 Pollen / Honey）与世代号
+    p.petals = []; p._petalGen = [];
     for (const m of this.ents) if (m.threat) m.threat.length = 0;   // 重生后仇恨豁免
     // 客户端要跟着把预测副本搬到同一个点（否则会被下一帧快照硬拽过去）
     this._events.push({ kind: 'respawned', x: pos.x, y: pos.y, cp: pos.idx });
@@ -280,6 +285,12 @@ class LocalServer {
     const raw = [];
     let sum = 0;
     for (const z of zones) {
+      // 生成表里写的全是我们还没实现的物种（rock / ant_hole / ant_soldier …）：
+      // 这个区不参与人口分配，也不会退回默认物种（否则石头区里会长出瓢虫）。
+      if (z._noSpawn === undefined) {
+        z._noSpawn = !!String(z.mobs || '').trim() && parseSpawnMobs(z.mobs).length === 0;
+      }
+      if (z._noSpawn) continue;
       const tiles = z.area / (GARDEN_TILE * GARDEN_TILE);
       let want = Math.round(tiles * z.density * SPAWN_PER_TILE);
       want = clamp(want, 0, PER_ZONE_MAX);
@@ -300,6 +311,7 @@ class LocalServer {
   // 从该区的物种权重里【挑一个】—— 注意不是"每个物种各生成一批"，
   // 否则密度会随物种数量线性膨胀（这正是要保持不变的东西）。
   _pickSpawnType(zone) {
+    if (zone && zone._noSpawn) return null;      // 全是不存在的物种：这个区不刷怪
     const list = zone ? parseSpawnMobs(zone.mobs) : [];
     if (!list.length) {
       const t = MOB_TYPES.find((m) => m.slug === DEFAULT_SPAWN_SLUG) || MOB_TYPES[0] || null;
@@ -531,6 +543,26 @@ class LocalServer {
         if (!touch) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
+        // ---- 果冻碰撞（软花瓣拍在硬生物上）----
+        // 冲量 = 基础推力 × 稀有度份额 × 撞击强度 × 花瓣重量
+        //   · 撞击强度：花瓣【朝生物方向】的速度（贴住摩擦给最小推力，飞过来撞则更重）
+        //   · 花瓣重量：由卡面血量开方压缩（血量越多越沉，但不会让高稀有度花瓣变炮弹）
+        //   · 稀有度份额：KNOCKBACK_SHARE，越重的生物分到越少，super 基本纹丝不动
+        // 每 1/25s 结算一次，稳态速度 ≈ 推力 × 31.5 px/s（common ≈ 75px/s，肉眼清楚可见）。
+        // 蜜是"黏在地上的一坨"：它不该推怪（之前 jmass 用血量开方，Honey 血量几百上千
+        // 直接把怪弹飞，而普通花瓣血量只有个位数 -> 反而推不动，完全是反的）。
+        // 现在：只有会产生伤害的花瓣（Pollen 等）才有果冻推力，且重量项做上限压缩。
+        const jdx = m.x - b.x, jdy = m.y - b.y;
+        const jdd = Math.hypot(jdx, jdy) || 1;
+        const nx = jdx / jdd, ny = jdy / jdd;
+        const approach = Math.max(0, (b.vx || 0) * nx + (b.vy || 0) * ny);
+        const impact = clamp(PETAL_JELLY_IMPACT_MIN + approach / PETAL_JELLY_IMPACT_V,
+          PETAL_JELLY_IMPACT_MIN, PETAL_JELLY_IMPACT_MAX);
+        // 重量：按"卡面血量 / 30"开方，夹在 [0.8, 1.8]，高血量花瓣不会变成炮弹
+        const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
+        const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
+        const isHoney = !!(b.card && b.card.type && b.card.type.slug === 'honey');
+        if (!isHoney) applyKnockback(m, nx, ny, PETAL_JELLY_PUSH * jshare * impact * jmass);
         const toPetal = Math.max((m.dmg || 0) - 0, 0);
         const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
         if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
@@ -569,6 +601,35 @@ class LocalServer {
         }
       }
     }
+    // —— Honey 的仇恨吸引 ——
+    // 蜜不造成伤害（st.dmg = 0，上面的花瓣循环里自然不结算），只负责"挨打"；
+    // 这里把它写进周围生物的仇恨表，让它们转火来啃蜜而不是玩家。
+    // 限制条件：只在 HONEY_PULL_R 内、且稀有度不超过该蜜的 Max Mob Rarity。
+    const TICK = 1 / 25;
+    for (const m of this.ents) {
+      if (m.dead || m.honeyImmune) continue;
+      const mIdx = RARITY_ORDER.indexOf(m.rarity);
+      let hit = null;                       // 本 tick 范围内、够稀有度的一坨蜜
+      for (const b of p.petals) {
+        if (b.dead || !b.stationary || !b.card) continue;
+        const bt = b.card.type;
+        if (!bt || bt.slug !== 'honey') continue;
+        const maxR = (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(bt, b.card.rarity) : null;
+        if (maxR && mIdx > RARITY_ORDER.indexOf(maxR)) continue;
+        if (dist2(b.x, b.y, m.x, m.y) > HONEY_PULL_R * HONEY_PULL_R) continue;
+        // 仇恨值取"远高于任何伤害"，且 topThreat() 里蜜强制首位 —— 双重保证优先啃蜜
+        if (!m.threat.some((t) => t.ent === b)) m.threat.push({ ent: b, dmg: 1e9 });
+        if (!hit) hit = b;
+      }
+      if (!hit) continue;
+      // 被蜜影响累计满 40s -> 永久免疫所有蜜（之后无论再放多少蜜都不理）
+      m.honeyT = (m.honeyT || 0) + TICK;
+      if (m.honeyT >= HONEY_IMMUNE_T) {
+        m.honeyImmune = true;
+        m.threat = m.threat.filter((t) => !(t.ent && t.ent.honey));
+      }
+    }
+
     // 伤害飘字聚合窗口结算：窗口(0.12s)结束后把该怪累计的真实伤害作为一条飘字发出
     for (const m of this.ents) {
       if (m.dmgTextT > 0) {
@@ -617,6 +678,10 @@ class LocalServer {
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
     const p = this.player;
     if (!p) return;
+    // 放在地上的实体（Pollen / Honey 脱轨后）：打碎就是打碎，不会"复活"——
+    // 它不属于当前这一批，卡槽在脱轨那一刻就已经进入冷却（Honey 的冷却暂停
+    // 由 _tickReload 按"是否还有存活滞留实体"自动解除）。
+    if (b.stationary) return;
     const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
       ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
     if (cnt > 1) { b.respawnT = dur; return; }
@@ -780,9 +845,10 @@ class LocalServer {
       } : null,
       // 花瓣战斗状态：客户端不跑战斗，只按这里的 hp/hurtT/dead 做表现。
       // 少了这一段，服务端花瓣掉血甚至碎掉，客户端都看不到（表现为"花瓣不受伤"）。
-      // 一张卡可能对应多个独立实体（Light 的每个光点）：用 (slot, sub) 唯一定位
+      // 一张卡可能对应多个独立实体（Light 的每个光点）：用 (slot, sub, gen) 唯一定位。
+      // gen = 世代号：滞留型花瓣（Pollen / Honey）脱轨后重新装填，同一槽会同时存在多批实体。
       petals: p ? p.petals.map((b) => ({
-        slot: b.slotIndex, sub: b.sub || 0, hp: b.hp, maxHp: b.maxHp,
+        slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
         hurtT: b.hurtT || 0, dead: !!b.dead
       })) : [],
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）

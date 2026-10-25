@@ -1,6 +1,12 @@
 // assets.js — SVG 贴图加载与离屏预渲染（含白色剪影用于受击闪烁）
 'use strict';
+// 固定裁剪框的标定基准：瓢虫（mob3）。
+// 只有它按"实际图案范围"量一次，量出的比例被所有生物共用 —— 这样相对大小完全由素材
+// 自身决定（不再每张图各自撑满），同时瓢虫的观感与旧版逐像素一致。
+const ARTCROP_REF_KEY = 'mob3';
+
 const SpriteStore = {
+  _cropR: 0,     // 固定裁剪框比例（相对画布边长）；0 = 还没标定出来
   images: {},   // key -> Image | null   (null = 已尝试但失败)
   cache: {},    // key -> { size: canvas }
   white: {},    // key -> { size: canvas }  白色剪影
@@ -82,12 +88,44 @@ const SpriteStore = {
     if (!cv) return null;                    // 素材未就绪：不缓存，下一帧再试
     let g = null;
     try {
-      const d = cv.getContext('2d').getImageData(0, 0, N, N).data;
+      // 与绘制同一个固定裁剪框 -> 轮廓坐标系 = drawSize 坐标系（碰撞箱与外观严格一致）
+      let src = cv;
+      const r = this._cropRect(N);
+      if (r) {
+        const tmp = document.createElement('canvas');
+        tmp.width = N; tmp.height = N;
+        const tc = tmp.getContext('2d');
+        tc.imageSmoothingQuality = 'high';
+        tc.drawImage(cv, r[0], r[1], r[2], r[3], 0, 0, N, N);
+        src = tmp;
+      }
+      const d = src.getContext('2d').getImageData(0, 0, N, N).data;
       g = new Uint8Array(N * N);
       for (let i = 0; i < N * N; i++) g[i] = d[i * 4 + 3] > 96 ? 1 : 0;
     } catch (e) { g = null; }   // 画布被污染（file:// 等）：退回圆形碰撞
     if (g) this.alphaGridCache[ck] = g;
     return g;
+  },
+
+  // ---- 固定比例裁剪（替代原来的"每张图各量一次 bbox"自适应裁剪）----
+  // 生物 SVG 的 viewBox 里有透明留白，直接按 viewBox 画会显得比碰撞箱小一圈；
+  // 但"按各自实际图案撑满"会让不同生物的相对大小失真（同稀有度蜜蜂/瓢虫被拉成一样大）。
+  // 现在所有生物共用【同一个固定裁剪框】：以瓢虫实际图案范围标定一次（ARTCROP_REF_KEY），
+  // 于是相对大小完全由素材自身决定，而瓢虫的观感与旧版逐像素一致。
+  _cropRatio() {
+    if (this._cropR) return this._cropR;
+    const REF = 160;
+    const b = this.canvas(ARTCROP_REF_KEY, REF) ? this._artBox(ARTCROP_REF_KEY, REF) : null;
+    if (b) this._cropR = Math.max(b[2], b[3]) / REF;   // 取长边，保持正方不变形
+    return this._cropR || null;                        // 量不到就不缓存，等素材就绪再试
+  },
+
+  // 固定裁剪矩形（相对 size×size 画布，居中）
+  _cropRect(size) {
+    const r = this._cropRatio();
+    if (!r) return null;                               // 量不到（未就绪/污染）-> 不裁剪
+    const d = size * r, off = (size - d) / 2;
+    return [off, off, d, d];
   },
 
   // 碰撞轮廓多边形：把实心度网格用 marching squares 描出【外边界】，抽样简化后
@@ -167,7 +205,7 @@ const SpriteStore = {
     const SS = 2;
     const base = this.canvas(key, size * SS);
     if (!base) return null;
-    const b = this._artBox(key, size * SS);
+    const b = this._cropRect(size * SS);          // 固定比例裁剪框（见 _cropRatio）
     if (!b) { const fb = this.canvas(key, size); this.artCache[ck] = fb; return fb; }
     const out = document.createElement('canvas');
     out.width = size; out.height = size;
@@ -186,7 +224,7 @@ const SpriteStore = {
     this.canvas(key, size * SS);
     const base = this.white[key] ? this.white[key][size * SS] : null;
     if (!base) return null;
-    const b = this._artBox(key, size * SS);
+    const b = this._cropRect(size * SS);          // 与本体同一个固定裁剪框
     if (!b) { const fb = this.white[key][size] || base; this.artWhiteCache[ck] = fb; return fb; }
     const out = document.createElement('canvas');
     out.width = size; out.height = size;
@@ -208,7 +246,7 @@ const SpriteStore = {
     this.canvas(key, size * SS);
     const base = this.white[key] ? this.white[key][size * SS] : null;
     if (!base) return null;
-    const b = this._artBox(key, size * SS);
+    const b = this._cropRect(size * SS);          // 与本体同一个固定裁剪框
     if (!b) { const fb = this.white[key] ? this.white[key][size] : null; this.artRedCache[ck] = fb; return fb; }
     const out = document.createElement('canvas');
     out.width = size; out.height = size;
@@ -222,13 +260,11 @@ const SpriteStore = {
     return out;
   },
 
-  // 实际图案在 SVG 原坐标系中的归一化包围盒（一次性测量，供 drawMob 直接矢量裁剪绘制）。
-  // 用固定参考分辨率量一次即可——包围盒与分辨率无关。
+  // 固定裁剪框的归一化矩形（相对整张画布）。所有生物共用同一个，可直接用于矢量裁剪绘制。
   artRect(key) {
     if (this.artRectCache[key] !== undefined) return this.artRectCache[key];
     const REF = 160;
-    const base = this.canvas(key, REF);
-    const b = base ? this._artBox(key, REF) : null;
+    const b = this._cropRect(REF);
     const r = b ? [b[0] / REF, b[1] / REF, b[2] / REF, b[3] / REF] : null;
     this.artRectCache[key] = r;
     return r;

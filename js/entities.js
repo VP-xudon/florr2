@@ -4,8 +4,18 @@
 // 世界放大后（瓦片 24→384），移动速度按相同比例放大，保持手感一致。
 const SPEED_SCALE = 5;
 
-// 玩家基础最大移速（生物仇恨追击速度以此为基准 = 0.9 倍）
+// 玩家基础最大移速（生物仇恨追击速度以此为基准）
 const PLAYER_BASE_SPEED = 232 * SPEED_SCALE * 0.2;
+// ---- 生物移动速度口径（全部以"玩家默认最高速度"为基准）----
+const MOB_CHASE_MULT = 0.95;          // 通用追击速度 = 0.95×（瓢虫等）
+const MOB_WANDER_RANGE = [0.3, 0.5];  // 游荡速度 = 追击速度 ×(0.3~0.5) 随机
+const MOB_WANDER_SCALE = 0.75;        // 游荡速度在基础值上再打 0.75 折（全生物统一）
+const BEE_CHASE_MULT = 1.05;          // 蜜蜂追击 = 1.05×（走 S 型，实际推进比直线略慢）
+const BEE_WANDER_FACTOR = 1.2;        // 蜜蜂游荡 = 瓢虫同分布游荡速度 ×1.2
+// 走 S 型（持续左右摆头）的生物：目前只有蜜蜂
+const MOB_S_PATH_SLUGS = { bee: 1 };
+const BEE_S_AMP = 0.62;               // 摆头幅度（弧度 ≈ 35°）
+const BEE_S_HZ = 0.85;                // 摆头频率（Hz）
 // 实体重量按【横截面积(直径²)】换算：直径差 N 倍 -> 重量差 N² 倍。
 // 例：super 直径约为 common 的 ~11 倍 -> ~121 倍重（用户要求面积而非线性）。
 // 障碍型生物 ×5；花朵本体 = unusual 重量；花瓣 = 对应稀有度重量。
@@ -124,6 +134,31 @@ let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；�
 // 用全局而不是每个 Player 实例各存一份：客户端预测副本与服务端权威副本必须同速，
 // 否则两边位移不一致（表现为持续被快照拉回/橡皮筋）。
 let MOVE_MULT = 1;
+
+// ---- 花瓣吸附（果冻手感）----
+// 生物边缘到花瓣的距离 ≤ 1 倍花瓣直径 -> 强力吸过去（吸力远大于回轨力，吸上基本不回来）；
+// 吸住后贴附在生物表面，被轨道拖着"揉搓"，直到轨道应在位置拉开 2.5 倍直径才松手。
+const PETAL_D = PETAL_R * 2;
+const PETAL_PULL_RANGE = 0.75;     // 触发距离（× 花瓣直径，按生物边缘算；已按需求缩到 0.75x）
+const PETAL_PULL_BREAK = 2.5;      // 松手阈值（× 花瓣直径，相对吸住时的轨道差增量）
+const PETAL_PULL_K = 3.2;          // 吸附时的弹簧刚度倍率
+
+// ---- 滞留型花瓣（Pollen / Honey）脱离轨道后的物理 ----
+const PETAL_DETACH_KICK = 0.55;   // 脱离瞬间保留的惯性比例（其余能量在"脱手"时损耗）
+const PETAL_DETACH_DRAG = 3.2;    // 惯性衰减速率：越大越快停住（3.2 ≈ 一两秒滑停）
+const PETAL_DETACH_TTL = 30;      // Pollen 实体最长存在时间（秒）；Honey 由血量决定
+
+// 花瓣对生物的"果冻碰撞"基础推力（px，每 1/25s tick 一次）。
+// applyKnockback 的语义是"希望造成的总位移"，冲量 = total × KNOCKBACK_DECAY(12)，
+// 每 40ms 衰减到 62%，所以持续接触时的稳态速度 ≈ total × 31.5 px/s。
+//   基础 5.5 × 份额0.85(common) × 重量0.8 × 摩擦0.8 ≈ 2.99 -> 稳态约 94px/s
+//   （比生物自己的游荡速度还快，贴着就能把怪推着走）；高速撞击约 280px/s。
+//   高稀有度生物份额降到 0.08 -> 约 9px/s（几乎推不动，符合"重"的直觉）
+const PETAL_JELLY_PUSH = 5.5;
+// 撞击强度：花瓣朝生物方向的速度越大推得越狠（贴住摩擦用小推力，飞过来撞是大推力）
+const PETAL_JELLY_IMPACT_V = 500;   // 速度归一到这个值时 ≈ 1.9 倍推力
+const PETAL_JELLY_IMPACT_MIN = 0.8;
+const PETAL_JELLY_IMPACT_MAX = 2.4;
 
 // 地形减速瓦片（foliage / seaweed / vine，见 map.js slowAt）上的移速系数：
 // 默认速度的 40%；同时所有花瓣被打回"待加载"（见 Player._tickReload / reloadDone）。
@@ -350,6 +385,10 @@ class Player {
     this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
     this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
+    // 一卡多批（Pollen / Honey）：每个槽一个"世代号"。脱轨的实体【继续留在 this.petals】
+    // 里（stationary），新一批实体用递增的世代号区分 —— 花瓣实体始终是同一套东西，
+    // 不区分"跟着玩家的"和"放在地上的"，绘制/碰撞/战斗/仇恨全部复用同一条路径。
+    this._petalGen = [];
     this.reload = [];           // 主槽装填状态：{ card, age, dur } | null（与 slots 等长）
     this.reloadHold = [];       // 主槽装填暂停标记：换卡动画播放期间为 true（UI 置位/清除）
     this.slowTile = false;      // 是否站在减速瓦片（foliage/seaweed/vine）上：移速 ×0.4 + 花瓣待加载
@@ -477,6 +516,15 @@ class Player {
     this._syncPetals(dt, map, mobs);
   }
 
+  // 滞留型花瓣（Pollen / Honey）的脱轨条件：
+  // 只要处在 reach / detect 模式就立刻生效 —— 按下按键那一刻模式就已经切换，
+  // 不能等花瓣飞到扩展轨道的位置（那是"外观过渡"，与机制无关）。
+  // normal 模式下一律跟随轨道。
+  _detachReady() {
+    if (this.dead) return false;
+    return this.mode === 'reach' || this.mode === 'detect';
+  }
+
   // 客户端侧销毁一朵花瓣实体：转退场幽灵（由 _syncPetals 的差分完成）+
   // 该槽重新结算装填。与服务端 _destroyPetal 语义一致，但这里只做表现。
   _killPetalBody(b) {
@@ -501,10 +549,12 @@ class Player {
   _applyNetPetalStates() {
     if (!this.netPetals) return;
     for (const b of this.petals) {
-      // 按 (槽位, 子序号) 匹配：一张卡可能对应多个独立实体（Light 的每个光点）
-      const ns = this.netPetals[b.slotIndex + '|' + (b.sub || 0)]
+      // 按 (槽位, 子序号, 世代号) 匹配：一张卡可能对应多个独立实体（Light 的每个光点），
+      // 滞留型花瓣（Pollen/Honey）还会同时存在多批 -> 必须带世代号，否则会串血。
+      const ns = this.netPetals[b.slotIndex + '|' + (b.sub || 0) + '|' + (b.gen || 0)]
         || (typeof this.netPetals.find === 'function'
-          ? this.netPetals.find((x) => x.slot === b.slotIndex && (x.sub || 0) === (b.sub || 0))
+          ? this.netPetals.find((x) => x.slot === b.slotIndex && (x.sub || 0) === (b.sub || 0)
+            && (x.gen || 0) === (b.gen || 0))
           : null);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
@@ -549,8 +599,18 @@ class Player {
         // 所有"待加载 -> 正常"的转换都遵循这条规则（不保留、不继承旧进度）。
         r.frozen = false;
         r.age = 0;
-      } else if (!this.reloadHold[i]) {
+      } else if (!this.reloadHold[i] && !r.hold) {
         r.age += dt;
+      }
+      // r.hold：Honey 卡在"放在地上的实体"存活期间暂停冷却，实体全部消失后才开始冷却。
+      // 判据直接看 petals 里的滞留实体（客户端/服务端同一份数据，不需要额外同步）。
+      // 注意 r 可能为 undefined（本帧刚建好 reload 记录）：必须判空，否则每帧抛异常 -> 黑屏。
+      if (r && r.hold) {
+        let alive = false;
+        for (const b of this.petals) {
+          if (b.stationary && !b.dead && b.slotIndex === i) { alive = true; break; }
+        }
+        if (!alive) { r.hold = false; r.age = 0; }
       }
     }
   }
@@ -594,6 +654,33 @@ class Player {
     // 各自占一个轨道位、各自有血量、各自结算伤害与碰撞，等同装了 N 个单体花瓣。
     // 只有【装填完成】的槽位才生成实体；轨道位按实体数分配 -> 空位保留。
     const bodies = [];
+    // ① 滞留实体（Pollen / Honey 脱轨后的那一批）：仍然是 petals 里的实体，
+    //    只是不再跟随轨道。原样保留，并累计存活时间（Pollen 有存活上限）。
+    for (const b of this.petals) {
+      if (!b.stationary) continue;
+      // 已碎的滞留实体直接丢掉：它不属于任何一批，也不会"重装填复活"，
+      // 留着只会在 petals 里越积越多（退场幽灵在下死手那一刻已经生成）。
+      if (b.dead) continue;
+      // 卡片 ↔ 实体严格对应：这张卡被切下/换掉，地上的实体立刻消失。
+      // （否则切下 Honey 再切回来会凭空多出一批实体，越切越多。）
+      if (this.slots[b.slotIndex] !== b.card) {
+        b.dead = true;
+        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+        continue;
+      }
+      b.age += dt;
+      b.hurtT = Math.max(0, (b.hurtT || 0) - dt);
+      b.life = (b.life || 0) + dt;
+      // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）
+      const lim = (b.card && b.card.type && b.card.type.holdReloadUntilDeath)
+        ? Infinity : PETAL_DETACH_TTL;
+      if (b.life >= lim) {
+        b.dead = true;
+        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+        continue;
+      }
+      bodies.push(b);
+    }
     let spotBase = 0;
     for (let k = 0; k < n; k++) {
       const slotIndex = equipped[k];
@@ -607,26 +694,49 @@ class Player {
       // 卡槽的"水缸"阴影则按存活实体的血量总和 / 卡面总 hp 计算（见 ui.js _reloadTick）。
       const cardHp = st.hp || 30;
       const maxHp = cnt > 1 ? cardHp / cnt : cardHp;
+      const gen = this._petalGen[slotIndex] | 0;
       for (let sub = 0; sub < cnt; sub++) {
         let body = null;
         for (const b of this.petals) {
-          if (b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
+          // 匹配"本世代"的实体：脱轨后世代号 +1，旧实体不再被这里复用
+          if (!b.stationary && (b.gen | 0) === gen
+            && b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
         }
         if (!body) {
-          body = { slotIndex, sub, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0 };
+          body = { slotIndex, sub, gen, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0 };
         }
         body.age += dt;
         body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
         body.ord = k; body.n = n;
         body.cnt = cnt; body.spot = myBase + sub;   // 该实体占用的轨道位
+        // 标记"这是蜜"：AI 用它判断"被蜜吸引"的生物连被动型也会主动过来啃
+        body.honey = (card.type.slug === 'honey');
+        // ---- 滞留型花瓣（Pollen / Honey）：reach / detect 模式加载完成后 0.5s 脱轨 ----
+        // 只有这两种模式才会"甩出去留在原地"（normal 模式永远跟着轨道）。
+        const detachAt = card.type.detachAfter || 0;
+        if (detachAt > 0 && !body.dead && body.age >= detachAt && this._detachReady()) {
+          body.stationary = true;                   // 留在原地：不再跟随轨道
+          body.life = 0;
+          body.vx = (body.vx || 0) * PETAL_DETACH_KICK;
+          body.vy = (body.vy || 0) * PETAL_DETACH_KICK;
+          bodies.push(body);                        // 仍然是实体，只是换了运动规则
+          this._petalGen[slotIndex] = gen + 1;      // 本槽换代：下一批实体用新世代号
+          // 卡面进入冷却：Pollen 立刻重新装填；Honey 等实体死亡（r.hold，见 _tickReload）
+          const dur = (card.type.reload != null) ? card.type.reload : 0;
+          const r = { card, age: 0, dur };
+          if (card.type.holdReloadUntilDeath) r.hold = true;
+          this.reload[slotIndex] = r;
+          continue;
+        }
         bodies.push(body);
       }
     }
     // 本次已不在装备栏里的实体 -> 转为"退场幽灵"（卸下/删除 = 放大 + 渐隐）
     for (const b of this.petals) {
+      if (b.stationary) continue;                  // 滞留实体由 ① 保留
       let kept = false;
       for (const nb of bodies) {
-        if (nb.slotIndex === b.slotIndex && nb.card === b.card && nb.sub === b.sub) { kept = true; break; }
+        if (nb.slotIndex === b.slotIndex && nb.card === b.card && nb.sub === b.sub && !nb.stationary) { kept = true; break; }
       }
       // 多体卡的已碎实体：死亡瞬间已经单独生成过幽灵，这里不重复
       if (!kept && !(b.dead && (b.cnt || 1) > 1)) {
@@ -657,8 +767,30 @@ class Player {
     else if (this.mode === 'detect') reachMult = 1 - (1 - PETAL_DETECT) * this.modeT;  // 1 -> 0.5
     const baseReach = this.r * (1 + PETAL_REACH) * 1.105;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
+    // 吸附候选：先在玩家附近筛一遍（轨道半径 + 触发距离 + 余量），
+    // 避免全图 1600+ 只生物时每片花瓣都扫全表。
+    const pullR = baseReach + PETAL_D * PETAL_PULL_RANGE + 240;
+    let nearMobs = null;
+    if (mobs && mobs.length) {
+      nearMobs = [];
+      for (const m of mobs) {
+        if (!m || m.dead) continue;
+        if (Math.hypot(m.x - this.x, m.y - this.y) > pullR + (m.r || 0)) continue;
+        nearMobs.push(m);
+      }
+    }
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
+      // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
+      // 不再跟随轨道、也不参与生物吸附（它就"放在地上"）。
+      if (b.stationary) {
+        if (b.vx == null) { b.vx = 0; b.vy = 0; }
+        b.vx = damp(b.vx, 0, PETAL_DETACH_DRAG, dt);
+        b.vy = damp(b.vy, 0, PETAL_DETACH_DRAG, dt);
+        if (Math.abs(b.vx) < 1 && Math.abs(b.vy) < 1) { b.vx = 0; b.vy = 0; }
+        if (b.vx || b.vy) this._resolvePetal(b, b.vx * dtc, b.vy * dtc);
+        continue;
+      }
       if (b.fxActive) continue;     // 特效驱动中（如玫瑰飞向主角）：位置由引擎接管
       // 逐个花瓣取倍率：标了 noReach 的花瓣（如 Rose）【不计算 reach 的延长】，
       // 保持基础轨道距离（detect 的收拢仍然生效，因为它 ≤ 1）。
@@ -669,14 +801,49 @@ class Player {
       const tx = this.x + Math.cos(ang) * reach;
       const ty = this.y + Math.sin(ang) * reach;
 
+      // ---- 花瓣吸附（果冻感）----
+      // 生物边缘离花瓣 ≤ 1 倍花瓣直径时被强力吸过去；一旦吸住就贴在生物表面
+      //（目标点 = 生物表面沿当前方向的接触点），于是被轨道拖着在生物身上"揉搓"。
+      // 只有轨道应在位置相对吸住时被拉开 2.5 倍直径（人跑远了）才松手回轨道。
+      let gx = tx, gy = ty, K = PETAL_SPRING_K;
+      let mob = b.pullMob;
+      if (mob && mob.dead) mob = null;
+      const orbitGap = dist(tx, ty, b.x, b.y);
+      if (mob) {
+        const breakAt = (b.pullD0 || 0) + PETAL_D * PETAL_PULL_BREAK;
+        // 松手条件：① 轨道应在位置被拉太远（人跑远了）；② 生物本身已经离开玩家附近
+        //（客户端视图被回收的旧引用也走这条，避免花瓣黏在一个不再更新的残影上）
+        const mobFar = Math.hypot(mob.x - this.x, mob.y - this.y) > pullR + (mob.r || 0);
+        if (orbitGap > breakAt || mobFar) mob = null;
+      }
+      if (!mob && nearMobs && nearMobs.length) {
+        // 找"边缘距离"最近、且在触发范围内的生物
+        let best = null, bestEdge = PETAL_D * PETAL_PULL_RANGE;
+        for (const m of nearMobs) {
+          if (!m || m.dead) continue;
+          const edge = Math.hypot(m.x - b.x, m.y - b.y) - (m.r || 0);
+          if (edge <= bestEdge) { bestEdge = edge; best = m; }
+        }
+        if (best) { mob = best; b.pullD0 = orbitGap; }   // 记住吸住那一刻的轨道差
+      }
+      b.pullMob = mob;
+      if (mob) {
+        const dx = b.x - mob.x, dy = b.y - mob.y;
+        const dd = Math.hypot(dx, dy) || 1;
+        const contact = (mob.r || 0) + PETAL_R * 0.55;   // 贴在生物表面（轻微嵌入）
+        gx = mob.x + dx / dd * contact;
+        gy = mob.y + dy / dd * contact;
+        K = PETAL_SPRING_K * PETAL_PULL_K;               // 吸附力远大于回轨力：吸上就难回来
+      }
+
       // 欠阻尼弹簧：速度带惯性，离目标越远加速越大；
       // 模式切换 / 数量重排 / 急转向都表现为"甩一下再归位"的自然追赶
       if (b.vx == null) { b.vx = 0; b.vy = 0; }
-      b.vx += (PETAL_SPRING_K * (tx - b.x) - PETAL_SPRING_D * b.vx) * dtc;
-      b.vy += (PETAL_SPRING_K * (ty - b.y) - PETAL_SPRING_D * b.vy) * dtc;
+      b.vx += (K * (gx - b.x) - PETAL_SPRING_D * b.vx) * dtc;
+      b.vy += (K * (gy - b.y) - PETAL_SPRING_D * b.vy) * dtc;
       const sp = Math.hypot(b.vx, b.vy);
       if (sp > PETAL_MAX_SPEED) { const s = PETAL_MAX_SPEED / sp; b.vx *= s; b.vy *= s; }
-      // 自由运动（无生物物理碰撞；伤害由 game.js 的战斗 tick 结算）
+      // 自由运动（花瓣不是硬碰撞体；对生物的"果冻碰撞"由战斗 tick 结算击退）
       this._resolvePetal(b, b.vx * dtc, b.vy * dtc);
     }
 
@@ -684,7 +851,11 @@ class Player {
     // dead：该实体已碎、正在独立重装填 —— 不绘制）
     this.petalWorld = this.petals.map((b) => ({
       x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age,
-      hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead
+      hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead,
+      stationary: !!b.stationary,
+      // 自带贴图键：滞留实体可能在卡片被卸下之后还存在，不能再依赖 slots[index]
+      svg: (b.card && b.card.type) ? b.card.type.svg : null,
+      hp: b.hp, maxHp: b.maxHp
     }));
   }
 
@@ -709,9 +880,11 @@ class Player {
       const p = this.slots[pp.index];
       const size = 15 * 0.9;                        // 13.5：花瓣视觉缩至原 0.9
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
-      const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
-      const a = spawnFade(pp.age);                // 出场：0.1s 渐显
-      const cv = CardRenderer.artCanvas(p.type.svg, 128);   // 未就绪时返回 null
+      // 滞留实体（放在地上的 Pollen/Honey）固定正向、不做出场渐显
+      const svgKey = pp.svg || (p && p.type && p.type.svg);
+      const rot = pp.stationary ? 0 : Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
+      const a = pp.stationary ? 1 : spawnFade(pp.age);
+      const cv = svgKey ? CardRenderer.artCanvas(svgKey, 128) : null;   // 未就绪时返回 null
       if (cv) drawPetalArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
       // 未就绪【不画】也不能回退 drawSprite：那按原始 viewBox contain 绘制，
       // 图形会缩得极小（"错误加载的大小"），就绪后由 artCanvas 统一管线补上。
@@ -920,10 +1093,19 @@ const MOB_DIAM = (function () {
   for (let i = 0; i < order.length; i++) o[order[i]] = MOB_DIAM_BASE * Math.pow(MOB_DIAM_STEP, i);
   return o;
 })();
+// 注：生物体型【只用稀有度表】，不再有"按生物种类偏移几档"的特例。
+// 各生物的相对大小由 SpriteStore 的固定比例裁剪决定（所有贴图共用同一个裁剪框，
+// 以瓢虫的实际图案范围为基准标定）—— 素材画多大就显示多大。
+//
+// 个别生物需要整体比同稀有度的瓢虫更大/更小：用【等比倍数】而不是"偏移几档"。
+//   bee = 1.395：使蜜蜂 common 正好等于原本 unusual 的大小（所有稀有度同比例放大）
+const MOB_SIZE_SCALE = { bee: 1.395 };
+
 // 贴图朝向补偿：部分生物 SVG 的「头」不指向 +x（瓢虫的头在图内指向左上 -135°）。
 // 绘制与碰撞统一在 facing 上加这个偏角，使头始终朝向实际移动方向。
 const MOB_ART_ROT = {
   '3': Math.PI * 3 / 4,       // 瓢虫：头中心在图内朝 -135°，补偿 +135°
+  '4': Math.PI * 3 / 4,       // 蜜蜂：尾针在右下角(76.8,76.8)，头同样朝左上，补偿相同
 };
 // 瓢虫描边圈独立图层（assets/entities/3_ring.svg，main.js 预加载）：
 // 渲染专用的生物素材统一放在 assets/entities/，assets/mobs/ 只存原始贴图。
@@ -1007,8 +1189,10 @@ class Mob {
     const rs = type.rarityStats && type.rarityStats[this.rarity];
     const baseHp = rs ? (rs.hp || 0) : type.hp;
     const baseDmg = rs ? (rs.dmg || 0) : type.dmg;
-    // 视觉直径按稀有度取（mobScale(level) 留给日后的星级/等级）
-    const diam = Math.round(PLAYER_VISUAL_D * (MOB_DIAM[this.rarity] || MOB_DIAM_BASE) * mobScale(this.level));
+    // 视觉直径 = 稀有度倍率 × 等级缩放 × 该物种的等比体型倍数（见 MOB_SIZE_SCALE）
+    const sizeScale = MOB_SIZE_SCALE[type.slug] || 1;
+    const diam = Math.round(PLAYER_VISUAL_D * (MOB_DIAM[this.rarity] || MOB_DIAM_BASE)
+      * mobScale(this.level) * sizeScale);
     this.visualD = diam;
     this.r = diam / 2;                  // 碰撞/名牌半径跟着视觉直径走
     this.drawSize = diam;               // 贴图裁剪后正好撑满它 -> 视觉与碰撞箱一致
@@ -1020,10 +1204,18 @@ class Mob {
     // 障碍型生物（registry type=障碍型生物 或 speed=0）：几乎不可移动
     this.obstacle = (type.type === 'Obstacle') || !(type.speed > 0);
     // 速度统一（瓢虫为原型，全体非障碍生物通用）：
-    //   仇恨追击 = 玩家最大移速 0.9 倍；随机游荡 = 追击速度 0.3~0.5 倍随机
-    this.chaseSpeed = 0.9 * PLAYER_BASE_SPEED;
-    this.wanderSpeed = this.obstacle ? 0 : this.chaseSpeed * rand(0.3, 0.5);
+    //   仇恨追击 = 玩家默认最高速度 0.95 倍；随机游荡 = 瓢虫同分布 0.3~0.5 倍
+    //   蜜蜂例外：追击 1.05 倍（走 S 型所以实际推进更慢）、游荡 = 瓢虫游荡 ×1.2
+    const isBee = !!MOB_S_PATH_SLUGS[type.slug];
+    const ladybugWander = MOB_CHASE_MULT * PLAYER_BASE_SPEED * rand(MOB_WANDER_RANGE[0], MOB_WANDER_RANGE[1]);
+    this.chaseSpeed = (isBee ? BEE_CHASE_MULT : MOB_CHASE_MULT) * PLAYER_BASE_SPEED;
+    this.wanderSpeed = this.obstacle ? 0
+      : (isBee ? ladybugWander * BEE_WANDER_FACTOR : ladybugWander) * MOB_WANDER_SCALE;
     this.speed = this.wanderSpeed;
+    // S 型路线（蜜蜂）：朝向按正弦持续左右偏摆，走出一条蛇形曲线
+    this.sPath = isBee;
+    this.sAmp = BEE_S_AMP;
+    this.sHz = BEE_S_HZ;
     // 重量：按横截面积(直径²)；障碍型 ×5（几乎推不动）
     this.weight = rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
     this.color = type.color; this.boss = !!type.boss;
@@ -1034,6 +1226,8 @@ class Mob {
     this.dots = (svgKey === '3') ? this._makeDots() : null;   // 瓢虫：程序化随机斑点
     this.hostility = (rs && rs.hostility) || type.hostility || 'neutral';   // 仇恨按稀有度（瓢虫 common/unusual 被动、rare+ 中立）
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
+    this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
+    this.honeyImmune = false;           // 被蜜影响满 40s 后永久免疫所有蜜
     this.flash = 0; this.hitCd = 0; this.squash = 0;
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
@@ -1070,14 +1264,20 @@ class Mob {
     return { applied, killed: false };
   }
 
-  // 当前最恨的实体：累计伤害最高且还活着；没有则 null
+  // 当前最恨的实体：蜜（Honey）**强制排首位**（官方：蜜会强行抢走仇恨），
+  // 其余按累计伤害最高且还活着；被蜜影响满 40s 后永久免疫所有蜜（honeyImmune）。
   topThreat() {
-    let best = null;
+    let honey = null, best = null;
     for (const t of this.threat) {
       if (!t.ent || t.ent.dead) continue;
+      if (t.ent.honey) {
+        if (!this.honeyImmune && (!honey || t.dmg > honey.dmg)) honey = t;
+        continue;
+      }
       if (!best || t.dmg > best.dmg) best = t;
     }
-    return best ? best.ent : null;
+    const pick = honey || best;
+    return pick ? pick.ent : null;
   }
 
   // 瓢虫鞘翅斑点（贴图上的圆点已删除，全部改为运行时随机生成）：
@@ -1355,6 +1555,16 @@ const DROP_FACE_PX = 144;        // 离屏卡面分辨率（4 倍超采样，缩
 const DROP_PICK_R = 2;           // 拾取半径 = 2 × 玩家【直径】
 const DROP_FLY_T = 0.26;         // 飞回玩家中心并缩小的时长（秒）
 const DROP_POP_T = 0.34;         // 从死亡点弹到目标位置的时长（秒）
+// 掉落物存活时长（秒，按掉落物自身稀有度）：common 30 / unusual 60 / rare 90 / epic 120 /
+// legendary 150 / mythic 180 / ultra 210；super 及以上不过期（Infinity）。
+const DROP_LIFETIME = {
+  common: 30, unusual: 60, rare: 90, epic: 120, legendary: 150,
+  mythic: 180, ultra: 210, super: Infinity, eternal: Infinity, unique: Infinity
+};
+const DROP_DESPAWN_T = 0.5;      // 到期后的渐隐消失时长（秒）
+// 呼吸起伏：每 2 秒 3 个来回 -> 周期 2/3 s -> 角频率 2π×(3/2)
+const DROP_BREATH_W = (TAU * 3) / 2;
+const DROP_BREATH_AMP = 0.024;   // 幅度 2.4%（原 1.2% 的 2 倍）
 const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal', 'unique']);   // 持续冒粒子的稀有度
 const _dropFaceCache = {};       // slug|rarity -> 已渲染好的卡面 canvas
 
@@ -1400,9 +1610,12 @@ class DropCard {
     this.count = 1;          // 完全相同的卡牌堆叠在同一张卡上
     this.age = 0;
     this.size = DROP_SIZE;
+    this.life = (DROP_LIFETIME[this.rarity] != null) ? DROP_LIFETIME[this.rarity] : DROP_LIFETIME.common;
+    this.fade = 0;           // 到期渐隐进度 0~1（1 = 彻底消失）
     this.fly = 0;            // 0 = 停留；0~1 = 正在飞向玩家（同时缩小）
     this.sx = 0; this.sy = 0;
     this.done = false;
+    this.picked = false;     // 是否已被玩家捡走（到期自然消失 = false）
     this.sparkT = 0;         // Ultra+ 持续粒子的发射计时
     // 随机偏转：-15° ~ +15°（左右各 15 度），让掉在地上的卡看起来是"散落"而非整齐排列。
     // 生成时定死，飞行拾取过程中不再变化。
@@ -1412,11 +1625,17 @@ class DropCard {
   pick() {
     if (this.fly) return;
     this.fly = 0.0001;
+    this.picked = true;        // 区分"被捡走"与"到期自然消失"（后者不能进背包）
     this.sx = this.x; this.sy = this.y;
   }
   update(dt, player) {
     this.age += dt;
-    // ① 弹出阶段：从死亡点飞向目标位置（期间不可拾取）
+    // ① 存活时长到期：没有被捡走就开始渐隐，直到完全消失（super 及以上永不过期）
+    if (!this.fly && Number.isFinite(this.life) && this.age >= this.life) {
+      this.fade = Math.min(1, this.fade + dt / DROP_DESPAWN_T);
+      if (this.fade >= 1) { this.done = true; return; }
+    }
+    // ② 弹出阶段：从死亡点飞向目标位置（期间不可拾取）
     if (this.popT < 1) {
       this.popT = Math.min(1, this.popT + dt / DROP_POP_T);
       const t = this.popT, c1 = 1.10158, c3 = c1 + 1;
@@ -1438,13 +1657,18 @@ class DropCard {
   get scale() { return this.fly ? (1 - 0.82 * this.fly) : 1; }
   draw(ctx) {
     const pop = spawnPop(this.age);                 // 出场 Q 弹（与全局实体一致）
-    // 呼吸：幅度 1.2%、周期 ≈ 3.1s（0.4Hz）—— 只是"活着"的极轻微起伏，不抢视线
-    const breathe = 1 + 0.012 * Math.sin(this.age * 2.5);
-    const d = this.size * this.scale * pop * breathe;
-    if (d <= 0.5) return;
+    // 呼吸：幅度 2.4%，每 2 秒 3 个来回（周期 2/3 s）
+    const breathe = 1 + DROP_BREATH_AMP * Math.sin(this.age * DROP_BREATH_W);
+    // 到期渐隐时同步缩一点，读起来像"慢慢化掉"而不是突然消失
+    const fadeK = 1 - this.fade;
+    const d = this.size * this.scale * pop * breathe * (1 - 0.15 * this.fade);
+    if (d <= 0.5 || fadeK <= 0) return;
     const cv = dropFaceCanvas(this.slug, this.rarity, this.name, this.svg);
     ctx.save();
-    if (this.fly) ctx.globalAlpha = Math.max(0, 1 - this.fly * 0.85);
+    if (this.fly || this.fade) {
+      const a = Math.max(0, 1 - this.fly * 0.85) * fadeK;
+      if (a < 1) ctx.globalAlpha = a;
+    }
     // 整张卡绕自身中心旋转 Math.rot（随机 ±15°），角标跟着一起转
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rot);
