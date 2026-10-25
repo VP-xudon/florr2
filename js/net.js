@@ -532,6 +532,10 @@ class LocalServer {
   // 反弹总量恒定，按稀有度查表分配；玩家份额由事件带回客户端，叠加到它的预测位置上。
   _combatTick() {
     const p = this.player;
+    if (!p) return;
+    // 花瓣"传能冷却"：同一次接触只传一次动能（接触是离散事件，不是持续推力）
+    const TICK_DT = 1 / 25;
+    for (const b of p.petals) if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
     for (const m of this.ents) {
       if (m.dead) continue;
       // —— 花瓣 vs 昆虫（严格按 SVG 轮廓多边形判定，不再用外接圆）——
@@ -541,25 +545,21 @@ class LocalServer {
         if (!hit) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
-        // ---- 果冻碰撞（软花瓣拍在硬生物上）----
-        // 冲量 = 基础推力 × 稀有度份额 × 撞击强度 × 花瓣重量
-        //   · 撞击强度：花瓣【朝生物方向】的速度（贴住摩擦给最小推力，飞过来撞则更重）
-        //   · 花瓣重量：由卡面血量开方压缩（血量越多越沉，但不会让高稀有度花瓣变炮弹）
-        //   · 稀有度份额：KNOCKBACK_SHARE，越重的生物分到越少，super 基本纹丝不动
-        // 每 1/25s 结算一次，稳态速度 ≈ 推力 × 31.5 px/s（common ≈ 75px/s，肉眼清楚可见）。
-        // 蜜是"黏在地上的一坨"：它不该推怪（之前 jmass 用血量开方，Honey 血量几百上千
-        // 直接把怪弹飞，而普通花瓣血量只有个位数 -> 反而推不动，完全是反的）。
-        // 现在：只有会产生伤害的花瓣（Pollen 等）才有果冻推力，且重量项做上限压缩。
-        // 接触法线（从生物表面指向花瓣），用于推出方向与撞击强度
+        // ---- 动能传递（花瓣与生物之间没有硬碰撞，只有吸附 + 接触时传一次动能）----
+        //   · 方向：接触法线（从生物表面指向花瓣），把生物往反方向推
+        //   · 大小：基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数
+        //   · 只在"撞上去"的那一下传：贴住揉搓（接近速度≈0）不产生任何推力，
+        //     并且同一片花瓣 0.28s 内只传一次 —— 绝不会像硬碰撞那样被持续顶着走。
         const nx = hit.nx, ny = hit.ny;
         const approach = Math.max(0, -((b.vx || 0) * nx + (b.vy || 0) * ny));
-        const impact = clamp(PETAL_JELLY_IMPACT_MIN + approach / PETAL_JELLY_IMPACT_V,
-          PETAL_JELLY_IMPACT_MIN, PETAL_JELLY_IMPACT_MAX);
-        // 重量：按"卡面血量 / 30"开方，夹在 [0.8, 1.8]，高血量花瓣不会变成炮弹
         const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
         const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
         const isHoney = !!(b.card && b.card.type && b.card.type.slug === 'honey');
-        if (!isHoney) applyKnockback(m, -nx, -ny, PETAL_JELLY_PUSH * jshare * impact * jmass);
+        if (!isHoney && approach >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+          const impact = clamp(approach / PETAL_KB_REF, 0.35, 2.2);
+          applyKnockback(m, -nx, -ny, PETAL_KB_BASE * jshare * jmass * impact);
+          b.kbT = PETAL_KB_CD;
+        }
         const toPetal = Math.max((m.dmg || 0) - 0, 0);
         const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
         if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }

@@ -148,6 +148,14 @@ const PETAL_DETACH_KICK = 0.55;   // 脱离瞬间保留的惯性比例（其余�
 const PETAL_DETACH_DRAG = 3.2;    // 惯性衰减速率：越大越快停住（3.2 ≈ 一两秒滑停）
 const PETAL_DETACH_TTL = 30;      // Pollen 实体最长存在时间（秒）；Honey 由血量决定
 
+// 花瓣对生物只做【动能传递】，不是硬碰撞：接触瞬间传一次，之后就贴着揉搓。
+//   · 大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数
+//   · 停在表面摩擦时接近速度≈0 -> 完全不推（不会像硬碰撞那样被顶着走）
+const PETAL_KB_BASE = 26;          // px：单次接触传递的位移（系数 1.0 时）
+const PETAL_KB_MIN_APPROACH = 90;  // px/s：低于此速度视为揉搓，不传能量
+const PETAL_KB_REF = 340;          // 接近速度归一化基准
+const PETAL_KB_CD = 0.28;          // 同一片花瓣两次传能的最小间隔（秒）
+
 // 花瓣对生物的"果冻碰撞"基础推力（px，每 1/25s tick 一次）。
 // applyKnockback 的语义是"希望造成的总位移"，冲量 = total × KNOCKBACK_DECAY(12)，
 // 每 40ms 衰减到 62%，所以持续接触时的稳态速度 ≈ total × 31.5 px/s。
@@ -817,22 +825,22 @@ class Player {
         if (orbitGap > breakAt || mobFar) mob = null;
       }
       if (!mob && nearMobs && nearMobs.length) {
-        // 找"边缘距离"最近、且在触发范围内的生物
+        // 找"到轮廓的距离"最近、且在触发范围内的生物（按真实外形，不按外接圆）
         let best = null, bestEdge = PETAL_D * PETAL_PULL_RANGE;
         for (const m of nearMobs) {
           if (!m || m.dead) continue;
-          const edge = Math.hypot(m.x - b.x, m.y - b.y) - (m.r || 0);
-          if (edge <= bestEdge) { bestEdge = edge; best = m; }
+          const q = mobShapeNearest(m, b.x, b.y);
+          if (q.dist <= bestEdge) { bestEdge = q.dist; best = m; }
         }
         if (best) { mob = best; b.pullD0 = orbitGap; }   // 记住吸住那一刻的轨道差
       }
       b.pullMob = mob;
       if (mob) {
-        const dx = b.x - mob.x, dy = b.y - mob.y;
-        const dd = Math.hypot(dx, dy) || 1;
-        const contact = (mob.r || 0) + PETAL_R * 0.55;   // 贴在生物表面（轻微嵌入）
-        gx = mob.x + dx / dd * contact;
-        gy = mob.y + dy / dd * contact;
+        // 落点 = 轮廓上的最近点 + 外法线 × 轻微嵌入量。
+        // 用轮廓而不是外接圆：凹处/细长处花瓣才不会悬在空气里（就是"飘一下"的来源）。
+        const q = mobShapeNearest(mob, b.x, b.y);
+        gx = q.x + q.nx * (PETAL_R * 0.55);
+        gy = q.y + q.ny * (PETAL_R * 0.55);
         K = PETAL_SPRING_K * PETAL_PULL_K;               // 吸附力远大于回轨力：吸上就难回来
       }
 
@@ -1129,21 +1137,9 @@ const HPBAR_H = 6.6 * 0.8;
 // 网格直接取自渲染像素，因此凹形（瓢虫头凹槽）也能表达；多边形顶点表与地图碰撞同形态，
 // 消费方做「圆 vs 多边形」求交（思路同 map.js 的 circleContact）。
 
-// 圆 vs 生物轮廓多边形。命中返回 { nx, ny, depth }（世界空间法线，指向生物外），否则 null。
-// 复杂度 = O(顶点数)，顶点已抽样简化（通常几十个），比逐格扫描更快。
-function circleVsMobPoly(m, cx, cy, cr) {
-  const poly = m.shape;
-  if (!poly || !poly.pts || poly.pts.length < 3) return null;
-  const D = m.drawSize;
-  // 世界 -> 生物本地（贴图随 facing + artRot 旋转，与绘制完全一致）
-  const rot = m.facing + (m.artRot || 0);
-  const c = Math.cos(rot), s = Math.sin(rot);
-  const dx = cx - m.x, dy = cy - m.y;
-  const lx = dx * c + dy * s, ly = -dx * s + dy * c;
-  // 粗判：本地外接圆
-  const rr = D * poly.r + cr;
-  if (lx * lx + ly * ly > rr * rr) return null;
-
+// 生物轮廓几何核心：本地坐标下求"最近点 + 是否在内"。
+// 圆-多边形求交、花瓣吸附落点都复用这一份，避免两套几何算法各算各的。
+function _mobLocalNearest(poly, D, lx, ly) {
   const pts = poly.pts;
   // 内外判定用射线法（与绕向无关，轮廓提取不保证绕向）
   let inside = false;
@@ -1152,7 +1148,7 @@ function circleVsMobPoly(m, cx, cy, cr) {
     const bx = pts[i][0] * D, by = pts[i][1] * D;
     if ((ay > ly) !== (by > ly) && lx < (bx - ax) * (ly - ay) / (by - ay) + ax) inside = !inside;
   }
-  // 逐边求最近点，取最深的一条
+  // 逐边求最近点
   let bx = 0, by = 0, bd2 = Infinity;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     const ax = pts[j][0] * D, ay = pts[j][1] * D;
@@ -1165,17 +1161,70 @@ function circleVsMobPoly(m, cx, cy, cr) {
     const d2 = ddx * ddx + ddy * ddy;
     if (d2 < bd2) { bd2 = d2; bx = px; by = py; }
   }
-  const dist = Math.sqrt(bd2);
-  if (!inside && dist >= cr) return null;          // 完全在外且没碰到
+  return { px: bx, py: by, dist: Math.sqrt(bd2), inside };
+}
+
+// 贴图旋转（facing + artRot），与 draw 完全一致
+function _mobRot(m) {
+  const rot = m.facing + (m.artRot || 0);
+  return { c: Math.cos(rot), s: Math.sin(rot) };
+}
+
+// 圆 vs 生物轮廓多边形。命中返回 { nx, ny, depth }（世界空间法线，指向生物外），否则 null。
+// 复杂度 = O(顶点数)，顶点已抽样简化（通常几十个），比逐格扫描更快。
+function circleVsMobPoly(m, cx, cy, cr) {
+  const poly = m.shape;
+  if (!poly || !poly.pts || poly.pts.length < 3) return null;
+  const D = m.drawSize;
+  // 世界 -> 生物本地（贴图随 facing + artRot 旋转，与绘制完全一致）
+  const { c, s } = _mobRot(m);
+  const dx = cx - m.x, dy = cy - m.y;
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+  // 粗判：本地外接圆
+  const rr = D * poly.r + cr;
+  if (lx * lx + ly * ly > rr * rr) return null;
+
+  const q = _mobLocalNearest(poly, D, lx, ly);
+  if (!q.inside && q.dist >= cr) return null;      // 完全在外且没碰到
   let nlx, nly;
-  if (dist > 1e-6) {
-    nlx = (lx - bx) / dist; nly = (ly - by) / dist;
-    if (inside) { nlx = -nlx; nly = -nly; }        // 圆心在内部：法线反向（指向出口）
+  if (q.dist > 1e-6) {
+    nlx = (lx - q.px) / q.dist; nly = (ly - q.py) / q.dist;
+    if (q.inside) { nlx = -nlx; nly = -nly; }      // 圆心在内部：法线反向（指向出口）
   } else { nlx = 1; nly = 0; }
-  const depth = inside ? cr + dist : cr - dist;
+  const depth = q.inside ? cr + q.dist : cr - q.dist;
   if (depth <= 0) return null;
   // 本地法线 -> 世界
   return { nx: nlx * c - nly * s, ny: nlx * s + nly * c, depth };
+}
+
+// 轮廓上离 (x,y) 最近的点（世界坐标）+ 外法线 + 距离（在内为负）。
+// 花瓣吸附的落点必须贴着【真实外形】——用外接圆会把花瓣拉到空气里（"飘"）。
+function mobShapeNearest(m, x, y) {
+  const poly = m.shape;
+  if (!poly || !poly.pts || poly.pts.length < 3) {
+    const dx = x - m.x, dy = y - m.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const nx = dx / d, ny = dy / d, r = m.r || 0;
+    return { x: m.x + nx * r, y: m.y + ny * r, nx, ny, dist: d - r, inside: d < r };
+  }
+  const D = m.drawSize;
+  const { c, s } = _mobRot(m);
+  const dx = x - m.x, dy = y - m.y;
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+  const q = _mobLocalNearest(poly, D, lx, ly);
+  let nlx, nly;
+  if (q.dist > 1e-6) {
+    nlx = (lx - q.px) / q.dist; nly = (ly - q.py) / q.dist;
+    if (q.inside) { nlx = -nlx; nly = -nly; }
+  } else { nlx = 1; nly = 0; }
+  return {
+    x: m.x + (q.px * c - q.py * s),
+    y: m.y + (q.px * s + q.py * c),
+    nx: nlx * c - nly * s,
+    ny: nlx * s + nly * c,
+    dist: q.inside ? -q.dist : q.dist,
+    inside: q.inside
+  };
 }
 
 // 统一的生物碰撞入口：优先用 SVG 轮廓多边形（严格按几何形状判定），

@@ -133,15 +133,38 @@ const SpriteStore = {
   // 与"凸包"的区别：保留凹形（如瓢虫头部凹槽），所以碰撞箱就是看见的形状本身；
   // 数据形态与地图的碰撞多边形一致（顶点表 + 半径），消费方做圆 vs 多边形求交。
   // 每种 (key,size) 只算一次并缓存；顶点数经简化后通常几十个，逐帧检测很便宜。
+  //
+  // 两条数据源，优先像素（最忠实），像素不可用时用向量几何：
+  //   ① 像素网格：从实绘像素的 alpha 提取，连抗锯齿边缘都算进去；
+  //   ② 向量轮廓（assets/mob-shapes.js）：file:// 下画布会被标记为"污染"，
+  //      getImageData 直接抛异常 —— 此时只能退到这份离线预计算的外形，
+  //      否则所有生物的碰撞箱都会退化成外接圆（这就是"全是圆的"的根因）。
   contour(key, size) {
     const ck = key + '@' + size;
     const hit = this.contourCache[ck];
     if (hit) return hit;                 // 只认成功结果：失败不缓存，素材就绪后下次就能建出来
+    let out = null;
     const g = this.alphaGrid(key, CONTOUR_N);
-    if (!g) return null;
-    const out = contourFromGrid(g, CONTOUR_N);
+    if (g) out = contourFromGrid(g, CONTOUR_N);
+    if (!out) out = this.vectorContour(key, size);
     if (out) this.contourCache[ck] = out;
     return out;
+  },
+
+  // 向量轮廓：用离线预计算的贴图外形（MOB_SHAPES，坐标 = viewBox 归一化 [0,1]），
+  // 换算到与 artCanvas 完全相同的坐标系（有裁剪框就按裁剪框归一化，没有就是整图）。
+  vectorContour(key, size) {
+    const D = (typeof window !== 'undefined') ? window.MOB_SHAPES : null;
+    const shape = D && D[key];
+    if (!shape || !shape.pts || shape.pts.length < 3) return null;
+    const r = this._cropRect(size);          // 与 artCanvas 同一固定裁剪框
+    const pts = r
+      ? shape.pts.map(([nx, ny]) => [(nx * size - r[0]) / r[2] - 0.5,
+                                     (ny * size - r[1]) / r[3] - 0.5])
+      : shape.pts.map(([nx, ny]) => [nx - 0.5, ny - 0.5]);
+    let rad = 0;
+    for (const [x, y] of pts) { const d = Math.hypot(x, y); if (d > rad) rad = d; }
+    return { pts, r: rad || 0.5 };
   },
 
   // 红色剪影（受伤 0.1s 红色滤镜）：与白色剪影同一管线，仅填充色不同
