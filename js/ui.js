@@ -619,17 +619,24 @@ const UI = {
     }
   },
 
-  // 画廊卡数量（调试=∞，普通=2）；拿空(<=0)后该卡不再渲染
+  // 非调试模式的初始库存：只有 1 张 common Basic（STARTER_INV_KEY），其余一律 0。
+  // 其它卡牌不再"天然存在"于背包，必须靠打怪掉落获得；调试模式仍为 ∞ 方便调试。
+  _gcDefault(key) {
+    if (window.__debug) return Infinity;
+    const invKey = (typeof STARTER_INV_KEY !== 'undefined') ? STARTER_INV_KEY : null;
+    return (invKey && key === invKey) ? 1 : 0;
+  },
+  // 画廊卡数量（调试=∞）；拿空(<=0)后该卡不再渲染
   _galleryCount(key) {
     if (!this._gc) this._gc = {};
-    if (!(key in this._gc)) this._gc[key] = window.__debug ? Infinity : 2;
+    if (!(key in this._gc)) this._gc[key] = this._gcDefault(key);
     return this._gc[key];
   },
   _decGallery(card) {
     const key = card.type.key + '|' + card.rarity;
     if (window.__debug) return true;
     if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = 2;
+    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
     if (this._gc[key] <= 0) return false;   // 已取完：拒绝再取（防止连点刷出超量卡）
     this._gc[key] -= 1;
     return true;
@@ -639,14 +646,14 @@ const UI = {
     const key = card.type.key + '|' + card.rarity;
     if (window.__debug) return;
     if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = 2;
+    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
     this._gc[key] += 1;
   },
   // 拾取掉落：对应卡牌数量 +1（进背包 = all petals）。调试模式恒 ∞，不加不减。
   addGalleryCount(type, rarity) {
     const key = type.key + '|' + rarity;
     if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = window.__debug ? Infinity : 2;
+    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
     if (this._gc[key] !== Infinity) this._gc[key] += 1;
     // 背包开着才实时刷新（关着则下次打开自然读新值，避免无谓重建 900+ 卡）
     if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
@@ -1425,7 +1432,7 @@ const UI = {
     if (window.__debug) return true;
     const key = card.type.key + '|' + card.rarity;
     if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = 2;
+    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
     return this._gc[key] > 0;
   },
 

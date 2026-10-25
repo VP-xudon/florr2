@@ -460,9 +460,16 @@ function rollMobType(level) {
   return MOB_TYPES[0];
 }
 
-// 起始装备用：取第一个花瓣与第一个攻击型花瓣
-const STARTER_PETAL_A = PETAL_TYPES[0] ? PETAL_TYPES[0].key : 'p1';
-const STARTER_PETAL_B = (PETAL_TYPES.find(t => t.kind === 'attack') || PETAL_TYPES[1] || PETAL_TYPES[0]).key;
+// 起始装备（非调试模式）：主槽 = 4 张 common Basic + 1 张 common Rose；
+// 背包里天然只留 1 张 common Basic（其余卡全部移除，想拿就靠打怪掉落）。
+const starterKeyOf = (slug, fallback) => {
+  const t = PETAL_TYPES.find((p) => p.slug === slug);
+  return t ? t.key : fallback;
+};
+const STARTER_BASIC_KEY = starterKeyOf('basic', PETAL_TYPES[0] ? PETAL_TYPES[0].key : 'p1');
+const STARTER_ROSE_KEY = starterKeyOf('rose', null);
+// 背包初始库存的唯一一张卡（键 = type.key|rarity，与 ui.js 的 _gc 一致）
+const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 
 // ---------------- 生物生成（地图自带生成区） ----------------
 // garden.tmj 的 mobs / mobs2 对象层就是官方生成区：每个 spawn_mobs 对象带

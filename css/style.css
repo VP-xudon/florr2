@@ -325,10 +325,15 @@ body {
   background: transparent; white-space: nowrap;
   -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;   /* 描边宽度1.2倍 = 1×1.2 */
 }
-/* 背包卡牌：一行固定 5 张（官方口径），间距收窄到 3px。
+/* 背包卡牌：一行最多 5 张（官方口径），间距收紧到 3px。
+   用 flex-wrap + 容器最大宽度 = 5 张的宽度来"限行"，
+   这样不足 5 张的那一行仍然是【整行居中】，不会像固定网格那样靠左对齐。
    原来 gap 7.2px + cell 55.68px（两侧各 5.57px 空白）在 272px 窗口里只能排 4 张。 */
-.rar-grid { display: grid; grid-template-columns: repeat(5, 47px); gap: 3px; justify-content: center; }
-/* 背包窗口略加宽，5 张卡（5×47 + 4×3 = 247px）刚好放得下（内宽 248px）。 */
+.rar-grid {
+  display: flex; flex-wrap: wrap; gap: 3px; justify-content: center;
+  max-width: 247px; margin-left: auto; margin-right: auto;   /* 5×47 + 4×3 = 247 */
+}
+/* 背包窗口略加宽，5 张卡刚好放得下（内宽 248px）。 */
 #inventory.window { width: 288px; }
 /* cell 只要比卡牌大一点点即可：原来的 55.68 两侧各留 5.57px 空白，
    再加上 7.2px 的 grid gap，一行只能排 4 张且看着很散。 */

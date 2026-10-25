@@ -232,9 +232,13 @@ class Game {
     p.dispHp = null; p.ghostHp = null; p.ghostV = 0;   // 血条平滑值重置（update 中重新对齐）
     p.invBar = full ? [] : p.invBar;
     p.backpack = full ? [] : p.backpack;
-    // 初始花瓣：基础 + 攻击型
-    p.slots[0] = makePetal(STARTER_PETAL_A, 'common');
-    p.slots[1] = makePetal(STARTER_PETAL_B, 'common');
+    // 初始花瓣（非调试模式）：4 张 common Basic + 1 张 common Rose，全部装在主槽。
+    // 调试模式仍给同样的起手（想看全量卡牌请用 /give 或背包调试开关）。
+    const nBasic = Math.min(4, p.slots.length);
+    for (let i = 0; i < nBasic; i++) p.slots[i] = makePetal(STARTER_BASIC_KEY, 'common');
+    if (STARTER_ROSE_KEY && nBasic < p.slots.length) {
+      p.slots[nBasic] = makePetal(STARTER_ROSE_KEY, 'common');
+    }
     p.recompute();
   }
 
