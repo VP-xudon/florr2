@@ -7,8 +7,9 @@ const SPEED_SCALE = 5;
 // 玩家基础最大移速（生物仇恨追击速度以此为基准）
 const PLAYER_BASE_SPEED = 232 * SPEED_SCALE * 0.2;
 // ---- 生物移动速度口径（全部以"玩家默认最高速度"为基准）----
-const MOB_CHASE_MULT = 0.95;          // 通用追击速度 = 0.95×（瓢虫等）
-const MOB_WANDER_RANGE = [0.3, 0.5];  // 游荡速度 = 追击速度 ×(0.3~0.5) 随机
+const MOB_CHASE_MULT = 0.90;          // 通用追击速度 = 0.90×（瓢虫及默认追击）
+const MOB_WANDER_MULT = 0.95;         // 游荡速度的基准倍率（与追击解耦，保持原有游荡手感）
+const MOB_WANDER_RANGE = [0.3, 0.5];  // 游荡速度 = 基准 ×(0.3~0.5) 随机
 const MOB_WANDER_SCALE = 0.75;        // 游荡速度在基础值上再打 0.75 折（全生物统一）
 const BEE_CHASE_MULT = 1.05;          // 蜜蜂追击 = 1.05×（走 S 型，实际推进比直线略慢）
 const BEE_WANDER_FACTOR = 1.2;        // 蜜蜂游荡 = 瓢虫同分布游荡速度 ×1.2
@@ -136,12 +137,17 @@ let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；�
 let MOVE_MULT = 1;
 
 // ---- 花瓣吸附（果冻手感）----
-// 生物边缘到花瓣的距离 ≤ 1 倍花瓣直径 -> 强力吸过去（吸力远大于回轨力，吸上基本不回来）；
-// 吸住后贴附在生物表面，被轨道拖着"揉搓"，直到轨道应在位置拉开 2.5 倍直径才松手。
+// 生物边缘到花瓣的距离 ≤ 0.75 倍花瓣直径 -> 强力吸过去（吸力远大于回轨力，吸上就难回来）；
+// 吸住后贴附在生物轮廓表面，被轨道拖着"揉搓"，满足任一条件即松手回轨道：
+//   ① 被轨道拉开超过 2.5 倍花瓣直径（绝对容差，不再叠加吸住时的差值 -> 不会越黏越远）
+//   ② 该生物已离开玩家附近（不在吸附有效范围内）
+//   ③ 单次吸附超过 PETAL_PULL_HOLD_T 秒（否则玩家站着不动时花瓣会永久黏在生物表面）
 const PETAL_D = PETAL_R * 2;
-const PETAL_PULL_RANGE = 0.75;     // 触发距离（× 花瓣直径，按生物边缘算；已按需求缩到 0.75x）
-const PETAL_PULL_BREAK = 2.5;      // 松手阈值（× 花瓣直径，相对吸住时的轨道差增量）
+const PETAL_PULL_RANGE = 0.75;     // 触发距离（× 花瓣直径，按生物轮廓算）
+const PETAL_PULL_BREAK = 2.5;      // 松手阈值（× 花瓣直径，绝对容差）
 const PETAL_PULL_K = 3.2;          // 吸附时的弹簧刚度倍率
+const PETAL_PULL_HOLD_T = 1.0;     // 单次吸附最长时长（秒）
+const PETAL_PULL_CD = 0.5;         // 松手后对该生物的再吸附冷却（秒），避免立刻又黏上去
 
 // ---- 滞留型花瓣（Pollen / Honey）脱离轨道后的物理 ----
 const PETAL_DETACH_KICK = 0.55;   // 脱离瞬间保留的惯性比例（其余能量在"脱手"时损耗）
@@ -777,7 +783,9 @@ class Player {
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     // 吸附候选：先在玩家附近筛一遍（轨道半径 + 触发距离 + 余量），
     // 避免全图 1600+ 只生物时每片花瓣都扫全表。
-    const pullR = baseReach + PETAL_D * PETAL_PULL_RANGE + 240;
+    // 吸附有效范围：轨道半径 + 触发距离 + 3 个花瓣直径的余量。
+    // （原来额外加 240px，导致"生物离玩家很远也算附近"，花瓣黏住后永远不松手。）
+    const pullR = baseReach + PETAL_D * (PETAL_PULL_RANGE + 3);
     let nearMobs = null;
     if (mobs && mobs.length) {
       nearMobs = [];
@@ -817,14 +825,20 @@ class Player {
       let mob = b.pullMob;
       if (mob && mob.dead) mob = null;
       const orbitGap = dist(tx, ty, b.x, b.y);
+      if (b.pullCd > 0) b.pullCd = Math.max(0, b.pullCd - dtc);   // 再吸附冷却
       if (mob) {
-        const breakAt = (b.pullD0 || 0) + PETAL_D * PETAL_PULL_BREAK;
-        // 松手条件：① 轨道应在位置被拉太远（人跑远了）；② 生物本身已经离开玩家附近
-        //（客户端视图被回收的旧引用也走这条，避免花瓣黏在一个不再更新的残影上）
+        b.pullT = (b.pullT || 0) + dtc;
+        // 松手条件：① 被轨道拉开超过绝对容差（人跑远了）；② 生物已离开吸附有效范围；
+        //           ③ 本次吸附超时（否则玩家站着不动，花瓣会永久黏在生物表面）
+        const breakAt = PETAL_D * PETAL_PULL_BREAK;
         const mobFar = Math.hypot(mob.x - this.x, mob.y - this.y) > pullR + (mob.r || 0);
-        if (orbitGap > breakAt || mobFar) mob = null;
+        if (orbitGap > breakAt || mobFar || b.pullT >= PETAL_PULL_HOLD_T) {
+          mob = null;
+          b.pullT = 0;
+          b.pullCd = PETAL_PULL_CD;      // 冷却期内不再黏同一片区域
+        }
       }
-      if (!mob && nearMobs && nearMobs.length) {
+      if (!mob && !(b.pullCd > 0) && nearMobs && nearMobs.length) {
         // 找"到轮廓的距离"最近、且在触发范围内的生物（按真实外形，不按外接圆）
         let best = null, bestEdge = PETAL_D * PETAL_PULL_RANGE;
         for (const m of nearMobs) {
@@ -832,7 +846,7 @@ class Player {
           const q = mobShapeNearest(m, b.x, b.y);
           if (q.dist <= bestEdge) { bestEdge = q.dist; best = m; }
         }
-        if (best) { mob = best; b.pullD0 = orbitGap; }   // 记住吸住那一刻的轨道差
+        if (best) { mob = best; b.pullD0 = orbitGap; b.pullT = 0; }
       }
       b.pullMob = mob;
       if (mob) {
@@ -1274,10 +1288,10 @@ class Mob {
     // 障碍型生物（registry type=障碍型生物 或 speed=0）：几乎不可移动
     this.obstacle = (type.type === 'Obstacle') || !(type.speed > 0);
     // 速度统一（瓢虫为原型，全体非障碍生物通用）：
-    //   仇恨追击 = 玩家默认最高速度 0.95 倍；随机游荡 = 瓢虫同分布 0.3~0.5 倍
+    //   仇恨追击 = 玩家默认最高速度 0.90 倍；随机游荡 = 基准 0.95 × (0.3~0.5)
     //   蜜蜂例外：追击 1.05 倍（走 S 型所以实际推进更慢）、游荡 = 瓢虫游荡 ×1.2
     const isBee = !!MOB_S_PATH_SLUGS[type.slug];
-    const ladybugWander = MOB_CHASE_MULT * PLAYER_BASE_SPEED * rand(MOB_WANDER_RANGE[0], MOB_WANDER_RANGE[1]);
+    const ladybugWander = MOB_WANDER_MULT * PLAYER_BASE_SPEED * rand(MOB_WANDER_RANGE[0], MOB_WANDER_RANGE[1]);
     this.chaseSpeed = (isBee ? BEE_CHASE_MULT : MOB_CHASE_MULT) * PLAYER_BASE_SPEED;
     this.wanderSpeed = this.obstacle ? 0
       : (isBee ? ladybugWander * BEE_WANDER_FACTOR : ladybugWander) * MOB_WANDER_SCALE;
