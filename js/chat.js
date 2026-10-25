@@ -291,6 +291,7 @@ const Chat = {
       case 'rot-speed': this._rotSpeed(args[0]); break;
       case 'speed': this._speed(args[0]); break;              // /speed <倍数>：主人物最高移速倍率
       case 'show-coord': this._showCoord(); break;            // /show-coord：切换坐标显示
+      case 'pending': this._pending(args); break;             // /pending crash <0|1>：碰撞箱显示开关
       case 'print-players': this._printPlayers(); break;
       case 'unblock': this._unblock(args[0]); break;
       case 'unblock-all': this._unblockAll(); break;
@@ -420,6 +421,24 @@ const Chat = {
     if (!isFinite(n) || n <= 0 || n > 10) { this._sys('Chat/Command/speed/Usage'); return; }
     MOVE_MULT = n;
     this._sys(I18N.tf('Chat/Command/speed/Set', { 0: n }, 'Movement speed set to ' + n + 'x default.'));
+  },
+  // /pending crash <0|1>：碰撞箱显示开关（默认关闭）。
+  //   /pending crash 1 -> 打开；/pending crash 0 -> 关闭；不带参数 -> 切换。
+  // 状态存在 Game 上（showHitbox），渲染时每帧读取，不参与任何判定。
+  _pending(args) {
+    const sub = String(args[0] || '').toLowerCase();
+    if (sub !== 'crash') { this._sys(I18N.tf('Chat/Command/pending/Usage', {}, 'Usage: /pending crash <0|1>')); return; }
+    const g = window.__game;
+    if (!g) { this._sys('Chat/CommandError/InternalError'); return; }
+    const raw = (args[1] === undefined) ? '' : String(args[1]).toLowerCase();
+    let on;
+    if (raw === '') on = !g.showHitbox;                       // 省略参数 = 切换
+    else if (raw === '1' || raw === 'on' || raw === 'true') on = true;
+    else if (raw === '0' || raw === 'off' || raw === 'false') on = false;
+    else { this._sys(I18N.tf('Chat/Command/pending/Usage', {}, 'Usage: /pending crash <0|1>')); return; }
+    g.showHitbox = on;
+    this._sys(I18N.tf(on ? 'Chat/Command/pending/On' : 'Chat/Command/pending/Off', {},
+      on ? 'Collision boxes: ON' : 'Collision boxes: OFF'));
   },
   // /show-coord：开关左上角的坐标读数（状态存在 Game 上，渲染时每帧取最新坐标）
   _showCoord() {

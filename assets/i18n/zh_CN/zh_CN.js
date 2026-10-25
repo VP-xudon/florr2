@@ -2367,3 +2367,10 @@ window.I18N_ZH_CN = {
 
 // --- 本项目补充的自定义键 ---
 window.I18N_ZH_CN['UI/Petal/MaxMobRarityLabel'] = '最高生物稀有度：';
+
+// /pending crash <0|1>：碰撞箱显示开关（默认关闭）
+window.I18N_ZH_CN['Chat/Command/pending/Args'] = 'crash <0|1>';
+window.I18N_ZH_CN['Chat/Command/pending/Description'] = '显示 / 隐藏碰撞箱（默认关闭）。';
+window.I18N_ZH_CN['Chat/Command/pending/Usage'] = '用法：/pending crash <0|1>';
+window.I18N_ZH_CN['Chat/Command/pending/On'] = '碰撞箱显示：开';
+window.I18N_ZH_CN['Chat/Command/pending/Off'] = '碰撞箱显示：关';

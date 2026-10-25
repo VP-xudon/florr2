@@ -1948,3 +1948,10 @@ window.I18N_EN = {
 // 官方 Petal/Attribute/MaxMobRarity 的值带 {#Rarities/{0}/NameColored} 参数占位，
 // 我们不能直接把它当纯文本标签用（嵌套花括号剥不干净），所以单独开一条纯文本标签。
 window.I18N_EN['UI/Petal/MaxMobRarityLabel'] = 'Max Mob Rarity:';
+
+// /pending crash <0|1>：碰撞箱显示开关（默认关闭）
+window.I18N_EN['Chat/Command/pending/Args'] = 'crash <0|1>';
+window.I18N_EN['Chat/Command/pending/Description'] = 'Show / hide collision boxes (off by default).';
+window.I18N_EN['Chat/Command/pending/Usage'] = 'Usage: /pending crash <0|1>';
+window.I18N_EN['Chat/Command/pending/On'] = 'Collision boxes: ON';
+window.I18N_EN['Chat/Command/pending/Off'] = 'Collision boxes: OFF';

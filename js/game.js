@@ -51,6 +51,7 @@ class Game {
     this.shake = 0;
     this.tpTarget = null;    // /tp 标出的待传送点（世界 + 小地图红点）
     this.showCoord = false;  // /show-coord：左上角坐标读数开关
+    this.showHitbox = false; // /pending crash 1：碰撞箱显示开关（默认关闭）
     this.last = 0;
     this.selectedSlot = 0;
 
@@ -759,6 +760,9 @@ class Game {
     for (const pt of this.particles) pt.draw(ctx);
     for (const d of this.dmgTexts) d.draw(ctx);
 
+    // /pending crash 1：碰撞箱叠加层（世界坐标系，画在实体之上，不影响任何判定）
+    this._drawHitboxes(ctx, mobs);
+
     ctx.restore();
 
     // /show-coord 的坐标读数（屏幕空间，不受相机抖动影响）
@@ -766,6 +770,77 @@ class Game {
     // /tp 目标在屏幕外时，在屏幕边缘画一个红点指向它（保证"一定看得见"）
     this._drawTpEdge(ctx, camX, camY);
     this._drawMinimap();
+  }
+
+  // /pending crash <0|1>：碰撞箱叠加层。
+  // 与判定完全同源：生物画的是 m.shape（SVG 轮廓多边形，随 facing + artRot 旋转），
+  // 没有轮廓时才退化成外接圆（画成橙红色以示"当前不是精确形状"）。
+  // 花朵本体 / 花瓣是圆形碰撞体，按实际半径画。纯调试绘制，不参与任何逻辑。
+  _drawHitboxes(ctx, mobs) {
+    if (!this.showHitbox) return;
+    const p = this.player;
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+
+    // ① 生物轮廓
+    ctx.strokeStyle = '#39ff14';
+    ctx.beginPath();
+    let fallback = false;
+    for (const m of mobs || []) {
+      if (m.dead && m.deathTimer > 0.2) continue;
+      const sh = m.shape;
+      if (!sh || !sh.pts || sh.pts.length < 3) {
+        ctx.moveTo(m.x + (m.r || 0), m.y);
+        ctx.arc(m.x, m.y, m.r || 0, 0, TAU);
+        fallback = true;
+        continue;
+      }
+      const rot = m.facing + (m.artRot || 0);
+      const c = Math.cos(rot), s = Math.sin(rot);
+      const D = m.drawSize;
+      for (let i = 0; i < sh.pts.length; i++) {
+        const q = sh.pts[i];
+        const lx = q[0] * D, ly = q[1] * D;
+        const wx = m.x + lx * c - ly * s;
+        const wy = m.y + lx * s + ly * c;
+        if (i === 0) ctx.moveTo(wx, wy); else ctx.lineTo(wx, wy);
+      }
+      ctx.closePath();
+    }
+    ctx.stroke();
+    if (fallback) ctx.strokeStyle = '#ff7a1a';   // 需要提示"这是圆的兜底"时再补一层
+
+    // ② 花朵本体 + 花瓣
+    if (p && !p.dead) {
+      ctx.strokeStyle = '#33e0ff';
+      ctx.beginPath();
+      ctx.moveTo(p.x + p.r, p.y);
+      ctx.arc(p.x, p.y, p.r, 0, TAU);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#ffe14d';
+      ctx.beginPath();
+      for (const b of p.petals || []) {
+        if (b.dead) continue;
+        const r = PETAL_R;
+        ctx.moveTo(b.x + r, b.y);
+        ctx.arc(b.x, b.y, r, 0, TAU);
+      }
+      ctx.stroke();
+
+      // 吸附连线：当前贴住哪只生物（便于确认吸附/松手是否符合预期）
+      ctx.strokeStyle = 'rgba(255,225,77,.45)';
+      ctx.beginPath();
+      for (const b of p.petals || []) {
+        const m = b.pullMob;
+        if (!m || b.dead) continue;
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(m.x, m.y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // 左上角坐标读数：/show-coord 打开后每帧刷新（与按钮组同字体风格：白字黑描边）
