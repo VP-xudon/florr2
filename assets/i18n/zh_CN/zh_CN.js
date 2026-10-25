@@ -2364,3 +2364,6 @@ window.I18N_ZH_CN = {
 "Chat/Channel/Global": "全局",
 "Chat/Channel/Map": "地图"
 };
+
+// --- 本项目补充的自定义键 ---
+window.I18N_ZH_CN['UI/Petal/MaxMobRarityLabel'] = '最高生物稀有度：';

@@ -325,8 +325,14 @@ body {
   background: transparent; white-space: nowrap;
   -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;   /* 描边宽度1.2倍 = 1×1.2 */
 }
-.rar-grid { display: flex; flex-wrap: wrap; gap: 7.2px; justify-content: center; }  /* gap×1.2 */
-.cardcell { position: relative; width: 55.68px; height: 55.68px; border-radius: 10px; cursor: pointer; }  /* cell尺寸 = 46.4×1.2，让卡牌居中 */
+/* 背包卡牌：一行固定 5 张（官方口径），间距收窄到 3px。
+   原来 gap 7.2px + cell 55.68px（两侧各 5.57px 空白）在 272px 窗口里只能排 4 张。 */
+.rar-grid { display: grid; grid-template-columns: repeat(5, 47px); gap: 3px; justify-content: center; }
+/* 背包窗口略加宽，5 张卡（5×47 + 4×3 = 247px）刚好放得下（内宽 248px）。 */
+#inventory.window { width: 288px; }
+/* cell 只要比卡牌大一点点即可：原来的 55.68 两侧各留 5.57px 空白，
+   再加上 7.2px 的 grid gap，一行只能排 4 张且看着很散。 */
+.cardcell { position: relative; width: 47px; height: 47px; border-radius: 10px; cursor: pointer; }
 
 /* 拖拽幽灵 / 飞入动画 */
 .flyghost {

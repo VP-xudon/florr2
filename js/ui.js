@@ -47,13 +47,16 @@ const SWAP_DUR = '0.5s';                    // 主/副槽行互换动画时长
 // 悬浮框里标签与数值是分开绘制的（标签彩色、数值白色），用不到那个占位符，
 // 所以要把末尾的 {0:tooltip} / {0} 之类的占位去掉，只留纯文本标签。
 function statLabel(key, fallback) {
-  const s = String(I18N.t(key, fallback) || '');
-  // 官方值形如 "Max Mob Rarity: {#Rarities/{0}/NameColored}"（占位符里还有嵌套花括号），
-  // 旧的 /\{[^{}]*\}$/ 匹配不到嵌套结构，会把 "Max Mob Rarity: {#Rarities/{0}/NameColored}"
-  // 原样画出来（就是"只显示半个标签名"）。
-  // 标签部分一定在第一个 { 之前，直接截断最稳。
+  let s = String(I18N.t(key, fallback) || '');
+  // ① 先兜底清掉颜色标签（某些官方值里 <c val="…"> 会残留半截）
+  s = s.replace(/<c\b[^>]*>/gi, '').replace(/<\/c>/gi, '');
+  // ② 再清任意 {#…} 引用：占位符里可能还有嵌套花括号（如 {#Rarities/{0}/NameColored}），
+  //    普通 /\{[^{}]*\}/ 剥不干净，会留下 "/NameColored}" 之类的碎片。
+  s = s.replace(/\{#[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '');
+  // ③ 标签部分一定在第一个 { 之前（{0:tooltip} / {0} 等占位都在末尾）
   const i = s.indexOf('{');
-  return (i >= 0 ? s.slice(0, i) : s).trim();
+  if (i >= 0) s = s.slice(0, i);
+  return s.trim();
 }
 
 // 掉落概率文本：0.598 -> "59.8%"（官方维基口径，统一一位小数）
@@ -1034,7 +1037,10 @@ const UI = {
           if (t.heal > 0) rows.push({ label: statLabel('Petal/Attribute/Heal', 'Heal:'), value: t.heal });
           if (t.maxMobRarityName) {
             rows.push({
-              label: statLabel('Petal/Attribute/MaxMobRarity', 'Max Mob Rarity:'),
+              // 官方 Petal/Attribute/MaxMobRarity 是"带参数"的模板
+              // （{#Rarities/{0}/NameColored}），当纯文本标签用会漏出碎片，
+              // 所以用本项目自己的纯文本键。
+              label: statLabel('UI/Petal/MaxMobRarityLabel', 'Max Mob Rarity:'),
               value: t.maxMobRarityName,
               labelColor: (typeof MAX_MOB_RARITY_COLOR !== 'undefined') ? MAX_MOB_RARITY_COLOR : '#d2eb34',
               valueColor: t.maxMobRarityColor || '#ffffff'      // 稀有度名用它自己的颜色

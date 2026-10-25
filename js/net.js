@@ -31,7 +31,7 @@ const GLOBAL_MAX_MOBS = Math.round(110 * DENSITY_SCALE);         // 1650：全�
 const SPAWN_INTERVAL = 0.1;         // 每 0.1s 补 1 只（总量变大，补缺口也要更快）
 const MOB_ACTIVE_R = 2200;          // 与玩家距离超过它 -> 生物休眠（不跑 AI、不参与推挤）
 const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
-const HONEY_PULL_R = 430;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
+const HONEY_PULL_R = 700;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
 const HONEY_IMMUNE_T = 40;          // 被蜜影响累计满 40s -> 该生物永久免疫所有蜜
 
 // ---------------- 传输层抽象 ----------------
@@ -534,13 +534,11 @@ class LocalServer {
     const p = this.player;
     for (const m of this.ents) {
       if (m.dead) continue;
-      const reach = m.r;   // 纯几何半径（含描边），与推出用同一套圆碰撞，弃用贴图轮廓
-      // —— 花瓣 vs 昆虫 ——
+      // —— 花瓣 vs 昆虫（严格按 SVG 轮廓多边形判定，不再用外接圆）——
       for (const b of p.petals) {
         if (b.dead || b.fxNoCombat) continue;
-        const rr = reach + PETAL_R;
-        const touch = dist2(b.x, b.y, m.x, m.y) < rr * rr;
-        if (!touch) continue;
+        const hit = mobHitTest(m, b.x, b.y, PETAL_R);
+        if (!hit) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
         // ---- 果冻碰撞（软花瓣拍在硬生物上）----
@@ -552,17 +550,16 @@ class LocalServer {
         // 蜜是"黏在地上的一坨"：它不该推怪（之前 jmass 用血量开方，Honey 血量几百上千
         // 直接把怪弹飞，而普通花瓣血量只有个位数 -> 反而推不动，完全是反的）。
         // 现在：只有会产生伤害的花瓣（Pollen 等）才有果冻推力，且重量项做上限压缩。
-        const jdx = m.x - b.x, jdy = m.y - b.y;
-        const jdd = Math.hypot(jdx, jdy) || 1;
-        const nx = jdx / jdd, ny = jdy / jdd;
-        const approach = Math.max(0, (b.vx || 0) * nx + (b.vy || 0) * ny);
+        // 接触法线（从生物表面指向花瓣），用于推出方向与撞击强度
+        const nx = hit.nx, ny = hit.ny;
+        const approach = Math.max(0, -((b.vx || 0) * nx + (b.vy || 0) * ny));
         const impact = clamp(PETAL_JELLY_IMPACT_MIN + approach / PETAL_JELLY_IMPACT_V,
           PETAL_JELLY_IMPACT_MIN, PETAL_JELLY_IMPACT_MAX);
         // 重量：按"卡面血量 / 30"开方，夹在 [0.8, 1.8]，高血量花瓣不会变成炮弹
         const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
         const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
         const isHoney = !!(b.card && b.card.type && b.card.type.slug === 'honey');
-        if (!isHoney) applyKnockback(m, nx, ny, PETAL_JELLY_PUSH * jshare * impact * jmass);
+        if (!isHoney) applyKnockback(m, -nx, -ny, PETAL_JELLY_PUSH * jshare * impact * jmass);
         const toPetal = Math.max((m.dmg || 0) - 0, 0);
         const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
         if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
@@ -572,20 +569,17 @@ class LocalServer {
       }
       if (m.dead || p.dead) continue;
       // —— 花朵本体 vs 昆虫（体伤）——
-      // +0.5 余量：推出把玩家正好放到碰撞边界(=reach+p.r)，若按严格 < 判定则"贴着却判定不到接触"，
-      // 体伤几乎永不结算（只有浮点抖动偶尔漏过 -> "有时候不能结算"）。包容边界即可正常结算。
+      // 同样用 SVG 轮廓多边形判定；+0.5 余量保证"贴着"也能结算体伤。
       // 花朵本体作为实体：把体伤视为本体的 Damage(bodyDmg)、血量视为本体 Health(hp)，与怪一视同仁双向结算。
-      const rr2 = reach + p.r + 0.5;
-      const touch = dist2(p.x, p.y, m.x, m.y) < rr2 * rr2;
-      if (touch) {
+      const phit = mobHitTest(m, p.x, p.y, p.r + 0.5);
+      if (phit) {
         const toMob = Math.max((p.bodyDmg || 0) - (m.armor || 0), 0);
         const toFlower = Math.max((m.dmg || 0) - (p.armor || 0), 0);
         if (toMob > 0) this._hitMob(m, toMob);
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
           if (hurt && !p.dead) {
-            const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy) || 1;
-            const ux = dx / d, uy = dy / d;
+            const ux = phit.nx, uy = phit.ny;
             // 玩家被咬的弹开：沿"远离生物"方向（背后被追咬=向前窜；撞障碍=向后弹），
             // 距离 = 随机 1/3~1/2 个主角直径 —— 像屁股被咬、窜出去一小截。
             const playerKb = (1 / 3 + Math.random() * (1 / 6)) * p.r * 2;

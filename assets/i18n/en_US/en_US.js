@@ -1943,3 +1943,8 @@ window.I18N_EN = {
 "Chat/Channel/Global": "Global",
 "Chat/Channel/Map": "Map"
 };
+
+// --- 本项目补充的自定义键（独立条目，避免和官方"带参数"的同名条目互相覆盖）---
+// 官方 Petal/Attribute/MaxMobRarity 的值带 {#Rarities/{0}/NameColored} 参数占位，
+// 我们不能直接把它当纯文本标签用（嵌套花括号剥不干净），所以单独开一条纯文本标签。
+window.I18N_EN['UI/Petal/MaxMobRarityLabel'] = 'Max Mob Rarity:';

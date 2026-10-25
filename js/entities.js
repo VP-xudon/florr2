@@ -1178,6 +1178,27 @@ function circleVsMobPoly(m, cx, cy, cr) {
   return { nx: nlx * c - nly * s, ny: nlx * s + nly * c, depth };
 }
 
+// 统一的生物碰撞入口：优先用 SVG 轮廓多边形（严格按几何形状判定），
+// 轮廓尚未提取（贴图刚加载 / 提取失败）时退回外接圆，避免"完全不碰撞"。
+// 返回 { nx, ny, depth }：法线由生物表面指向圆心（世界空间）。
+function mobHitTest(m, cx, cy, cr) {
+  const poly = m.shape;
+  const shaped = !!(poly && poly.pts && poly.pts.length >= 3);   // 轮廓是否可用
+  if (shaped) {
+    const hit = circleVsMobPoly(m, cx, cy, cr);
+    if (hit) return hit;
+    return null;                                                 // 有轮廓：以轮廓为准
+  }
+  // 没有轮廓（贴图未就绪 / 提取失败 / 退化）：退回外接圆，保证一定能撞到
+  const rr = (m.r || 0) + cr;
+  if (dist2(cx, cy, m.x, m.y) < rr * rr) {
+    const dx = cx - m.x, dy = cy - m.y;
+    const d = Math.hypot(dx, dy) || 1;
+    return { nx: dx / d, ny: dy / d, depth: rr - d };
+  }
+  return null;
+}
+
 class Mob {
   constructor(type, x, y, level, rarity) {
     this.type = type; this.name = type.name; this.svg = type.svg; this.zh = type.zh || '';
