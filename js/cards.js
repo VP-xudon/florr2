@@ -154,6 +154,37 @@ const CardRenderer = (function () {
     6: lightRing(6, 0.58, 0.88, -Math.PI / 2)
   };
 
+  // ---- 阵型型多体（Stinger 起；以后同类花瓣在此登记）----
+  // 与 LIGHT_LAYOUTS 的关键区别：每个实例可带【自己的朝向】rot（相对单体朝向的额外旋转），
+  // 因为阵型型要求"实体排布与卡面完全相同"，而卡面各朝向并不一致。
+  // 单位与 LIGHT_LAYOUTS 相同（x/y 以单体直径 D 计，k = 相对单体缩放）；
+  // 单体 Stinger 造型 ≙ 尖端向右 —— 故 rot=0 表示"与单体朝向一致"。
+  function formRing(n, r, k, start, inward) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = start + i * Math.PI * 2 / n;
+      // inward：额外旋转 (a + π)，把"尖端朝右"改成【尖端朝向中心】
+      out.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, k, rot: inward ? a + Math.PI : 0 });
+    }
+    return out;
+  }
+  // Stinger：
+  //   3 个（Mythic） -> 三个交错围成【空心】的大三角，顶点朝右；每个朝向都与单体一致
+  //   5 个（Ultra+） -> 围成一圈，【尖端朝向中心】
+  // 半径 r（单位 D = 单体直径）。相邻实例的中心距 = 2·r·sin(π/n)：
+  //   n=3 -> 1.732r      n=5 -> 1.176r
+  // 调疏密只改这里的 r（卡面与实体共用此表，一处同时生效）：
+  //   · Mythic 3 个：三者都朝右、互相咬合较深，需要比 5 个更大的半径才看得出"空心"；
+  //     实测 0.68 仍显挤 -> 取 0.88（中心距 ≈1.52D）。
+  //   · Ultra+ 5 个：尖端向心会互相错开，0.95（中心距 ≈1.12D）为"刚好不碰"的量级。
+  //   觉得松/紧就按上面的公式反推 r 即可：想要的间距 ÷ 系数 = r。
+  const STINGER_LAYOUTS = {
+    3: formRing(3, 0.88, 1, 0, false),
+    5: formRing(5, 0.95, 1, -Math.PI / 2, true)
+  };
+  // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
+  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS };
+
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
   function lightSubCount(type, rarity) {
@@ -172,6 +203,11 @@ const CardRenderer = (function () {
     if (!t) return null;
     const n = lightSubCount(t, rarity);
     if (n <= 1) return null;
+    // 阵型型（Stinger…）：用它【自己的】布局（含每实例朝向），使卡面与实体排布严格一致
+    if (t.formation) {
+      const tab = FORMATION_LAYOUTS[t.slug];
+      if (tab && tab[n]) return tab[n];
+    }
     return LIGHT_LAYOUTS[n] || null;
   }
 
@@ -195,7 +231,14 @@ const CardRenderer = (function () {
     if (alpha != null) ctx.globalAlpha = alpha;
     for (const s of layout) {
       const w = boxW * s.k, h = boxH * s.k;
-      ctx.drawImage(cv, s.x * D - w / 2, s.y * D - h / 2, w, h);
+      const dx = s.x * D, dy = s.y * D;
+      if (!s.rot) { ctx.drawImage(cv, dx - w / 2, dy - h / 2, w, h); continue; }
+      // 每个实例自己的朝向（如 Ultra Stinger 的"尖端朝向中心"）
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(s.rot);
+      ctx.drawImage(cv, -w / 2, -h / 2, w, h);
+      ctx.restore();
     }
     ctx.restore();
   }
@@ -559,8 +602,11 @@ const CardRenderer = (function () {
   //   opts = { rarity, svg, px(像素边长), pad, radius }
   function renderCardTo(cv, opts) {
     const o = opts || {};
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
     const px = Math.max(8, Math.round(o.px || 128));
-    if (cv.width !== px || cv.height !== px) { cv.width = px; cv.height = px; }
+    const W = Math.max(1, Math.round(px * dpr));   // 后备缓冲按 DPR 放大：HiDPI 下卡面/名称不糊
+    if (cv.width !== W || cv.height !== W) { cv.width = W; cv.height = W; }
+    if (cv.style.width !== px + 'px') { cv.style.width = px + 'px'; cv.style.height = px + 'px'; }
     const st = cv._card || (cv._card = {});
     st.rarity = o.rarity || 'common';
     st.svg = (o.svg != null) ? o.svg : null;

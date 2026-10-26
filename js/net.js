@@ -33,6 +33,18 @@ const MOB_ACTIVE_R = 2200;          // 与玩家距离超过它 -> 生物休眠�
 const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
 const HONEY_PULL_R = 700;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
 const HONEY_IMMUNE_T = 40;          // 被蜜影响累计满 40s -> 该生物永久免疫所有蜜
+const PETAL_ATTACK_DUR = 0.004;     // 花瓣每次命中(25Hz)按最大耐久比例磨损：攻击也耗耐久，与其它花瓣一视同仁
+const HONEY_PUSH = 40;              // 蜜硬碰撞时被生物顶开的冲量(px/s)：配合位置强制分离，使蜜被生物推着走
+// 花瓣实体的重量：优先取实体自带的 weight（entities.js 按稀有度写入）；
+// 缺失时按卡片稀有度即时换算 —— 保证任何来源的花瓣实体都走同一套重量口径。
+function petalWeight(b) {
+  if (b && b.weight) return b.weight;
+  const r = (b && b.card && b.card.rarity) || 'common';
+  return (typeof rarityWeight === 'function') ? rarityWeight(r) : 1;
+}
+// 质量悬殊带来的传递增益【上限】：以"同等级实体之间的击退"为基准 1，最大只允许 1.5 倍。
+// 仅作用于【生物击退】；实体之间的推动 / 位移分离不设上限，按反质量自然分配。
+const KB_DISPARITY_MAX = 1.5;
 
 // ---------------- 传输层抽象 ----------------
 // 只约定「消息」这一种形态：上行 send()、下行 onMessage()。
@@ -545,25 +557,60 @@ class LocalServer {
         if (!hit) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
-        // ---- 动能传递（花瓣与生物之间没有硬碰撞，只有吸附 + 接触时传一次动能）----
-        //   · 方向：接触法线（从生物表面指向花瓣），把生物往反方向推
-        //   · 大小：基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数
-        //   · 只在"撞上去"的那一下传：贴住揉搓（接近速度≈0）不产生任何推力，
-        //     并且同一片花瓣 0.28s 内只传一次 —— 绝不会像硬碰撞那样被持续顶着走。
+        // ---- 花瓣 vs 生物的接触性质：按花瓣种类分派（nx/ny = 接触法线，由生物表面指向花瓣）----
+        //   · 普通花瓣 =【软碰撞】：本身不构成阻挡，只在接近时传一次动能把生物弹开，
+        //     大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数，0.28s 内只传一次。
+        //   · Honey    =【硬碰撞】：是有质量的实体【��】，与生物重叠即按穿透深度强制分离（绝不重合），
+        //     因此会被持续推进的生物顶着往前走。注意：这里的分离判定【不看接近速度】，
+        //     放在地上的蜜自身速度≈0，若挂在"接近速度够大"之后会永远不执行，
+        //     结果就退化成"只结算伤害、没有实体碰撞"。
         const nx = hit.nx, ny = hit.ny;
         const approach = Math.max(0, -((b.vx || 0) * nx + (b.vy || 0) * ny));
         const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
         const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
         const isHoney = !!(b.card && b.card.type && b.card.type.slug === 'honey');
-        if (!isHoney && approach >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+        // 花瓣重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight，随稀有度递增）。
+        // 花瓣实体长期缺失 weight，正是"连 Eternal 蜜都被 rare 生物随便推着跑"的根因。
+        const wP = petalWeight(b), wM = m.weight || 1;
+        const invP = 1 / wP, invM = 1 / wM, invSum = (invP + invM) || 1;
+        const shareP = invP / invSum, shareM = invM / invSum;   // 各自的"可动份额"（反质量分配）
+        // 质量悬殊系数：等重（=同等级实体之间）恒为 1，悬殊时放大传递效果。
+        // 【仅】作用于生物击退时封顶 1.5×（用户要求：最大动能传递 = 同等级实体间击退的 1.5 倍）；
+        // 实体之间的推动 / 位移分离不走这里，按反质量自然分配，【不设上限】。
+        const kbBoost = clamp(Math.sqrt(wP / wM), 2 / 3, KB_DISPARITY_MAX);
+        if (isHoney) {
+          // 蜜 =【硬碰撞】实体：只要重叠就每 tick 强制分离，且分离量按【反质量分配】
+          // （与 physicsPush 完全同一套模型）—— 重的一方几乎不动：
+          // Eternal 蜜（≈249）面对 rare 生物（≈4）几乎不位移，反而把撞上来的轻生物顶开。
+          const depth = hit.depth || 0;
+          if (depth > 0) {
+            b.x += nx * depth * shareP; b.y += ny * depth * shareP;
+            m.x -= nx * depth * shareM; m.y -= ny * depth * shareM;
+          }
+          // 顺势给一点沿法线向外的惯性滑行（0.28s 节流，避免每 tick 叠加把蜜弹飞）；
+          // 推动量同样按反质量衰减：越重的蜜越推不动。
+          if (!(b.kbT > 0)) {
+            const mobIn = (m.vx || 0) * nx + (m.vy || 0) * ny;   // 生物朝蜜这一侧的接近速度
+            const k = clamp(Math.max(approach, mobIn) / PETAL_KB_REF, 0.35, 2.2);
+            const push = HONEY_PUSH * k * shareP;
+            b.vx = (b.vx || 0) + nx * push;
+            b.vy = (b.vy || 0) + ny * push;
+            b.kbT = PETAL_KB_CD;
+          }
+        } else if (approach >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+          // 普通花瓣 =【软碰撞】：只在撞上去那一下传一次动能把生物弹开，自身不硬抗。
+          // 传递量含质量悬殊系数 kbBoost，但已封顶 1.5× 一般值（同等级实体间击退）。
           const impact = clamp(approach / PETAL_KB_REF, 0.35, 2.2);
-          applyKnockback(m, -nx, -ny, PETAL_KB_BASE * jshare * jmass * impact);
+          applyKnockback(m, -nx, -ny, PETAL_KB_BASE * jshare * jmass * impact * kbBoost);
           b.kbT = PETAL_KB_CD;
         }
         const toPetal = Math.max((m.dmg || 0) - 0, 0);
         const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
         if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
-        if (toMob > 0) this._hitMob(m, toMob);
+        if (toMob > 0) {
+          this._hitMob(m, toMob);
+          b.hp -= b.maxHp * PETAL_ATTACK_DUR;   // 攻击也磨损耐久，与其它花瓣一视同仁
+        }
         if (b.hp <= 0) this._destroyPetal(b);
         if (m.dead) break;
       }
@@ -609,7 +656,10 @@ class LocalServer {
         const bt = b.card.type;
         if (!bt || bt.slug !== 'honey') continue;
         const maxR = (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(bt, b.card.rarity) : null;
-        if (maxR && mIdx > RARITY_ORDER.indexOf(maxR)) continue;
+        // 该稀有度的蜜【没登记上限】（如 common 蜜）-> 什么都吸引不了，而不是"什么都不限"。
+        // 之前写成 `if (maxR && ...)`，缺失时直接放行，导致 common 蜜也能吸引全场 —— 这是错的。
+        if (!maxR) continue;
+        if (mIdx > RARITY_ORDER.indexOf(maxR)) continue;
         if (dist2(b.x, b.y, m.x, m.y) > HONEY_PULL_R * HONEY_PULL_R) continue;
         // 仇恨值取"远高于任何伤害"，且 topThreat() 里蜜强制首位 —— 双重保证优先啃蜜
         if (!m.threat.some((t) => t.ent === b)) m.threat.push({ ent: b, dmg: 1e9 });
@@ -634,7 +684,7 @@ class LocalServer {
   }
 
   _hitMob(m, toMob) {
-    if (toMob <= 0) return;
+    if (toMob <= 0) return false;
     const r = m.hurt(toMob, this.player);
     if (r.applied > 0) {
       m.pendDmg = (m.pendDmg || 0) + r.applied;
@@ -649,6 +699,7 @@ class LocalServer {
         x: m.x, y: m.y                       // 掉落物出现在生物死亡位置
       });
     }
+    return !!(r.killed);
   }
 
   // 把某个怪在聚合窗口内累计的真实伤害作为一条飘字事件发出（普通命中也要有伤害反馈，
@@ -794,8 +845,7 @@ class LocalServer {
         if (m.type.id !== mobId) continue;
         if (rarity !== 'all' && m.rarity !== rarity) continue;
         if (scope === 'near' && (m.x - px) * (m.x - px) + (m.y - py) * (m.y - py) > NEAR_R * NEAR_R) continue;
-        this._hitMob(m, 1e9);
-        killed++;
+        if (this._hitMob(m, 1e9)) killed++;   // 只在真正死亡时计入，避免假报成功
         if (killed >= count) break;
       }
       this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill-mob/Done', { 0: killed }, 'Killed ' + killed + ' mob(s).') });
@@ -841,10 +891,17 @@ class LocalServer {
       // 少了这一段，服务端花瓣掉血甚至碎掉，客户端都看不到（表现为"花瓣不受伤"）。
       // 一张卡可能对应多个独立实体（Light 的每个光点）：用 (slot, sub, gen) 唯一定位。
       // gen = 世代号：滞留型花瓣（Pollen / Honey）脱轨后重新装填，同一槽会同时存在多批实体。
-      petals: p ? p.petals.map((b) => ({
-        slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
-        hurtT: b.hurtT || 0, dead: !!b.dead
-      })) : [],
+      // 滞留实体（放在地上的 Pollen / Honey）的【位置与速度】必须由服务端权威下发：
+      // 它们会被生物硬碰撞推挤，客户端若只按自己算的就永远停在原地 ——
+      // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
+      petals: p ? p.petals.map((b) => {
+        const o = {
+          slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
+          hurtT: b.hurtT || 0, dead: !!b.dead
+        };
+        if (b.stationary) { o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0; }
+        return o;
+      }) : [],
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
       ents: this.ents.map((m) => ({
         id: m.netId, typeId: m.type.id, rarity: m.rarity, level: m.level,

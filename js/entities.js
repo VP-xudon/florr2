@@ -16,7 +16,14 @@ const BEE_WANDER_FACTOR = 1.2;        // 蜜蜂游荡 = 瓢虫同分布游荡速
 // 走 S 型（持续左右摆头）的生物：目前只有蜜蜂
 const MOB_S_PATH_SLUGS = { bee: 1 };
 const BEE_S_AMP = 0.62;               // 摆头幅度（弧度 ≈ 35°）
-const BEE_S_HZ = 0.85;                // 摆头频率（Hz）
+const BEE_S_HZ = 0.85;                // Common 蜜蜂的摆头频率（Hz）
+// 蜜蜂 S 型的【稀有度渐变】：稀有度越高越"沉稳" —— 摆幅越小、单个 S 越长（越接近直线行走）。
+// Common -> Eternal 线性插值，终点的要求：
+//   Eternal 单个 "S" 的弧度 = Common 的 0.2 倍；长度 = Common 的 2 倍（=> 频率 = 1/2）。
+const BEE_S_AMP_MIN_K = 0.2;          // Eternal 摆幅 / Common 摆幅
+const BEE_S_LEN_MAX_K = 2.0;          // Eternal 单个 S 长度 / Common 长度
+// 花瓣实体的绘制尺寸（与 draw() 里的 size 必须同一套，阵型偏移要用它换算）
+const PETAL_ENT_SIZE = 15 * 0.9;      // 13.5：花瓣视觉缩至原 0.9
 // 实体重量按【横截面积(直径²)】换算：直径差 N 倍 -> 重量差 N² 倍。
 // 例：super 直径约为 common 的 ~11 倍 -> ~121 倍重（用户要求面积而非线性）。
 // 障碍型生物 ×5；花朵本体 = unusual 重量；花瓣 = 对应稀有度重量。
@@ -153,6 +160,9 @@ const PETAL_PULL_CD = 0.5;         // 松手后对该生物的再吸附冷却（
 const PETAL_DETACH_KICK = 0.55;   // 脱离瞬间保留的惯性比例（其余能量在"脱手"时损耗）
 const PETAL_DETACH_DRAG = 3.2;    // 惯性衰减速率：越大越快停住（3.2 ≈ 一两秒滑停）
 const PETAL_DETACH_TTL = 30;      // Pollen 实体最长存在时间（秒）；Honey 由血量决定
+// 滞留实体跟随服务端权威位置的插值时长（= 快照间隔 25Hz）：
+// 直接采信快照坐标会让它在 60fps 下按 25Hz 台阶跳 -> 被推挤时"一卡一卡/发粘"。
+const PETAL_NET_SYNC = 1 / 25;
 
 // 花瓣对生物只做【动能传递】，不是硬碰撞：接触瞬间传一次，之后就贴着揉搓。
 //   · 大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数
@@ -572,6 +582,19 @@ class Player {
           : null);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
+      // 滞留实体（Pollen / Honey）位置与速度取服务端权威值：它们会被生物硬碰撞推挤，
+      // 客户端必须跟随，否则服务端已经把蜜推开、客户端仍留在原地 ->
+      // 表现为"生物与蜜重合"（看起来像根本没有实体碰撞）。
+      if (b.stationary && ns.x != null) {
+        // 不把坐标硬赋值过去：那样它会跟着 25Hz 的快照台阶跳 —— 被连续推挤时
+        // 就是明显的"一卡一卡 / 很粘"。改为记录起终点，由每帧插值还原平滑位移。
+        if (b.nToX == null || Math.abs(ns.x - b.nToX) > 0.01 || Math.abs(ns.y - b.nToY) > 0.01) {
+          b.nFromX = b.x; b.nFromY = b.y;
+          b.nToX = ns.x; b.nToY = ns.y;
+          b.nBlend = 0;
+        }
+        b.vx = ns.vx || 0; b.vy = ns.vy || 0;
+      }
       // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
       if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
       if (ns.dead && !b.dead) {
@@ -659,8 +682,11 @@ class Player {
     // 每个光点各占一个轨道位 —— 所以轨道总数 = Σ 各槽光点数。
     const cntOf = (card) => (card && CardRenderer.lightSubCount)
       ? CardRenderer.lightSubCount(card.type, card.rarity) : 1;
+    // 【阵型多体】（Stinger 起）：整坨【共用一个轨道位】（像加载一个花瓣那样分配位置）；
+    // 其余一卡多体（Light / Pollen）仍然是每个实体各占一个轨道位、各自独立飞。
+    const spotOf = (card) => (card && card.type && card.type.formation) ? 1 : cntOf(card);
     let totalSpots = 0;
-    for (let k = 0; k < n; k++) totalSpots += cntOf(this.slots[equipped[k]]);
+    for (let k = 0; k < n; k++) totalSpots += spotOf(this.slots[equipped[k]]);
     const spotStep = totalSpots > 0 ? TAU / totalSpots : 0;
 
     // 同步实体列表：同一张卡保留其运动状态；新出现的实体从人物中心出生。
@@ -700,8 +726,9 @@ class Player {
       const slotIndex = equipped[k];
       const card = this.slots[slotIndex];
       const cnt = cntOf(card);
+      const nSpot = spotOf(card);   // 本槽占用几个轨道位（阵型型恒为 1）
       const myBase = spotBase;      // 该槽占用的第一个轨道位（装填中也照占，保持排布稳定）
-      spotBase += cnt;
+      spotBase += nSpot;
       if (!this.reloadDone(slotIndex)) continue;    // 装填中：占位但不生成
       const st = petalStatsFor(card.type, card.rarity);
       // 血量按【卡面总 hp】均分：一张卡有 N 个实体，每个实体占卡面 hp 的 1/N。
@@ -717,12 +744,37 @@ class Player {
             && b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
         }
         if (!body) {
-          body = { slotIndex, sub, gen, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0 };
+          // 花瓣实体重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight 模型，
+          // 随稀有度递增：common=1 …… rare≈4 …… eternal≈249）。
+          // 注释原话就是"花瓣 = 对应稀有度重量"，但此前实体对象上根本没有这个字段，
+          // 导致所有花瓣在推挤/击退中一律视为"没有重量"——连 Eternal 蜜都被 rare 生物推着跑。
+          body = { slotIndex, sub, gen, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0,
+            weight: rarityWeight(card.rarity) };
         }
         body.age += dt;
         body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
         body.ord = k; body.n = n;
-        body.cnt = cnt; body.spot = myBase + sub;   // 该实体占用的轨道位
+        body.cnt = cnt;
+        body.spot = (nSpot === 1) ? myBase : myBase + sub;   // 阵型型：整坨共用同一个轨道位
+        // ---- 阵型多体（Stinger 起）：子实体按【卡面同款布局】锁定偏移 + 各自朝向 ----
+        // 每个子实体仍是完全独立的个体（各自结算碰撞、各自有血量），
+        // 只是位置/朝向常年被布局锁定成卡面那一坨的形状。
+        if (nSpot === 1 && cnt > 1) {
+          const lay = (typeof CardRenderer !== 'undefined' && CardRenderer.multiLayout)
+            ? CardRenderer.multiLayout(card.type.svg, card.rarity) : null;
+          const s = (lay && lay[sub]) ? lay[sub] : null;
+          if (s) {
+            // 单位必须与【卡面】同构，否则实体排布会和卡面差出好几倍：
+            //   卡面  D = lightDRatio(svg, false) × dw
+            //   实体  D = lightDRatio(svg, true)  × 实体绘制尺寸(PETAL_ENT_SIZE)
+            // 之前误用 PETAL_D(=碰撞直径 25.2) 而实体实际只画 13.5 —— 间距整整大了 ~2.5 倍。
+            const entD = (typeof CardRenderer !== 'undefined' && CardRenderer.lightDRatio)
+              ? CardRenderer.lightDRatio(String(card.type.svg), true) * PETAL_ENT_SIZE
+              : PETAL_ENT_SIZE;
+            body.formOff = { x: s.x * entD, y: s.y * entD };
+            body.formRot = s.rot || 0;
+          }
+        }
         // 标记"这是蜜"：AI 用它判断"被蜜吸引"的生物连被动型也会主动过来啃
         body.honey = (card.type.slug === 'honey');
         // ---- 滞留型花瓣（Pollen / Honey）：reach / detect 模式加载完成后 0.5s 脱轨 ----
@@ -800,6 +852,15 @@ class Player {
       // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
       // 不再跟随轨道、也不参与生物吸附（它就"放在地上"）。
       if (b.stationary) {
+        // 服务端权威位置插值（25Hz 快照 -> 每帧）：这是"推动时一卡一卡"的主因，
+        // 直接采信快照坐标就会按 25Hz 台阶跳。改为帧间线性插值，位移连续平滑。
+        // 有权威位置时不再叠加本地惯性 —— 两者同时跑会互相打架，观感发"粘"。
+        if (b.nToX != null) {
+          b.nBlend = Math.min(1, (b.nBlend || 0) + dtc / PETAL_NET_SYNC);
+          b.x = b.nFromX + (b.nToX - b.nFromX) * b.nBlend;
+          b.y = b.nFromY + (b.nToY - b.nFromY) * b.nBlend;
+          continue;
+        }
         if (b.vx == null) { b.vx = 0; b.vy = 0; }
         b.vx = damp(b.vx, 0, PETAL_DETACH_DRAG, dt);
         b.vy = damp(b.vy, 0, PETAL_DETACH_DRAG, dt);
@@ -814,8 +875,21 @@ class Player {
       const mult = noReach ? Math.min(1, reachMult) : reachMult;
       const reach = baseReach * mult;
       const ang = this.spin + (b.spot || 0) * spotStep;
-      const tx = this.x + Math.cos(ang) * reach;
-      const ty = this.y + Math.sin(ang) * reach;
+      let tx = this.x + Math.cos(ang) * reach;
+      let ty = this.y + Math.sin(ang) * reach;
+      // 阵型偏移：整坨跟着同一个轨道位走，各子体再叠加【旋转到本瓣朝向】的布局偏移 ——
+      // 于是它们恒保持卡面那一坨的形状（"被神秘力量锁定排列在一起"）。
+      // 旋转基准取 R = ang + π/2，与单片花瓣自身的绘制朝向同一帧：
+      // 这样世界里的排布 = 卡面排布整体旋转 R，与卡面严格同构。
+      if (b.formOff) {
+        const R = ang + Math.PI / 2;
+        // 绘制朝向也要【由阵型基准统一给出】：否则每个子体各自按自身位置算朝向，
+        // Ultra Stinger 的"尖端朝向中心"会被各子体自己那点偏移带偏而失真。
+        b.drawRot = R + (b.formRot || 0);
+        const cR = Math.cos(R), sR = Math.sin(R);
+        tx += b.formOff.x * cR - b.formOff.y * sR;
+        ty += b.formOff.x * sR + b.formOff.y * cR;
+      }
 
       // ---- 花瓣吸附（果冻感）----
       // 生物边缘离花瓣 ≤ 1 倍花瓣直径时被强力吸过去；一旦吸住就贴在生物表面
@@ -844,7 +918,7 @@ class Player {
         for (const m of nearMobs) {
           if (!m || m.dead) continue;
           const q = mobShapeNearest(m, b.x, b.y);
-          if (q.dist <= bestEdge) { bestEdge = q.dist; best = m; }
+          if (q && q.dist <= bestEdge) { bestEdge = q.dist; best = m; }
         }
         if (best) { mob = best; b.pullD0 = orbitGap; b.pullT = 0; }
       }
@@ -853,8 +927,8 @@ class Player {
         // 落点 = 轮廓上的最近点 + 外法线 × 轻微嵌入量。
         // 用轮廓而不是外接圆：凹处/细长处花瓣才不会悬在空气里（就是"飘一下"的来源）。
         const q = mobShapeNearest(mob, b.x, b.y);
-        gx = q.x + q.nx * (PETAL_R * 0.55);
-        gy = q.y + q.ny * (PETAL_R * 0.55);
+        if (q) { gx = q.x + q.nx * (PETAL_R * 0.55); gy = q.y + q.ny * (PETAL_R * 0.55); }
+        else { gx = mob.x; gy = mob.y; }   // 无外形时不吸附，落在生物中心附近
         K = PETAL_SPRING_K * PETAL_PULL_K;               // 吸附力远大于回轨力：吸上就难回来
       }
 
@@ -875,6 +949,8 @@ class Player {
       x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age,
       hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead,
       stationary: !!b.stationary,
+      // 阵型型子实体：整体朝向由更新阶段算好（基准 + 布局朝向，如 Ultra Stinger 尖端向心）
+      drawRot: (b.drawRot != null) ? b.drawRot : null,
       // 自带贴图键：滞留实体可能在卡片被卸下之后还存在，不能再依赖 slots[index]
       svg: (b.card && b.card.type) ? b.card.type.svg : null,
       hp: b.hp, maxHp: b.maxHp
@@ -885,7 +961,7 @@ class Player {
     // 死亡：先播完花瓣退场幽灵（渐隐），再画死亡本体（随机角度 + 叉叉眼 + 哭脸）
     if (this.dead) {
       for (const g of this.petalGhosts) {
-        const size = 15 * 0.9;
+        const size = PETAL_ENT_SIZE;
         const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
         const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
@@ -900,11 +976,13 @@ class Player {
     for (const pp of this.petalWorld) {
       if (pp.fxActive || pp.dead) continue;         // 已碎实体不绘制（等独立重装填）
       const p = this.slots[pp.index];
-      const size = 15 * 0.9;                        // 13.5：花瓣视觉缩至原 0.9
+      const size = PETAL_ENT_SIZE;                        // 13.5：花瓣视觉缩至原 0.9
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       // 滞留实体（放在地上的 Pollen/Honey）固定正向、不做出场渐显
       const svgKey = pp.svg || (p && p.type && p.type.svg);
-      const rot = pp.stationary ? 0 : Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
+      // 阵型型子实体用更新阶段算好的整体朝向；普通花瓣才按自身位置算
+      const rot = (pp.drawRot != null) ? pp.drawRot
+        : (pp.stationary ? 0 : Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2);
       const a = pp.stationary ? 1 : spawnFade(pp.age);
       const cv = svgKey ? CardRenderer.artCanvas(svgKey, 128) : null;   // 未就绪时返回 null
       if (cv) drawPetalArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
@@ -923,7 +1001,7 @@ class Player {
     // 放大到 1.5 倍不会盖住主角：轨道半径约 43px、主角半径 15.6px，
     // 花瓣放大后半宽 10.1px，内缘仍在 33px 处，离主角边缘还有 17px 余量。
     for (const g of this.petalGhosts) {
-      const size = 15 * 0.9;                         // 与在场花瓣同尺寸
+      const size = PETAL_ENT_SIZE;                         // 与在场花瓣同尺寸
       const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
@@ -1017,7 +1095,7 @@ class Player {
     for (const pp of this.petalWorld) {
       if (!pp.fxActive || pp.dead) continue;
       const p = this.slots[pp.index];
-      const size = 15 * 0.9;
+      const size = PETAL_ENT_SIZE;
       const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
       const a = spawnFade(pp.age);
       const cv = CardRenderer.artCanvas(p.type.svg, 128);
@@ -1189,7 +1267,7 @@ function _mobRot(m) {
 function circleVsMobPoly(m, cx, cy, cr) {
   const poly = m.shape;
   if (!poly || !poly.pts || poly.pts.length < 3) return null;
-  const D = m.drawSize;
+  const D = m.collSize;
   // 世界 -> 生物本地（贴图随 facing + artRot 旋转，与绘制完全一致）
   const { c, s } = _mobRot(m);
   const dx = cx - m.x, dy = cy - m.y;
@@ -1215,13 +1293,8 @@ function circleVsMobPoly(m, cx, cy, cr) {
 // 花瓣吸附的落点必须贴着【真实外形】——用外接圆会把花瓣拉到空气里（"飘"）。
 function mobShapeNearest(m, x, y) {
   const poly = m.shape;
-  if (!poly || !poly.pts || poly.pts.length < 3) {
-    const dx = x - m.x, dy = y - m.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const nx = dx / d, ny = dy / d, r = m.r || 0;
-    return { x: m.x + nx * r, y: m.y + ny * r, nx, ny, dist: d - r, inside: d < r };
-  }
-  const D = m.drawSize;
+  if (!poly || !poly.pts || poly.pts.length < 3) return null;   // 纯矢量：无多边形不吸附（首帧可能为空）
+  const D = m.collSize;
   const { c, s } = _mobRot(m);
   const dx = x - m.x, dy = y - m.y;
   const lx = dx * c + dy * s, ly = -dx * s + dy * c;
@@ -1246,20 +1319,9 @@ function mobShapeNearest(m, x, y) {
 // 返回 { nx, ny, depth }：法线由生物表面指向圆心（世界空间）。
 function mobHitTest(m, cx, cy, cr) {
   const poly = m.shape;
-  const shaped = !!(poly && poly.pts && poly.pts.length >= 3);   // 轮廓是否可用
-  if (shaped) {
-    const hit = circleVsMobPoly(m, cx, cy, cr);
-    if (hit) return hit;
-    return null;                                                 // 有轮廓：以轮廓为准
-  }
-  // 没有轮廓（贴图未就绪 / 提取失败 / 退化）：退回外接圆，保证一定能撞到
-  const rr = (m.r || 0) + cr;
-  if (dist2(cx, cy, m.x, m.y) < rr * rr) {
-    const dx = cx - m.x, dy = cy - m.y;
-    const d = Math.hypot(dx, dy) || 1;
-    return { nx: dx / d, ny: dy / d, depth: rr - d };
-  }
-  return null;
+  // 纯矢量碰撞：只认外形多边形，不回退外接圆（避免膨胀圆导致碰撞箱过大 / 隔很远就打到人）
+  if (!(poly && poly.pts && poly.pts.length >= 3)) return null;   // 无矢量外形则无碰撞
+  return circleVsMobPoly(m, cx, cy, cr);
 }
 
 class Mob {
@@ -1278,8 +1340,9 @@ class Mob {
     const diam = Math.round(PLAYER_VISUAL_D * (MOB_DIAM[this.rarity] || MOB_DIAM_BASE)
       * mobScale(this.level) * sizeScale);
     this.visualD = diam;
-    this.r = diam / 2;                  // 碰撞/名牌半径跟着视觉直径走
-    this.drawSize = diam;               // 贴图裁剪后正好撑满它 -> 视觉与碰撞箱一致
+    this.drawSize = diam;               // 视觉裁剪框（含 bee 体型倍数，决定画多大）
+    this.collSize = diam / sizeScale;   // 碰撞用尺寸：剔除 bee 体型倍数，使攻击距离与同稀有度一致
+    this.r = this.collSize / 2;         // 碰撞/名牌半径：用 collSize（不被 bee 体型倍数放大）
     this.shape = null;                  // 碰撞外形：SVG 轮廓多边形 { pts, r }（玩家/接触判定用）
     this.hull = null;                   // 同一轮廓的凸包（墙体碰撞用，凹处不会卡）
     this.x = x; this.y = y; this.vx = 0; this.vy = 0;
@@ -1296,10 +1359,14 @@ class Mob {
     this.wanderSpeed = this.obstacle ? 0
       : (isBee ? ladybugWander * BEE_WANDER_FACTOR : ladybugWander) * MOB_WANDER_SCALE;
     this.speed = this.wanderSpeed;
-    // S 型路线（蜜蜂）：朝向按正弦持续左右偏摆，走出一条蛇形曲线
+    // S 型路线（蜜蜂）：朝向按正弦持续左右偏摆，走出一条蛇形曲线。
+    // 稀有度越高越沉稳：摆幅按比例收窄、单个 S 拉长（频率 = 基准频率 / 长度倍数）。
+    // Common(1.0×摆幅 / 1.0×长度) -> Eternal(0.2×摆幅 / 2.0×长度)，中间按稀有度线性插值。
     this.sPath = isBee;
-    this.sAmp = BEE_S_AMP;
-    this.sHz = BEE_S_HZ;
+    const _ri = (typeof RARITY_ORDER !== 'undefined') ? RARITY_ORDER.indexOf(this.rarity) : 0;
+    const _t01 = _ri < 0 ? 1 : clamp(_ri / Math.max(1, RARITY_ORDER.length - 1), 0, 1);  // 0=common, 1=eternal
+    this.sAmp = BEE_S_AMP * (1 + (BEE_S_AMP_MIN_K - 1) * _t01);
+    this.sHz = BEE_S_HZ / (1 + (BEE_S_LEN_MAX_K - 1) * _t01);
     // 重量：按横截面积(直径²)；障碍型 ×5（几乎推不动）
     this.weight = rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
     this.color = type.color; this.boss = !!type.boss;

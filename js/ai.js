@@ -58,7 +58,7 @@ const MobAI = {
       // 走够了距离（或超时兜底：被墙卡住也不会永远走不完）-> 停下来等一会儿
       if (ai.remain <= 0 || ai.t <= 0) {
         ai.phase = 'idle';
-        ai.t = rand(2, 6);       // 原地停留 2~6 秒（更有昆虫的从容感）
+        ai.t = rand(2, 6) * 0.4; // 原地停留缩短为 0.4x（体验优化：游荡停顿不再过久）
         return { x: 0, y: 0 };
       }
       return { x: ai.dirX * mob.wanderSpeed, y: ai.dirY * mob.wanderSpeed };

@@ -15,7 +15,7 @@ const KEY_ACTION = {
   KeyA: 'left', ArrowLeft: 'left',
   KeyD: 'right', ArrowRight: 'right',
   Space: 'mode1',                        // reach
-  ShiftLeft: 'mode2', ShiftRight: 'mode2' // detect
+  ShiftLeft: 'sLeft', ShiftRight: 'sRight' // detect（左右 Shift 分开记，避免同时按下一个松开即整体取消）
 };
 // 兜底：个别环境 e.code 缺失时，用 e.key 反查【物理键位】。
 // 注意这里必须映射成 e.code 的形式（KeyW / ArrowRight …），而不是直接的逻辑动作：
@@ -108,7 +108,7 @@ class Game {
       if (!code) return;
       this._down.delete(code);
       const act = KEY_ACTION[code];
-      if (act === 'mode1' || act === 'mode2') this.keys[act] = false;
+      if (act === 'mode1' || act === 'sLeft' || act === 'sRight') this.keys[act] = false;
     });
     // 失焦时清空按键：避免切窗后"松手了仍在移动 / 模式卡住"
     window.addEventListener('blur', () => { this._down.clear(); this.keys = {}; });
@@ -457,12 +457,18 @@ class Game {
 
   // ---------- 主循环 ----------
   start() {
+    // 固定步长累加器：真实经过多少时间就模拟多少（低帧率不再"减速"）。
+    // 单帧最多补 MAX_STEPS 步并丢弃剩余，避免卡顿后"螺旋补偿"越积越多。
+    const STEP = 1 / 60, MAX_STEPS = 8;
     const loop = (ts) => {
       const now = ts / 1000;
       let dt = now - (this.last || now);
       this.last = now;
-      dt = Math.min(dt, 0.05);
-      this.update(dt);
+      if (dt > 0.25) dt = 0.25;                 // 极端掉帧/切后台封顶，防止一次性补几千步
+      this.acc = (this.acc || 0) + dt;
+      let n = 0;
+      while (this.acc >= STEP && n < MAX_STEPS) { this.update(STEP); this.acc -= STEP; n++; }
+      if (n >= MAX_STEPS) this.acc = 0;
       this.render();
       requestAnimationFrame(loop);
     };
@@ -474,7 +480,7 @@ class Game {
     const dir = this._readDir();
     // 模式控制：空格 = mode1 -> reach（花瓣距离×2 + 生气眼），Shift = mode2 -> detect（距离×0.3 + 伤心眼）
     p.mode = (this.keys['mode1'] || this.keys['mouse1']) ? 'reach'
-           : (this.keys['mode2'] || this.keys['mouse2']) ? 'detect' : 'normal';
+           : (this.keys['sLeft'] || this.keys['sRight'] || this.keys['mouse2']) ? 'detect' : 'normal';
 
     // 鼠标移动模式：平滑地把朝向转向指针。停住/开窗口时 Player.update 不再更新朝向，
     // 这里补上——做到"眼睛跟随鼠标但不走动"（玩家 facing 不在快照里，纯客户端表现）。
@@ -510,6 +516,13 @@ class Game {
     if (p.dead && !this._deathShown) {
       this._deathShown = true;
       UI.showDeathScreen(p.killedBy);
+    }
+    // 复活复位：角色复活后清掉死亡界面与残留标志（/resphere 走另一条复活路径，
+    // 不会触发按钮复活的复位分支，这里做镜像处理保证一致）
+    if (!p.dead && this._deathShown) {
+      this._deathShown = false;
+      this._aggroCleared = false;
+      UI.hideDeathScreen();
     }
 
     // 仇恨豁免：死亡当帧立即把玩家从所有生物的仇恨表里移除。
@@ -787,8 +800,14 @@ class Game {
     ctx.strokeStyle = '#39ff14';
     ctx.beginPath();
     let fallback = false;
+    const camX = this.camera.x, camY = this.camera.y;
+    const _px = this.W * 2, _py = this.H * 2;
+    const _x0 = camX - this.W / 2 - _px, _x1 = camX + this.W / 2 + _px;
+    const _y0 = camY - this.H / 2 - _py, _y1 = camY + this.H / 2 + _py;
     for (const m of mobs || []) {
       if (m.dead && m.deathTimer > 0.2) continue;
+      const mr = (m.r || 0) + 4;
+      if (m.x + mr < _x0 || m.x - mr > _x1 || m.y + mr < _y0 || m.y - mr > _y1) continue;  // 视口剔除：与实体渲染同源
       const sh = m.shape;
       if (!sh || !sh.pts || sh.pts.length < 3) {
         ctx.moveTo(m.x + (m.r || 0), m.y);

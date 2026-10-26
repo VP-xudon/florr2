@@ -299,6 +299,9 @@ const UI = {
     this.refs.bagBtn.addEventListener('click', () => { if (this.onBagToggle) this.onBagToggle(); });
     this.refs.dexBtn.addEventListener('click', () => { if (this.onDexToggle) this.onDexToggle(); });
     this.refs.setBtn.addEventListener('click', () => { if (this.onSettingsToggle) this.onSettingsToggle(); });
+    // 硬窗口风格：左下角按钮不接收键盘焦点，避免按空格（reach）误触发其默认 click /
+    // 回车等，导致非主动的焦点交互（如空格开关 Mob Gallery）。鼠标点击不受影响。
+    [this.refs.bagBtn, this.refs.dexBtn, this.refs.setBtn].forEach(b => { if (b) b.tabIndex = -1; });
     // 按钮悬浮提示：原生 title 已移除，改用与卡牌同款式的 canvas 悬浮框
     this._bindSimpleTip(this.refs.bagBtn, () => I18N.t('UI/Inventory/Title', 'Inventory'));
     this._bindSimpleTip(this.refs.dexBtn, () => I18N.t('UI/MobGallery/Title', 'Mob Gallery'));
@@ -612,7 +615,7 @@ const UI = {
     g.innerHTML = '';
     const rarName = (r) => I18N.t('Rarities/' + r + '/Name', r);
     const petals = PETAL_TYPES.slice().sort((a, b) => a.name.localeCompare(b.name));
-    for (const rar of RARITY_ORDER) {
+    for (const rar of [...RARITY_ORDER].reverse()) {   // 高稀有度在上、低稀有度在下
       const col = (RARITIES[rar] && RARITIES[rar].color) || '#fff';
       const grp = this._rarGroup(rarName(rar), col, petals, rar);
       if (grp) g.appendChild(grp);   // 该等级一张都没有则不显示分割线
@@ -688,7 +691,9 @@ const UI = {
       this._bindCard(cell, card, { type: 'gallery', index: -1 },
         () => {
           // 数量已在「按下」时原子扣过，这里只负责装备，绝不再动数量
-          if (this.onGalleryCardClick) this.onGalleryCardClick(card);
+          if (!this.onGalleryCardClick) return;
+          const ok = this.onGalleryCardClick(card);
+          if (!ok) this._incGallery(card);   // 装备失败（无空槽等）：回滚按下的那张，避免丢卡
         });  // gallery 支持拖拽和点击
       this._bindTip(cell, p, rarity);
       grid.appendChild(cell);
@@ -831,7 +836,9 @@ const UI = {
       // 扇形会停在死前那半截进度 —— 表现为"卡面上停着的加载特效"。
       // 死亡期间一律按未激活处理：扇形阴影消失，统一由 hpShadow 爬到全阴影接管。
       const r = p.reload[i];
-      const active = !p.dead && !!(r && r.dur > 0 && r.age < r.dur);
+      // hold（Honey 等"放置后等实体死亡才重装填"）：卡面不显示装填扇形，只显示实体血量水缸阴影，
+      // 因此不算"进行中"——否则 honey 卡面会被当成在装填、hpShadow 被强行归零（水桶特效不显示）。
+      const active = !p.dead && !!(r && !r.hold && r.dur > 0 && r.age < r.dur);
       // —— 花瓣血量阴影（"水缸"）——目标值即时生效，不做过渡：
       // 阴影与 reload 阴影颜色天然相同（同色同级），状态切换无需动画；
       // 旧版指数平滑会让花瓣死亡瞬间的 hp 阴影回退与 reload 扇形短暂叠加
@@ -1442,6 +1449,7 @@ const UI = {
     const startX = ev.clientX, startY = ev.clientY;
     const startTime = ev.timeStamp || performance.now();
     let windowsClosed = false;   // 延迟关闭窗口标志
+    const bagWasOpen = !this.refs.inv.classList.contains('hidden');   // 拖拽前背包是否开着（用于落点后自动重开）
     let dragging = false;        // 是否已进入拖拽态（已生成幽灵）
     let over = false;            // 本次交互是否已结束
     let movedMax = 0;            // 指针最大位移（判"原位松手"用）
@@ -1553,6 +1561,11 @@ const UI = {
         (gh) => {
           if (dropped) this._settleDropTarget(dropped);
           this._removeGhost(gh);
+          // 拖出背包时关闭了背包窗口：装入卡槽后自动重新打开（像硬窗口一样跟手）
+          if (windowsClosed && bagWasOpen) {
+            this.refs.inv.classList.remove('hidden');
+            if (window.__game) window.__game.renderInventory();
+          }
         });
     };
     window.addEventListener('mousemove', move);
@@ -2007,7 +2020,7 @@ const UI = {
     // 命中区域 = 二档地图的矩形（与一档同锚点、尺寸更大）。
     window.addEventListener('mousemove', (e) => {
       if (this._mmMode !== 0) { this._mmHover = false; return; }
-      const size = 160 * 1.2;
+      const size = 160 * 0.5;   // 命中区域按【最小档】尺寸判定：指针碰到小地图才展开，不再提前到中档
       const left = window.innerWidth - size - 12, top = 12;
       this._mmHover = e.clientX >= left - 4 && e.clientX <= left + size + 4
                    && e.clientY >= top - 4 && e.clientY <= top + size + 4;

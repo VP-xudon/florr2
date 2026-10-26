@@ -87,15 +87,36 @@ const PETAL_RARITY_OVERRIDES = {
   }
 };
 
-// Pollen 的一卡多体数量（等同"一次放出 N 个 pollen 实体"）
-//   common 1 / unusual 2 / rare 2 / epic 及以上 3
+// 一卡多体的【数量】表：某稀有度这张卡实际由几个独立实体组成（表外稀有度 = 1）
+//   pollen : common 1 / unusual 2 / rare 2 / epic 及以上 3（等同"一次放出 N 个 pollen 实体"）
+//   stinger: Mythic 3 个 / Ultra 及以上 5 个
 const PETAL_SUB_COUNT = {
-  pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 }
+  pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
+  stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 }
 };
 
+// ================= 一卡多体的两种排布模型（重要） =================
+// A.【独立多体】Light / Pollen
+//    每个实体各占【一个轨道位】，各自独立地绕着主角飞舞、各自被吸附。
+//    卡面用通用 LIGHT_LAYOUTS（按数量查表）画出紧凑排布，实体端不套用该布局。
+// B.【阵型多体】Stinger 起 —— 未来同类的花瓣按这里登记
+//    像加载"一个"花瓣那样只分配【一个位置】，所有子实体按【卡面同款布局】锁定在一起
+//    整体运动；外观与卡面一致。但每个子实体仍是独立个体：各自结算碰撞、各自有血量。
+//    —— 即"被神秘力量锁定排列在一起"。
+//
+// 以后要新增这类花瓣，只需两步：
+//   1) 在 PETAL_FORMATION_SLUGS 里加上它的 slug
+//   2) 在 cards.js 的 FORMATION_LAYOUTS 里登记它的布局：
+//      { <实体数>: [ {x, y, k, rot}, ... ] }  // x/y 单位 = 单体直径 D，k = 相对单体缩放，
+//                                             // rot = 相对"单体朝向"的额外旋转（弧度）
+const PETAL_FORMATION_SLUGS = new Set(['stinger']);
+
 // Honey 的「Max Mob Rarity」：只能吸引到这一档及以下的生物（颜色 #d2eb34）
+//   · common  【没有这项属性】-> 什么都吸引不了（缺失 = 无吸引，绝不能当成"不限"）
+//   · unusual 起才生效：unusual 最高只能吸引 common，之后每档高一档
+// 注意：表里【没有】的稀有度必须被视为"吸引不到任何生物"，由 net.js 的判定保证。
 const HONEY_MAX_MOB_RARITY = {
-  rare: 'unusual', epic: 'rare', legendary: 'epic', mythic: 'legendary',
+  unusual: 'common', rare: 'unusual', epic: 'rare', legendary: 'epic', mythic: 'legendary',
   ultra: 'mythic', super: 'ultra', eternal: 'super', unique: 'super'
 };
 const MAX_MOB_RARITY_COLOR = '#d2eb34';
@@ -146,8 +167,11 @@ function buildPetalTypes() {
       kind: p.kind || 'misc',
       // 滞留型（Pollen / Honey）：出轨道 PETAL_DETACH_AFTER 秒后脱离，留在原地
       detachAfter: PETAL_DETACH_AFTER[slug] || 0,
-      // 一卡多体（Pollen）：每个实体各占一个轨道位、各自结算
+      // 一卡多体（Pollen / Stinger）：每个实体各占一个轨道位、各自结算
       subCount: PETAL_SUB_COUNT[slug] || null,
+      // 【阵型多体】（Stinger 起）：整坨只占一个轨道位，子实体按卡面布局锁定成一坨，
+      // 外观与卡面一致，但各子实体仍独立结算碰撞与血量
+      formation: PETAL_FORMATION_SLUGS.has(slug),
       // Honey 专属：可吸引的最高生物稀有度表 + 实体未死亡前卡片不重装填
       maxMobRarity: (slug === 'honey') ? HONEY_MAX_MOB_RARITY : null,
       holdReloadUntilDeath: slug === 'honey',
@@ -369,6 +393,23 @@ function petalArtOf(slug) {
   return null;
 }
 
+// 把掉落【宽度表】换算成各档的【有效概率】。
+// dist = [[rarity, width], ...]（width 是概率宽度，不是累积阈值！）。
+// 掷骰（rollMobDrops）是这样走的：r = 随机数，逐档 `if (r < ch) 命中; r -= ch`。
+// 于是第 i 档的真实命中区间 = 该档宽度 与 "前面扣完之后还剩的空间" 取较小者：
+//   effective_i = max(0, min(width_i, 1 - Σ(前面各档声明宽度)))
+// 这样显示值与实际抽取严格一致，且永远不会为负。
+function dropChances(dist) {
+  const out = [];
+  let used = 0;                                    // 前面各档【声明】宽度之和（与掷骰的 r -= ch 同构）
+  for (const [r, c] of dist) {
+    const room = Math.max(0, 1 - used);            // 还剩多少概率空间
+    out.push({ rarity: r, chance: Math.max(0, Math.min(c, room)) });
+    used += c;
+  }
+  return out;
+}
+
 // 某生物在某稀有度下的掉落物，按【花瓣种类】分组（悬浮框里一种一行）：
 //   [{ slug, name, svg, items: [{ rarity, chance }] }]
 function mobDropRows(mobId, rarity) {
@@ -384,7 +425,11 @@ function mobDropRows(mobId, rarity) {
     const art = petalArtOf(slug) || { slug, svg: null, name: slug };
     out.push({
       slug, name: art.name, svg: art.svg,
-      items: dist.map(([r, c]) => ({ rarity: r, chance: c }))
+      // chance = 该稀有度的【真实】概率宽度，见 dropChances()：
+      // 不能直接显示源表里的宽度 —— 掷骰是按顺序 "r -= ch" 逐档扣减的，
+      // 源表各档之和略大于 1（如 pollen.ultra = 0.628+0.371+0.002 = 1.001），
+      // 末档实际只剩被前面挤剩下的空间（Ultra 显示 0.2% 但实际只有 0.1%）。
+      items: dropChances(dist)
     });
   }
   return out;

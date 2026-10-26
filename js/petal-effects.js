@@ -107,23 +107,30 @@ PetalFX.register('rose', {
     return ctx.popped() && (ctx.stats.heal || 0) > 0 && ctx.player.hp < ctx.player.maxHp;
   },
   start(ctx) {
-    ctx.petal.fx.state = { t: 0, fromX: ctx.petal.x, fromY: ctx.petal.y };
+    // 物理施力式起飞：初速 0，update 里持续朝主角加速，飞行途中自然跟随主角本体移动
+    ctx.petal.fx.state = { t: 0, vx: 0, vy: 0 };
   },
   update(ctx, dt) {
     const s = ctx.petal.fx.state;
     s.t += dt;
-    const t01 = clamp(s.t / 1.5, 0, 1);
-    const e = t01 * t01 * (3 - 2 * t01);            // smoothstep：平滑起停
-    ctx.petal.x = s.fromX + (ctx.player.x - s.fromX) * e;
-    ctx.petal.y = s.fromY + (ctx.player.y - s.fromY) * e;
-    if (t01 >= 1) {
-      // 回血并弹出反馈：颜色用 Heal 专用粉（与卡面 Heal 属性行同色 #ff94c9），
-      // 数值是【实际回血量】，位置在花朵本体上方 —— 与攻击飘字同款式，只是颜色和出发点不同。
+    const p = ctx.player;
+    const px = ctx.petal.x, py = ctx.petal.y;
+    const dx = p.x - px, dy = p.y - py;
+    const dist = Math.hypot(dx, dy) || 1e-6;
+    const PULL = 1600;                       // 朝主角的吸引力（加速度，px/s^2）
+    s.vx += (dx / dist) * PULL * dt;
+    s.vy += (dy / dist) * PULL * dt;
+    const damp = Math.exp(-2.6 * dt);        // 阻尼：避免无限加速，靠近时自然减速
+    s.vx *= damp; s.vy *= damp;
+    ctx.petal.x += s.vx * dt;
+    ctx.petal.y += s.vy * dt;
+    // 撞到主角（或超时兜底）即结算回血：飞行途中持续跟随主角本体，不锁死在触发点
+    if (dist <= (p.r || 0) + 4 || s.t >= 1.5) {
       const got = ctx.heal(ctx.stats.heal);
       if (got > 0) {
-        // 数字格式与攻击飘字保持一致（四舍五入到个位的原值），只换颜色与出发点
+        // 数值是【实际回血量】，颜色用 Heal 专用粉，位置在主角上方 —— 与攻击飘字同款式
         ctx.floatText(String(Math.round(got)), HEAL_TEXT_COLOR,
-          ctx.player.x, ctx.player.y - ctx.player.r - 6);
+          p.x, p.y - (p.r || 0) - 6);
       }
       ctx.consumePetal();
       return true;

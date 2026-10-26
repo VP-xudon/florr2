@@ -17,8 +17,9 @@ window.REGISTRY = {
    "stats": {
     "dmg": 10.0,
     "hp": 10.0,
-    "spd": 2.5
+    "spd": 0
    },
+   "reload": 2.5,
    "rarityMultipliers": {
     "common": {
      "dmg": 1,
