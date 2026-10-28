@@ -21,7 +21,8 @@ python -m http.server 8000
 # 然后打开 http://localhost:8000/
 ```
 
-- 仅支持 `?hp=N` 一个 URL 调试参数（例如 `?hp=100000`），会同时设置当前血量和血量上限；非法值忽略。
+- URL 调试参数：`?hp=N`（同时设置当前/最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控摇杆/按钮）、`?selftest=1`（页面自检）。
+- 游戏内热键：`F3` 调试屏幕（坐标 / 移速 / 花瓣转速 / 碰撞箱 / 引擎计数）、`C` 碰撞箱（仅 F3 屏幕打开时）、`M` 小地图档位、`Z` 背包、`R` 主副槽整排互换、`1~0` 换列。
 - 语言、键盘移动、调试模式已移到游戏内 **设置窗口**，存 Cookie（`florr_settings`），不再用 URL 参数。
 - 浏览器控制台可用 `window.__game` 访问 Game 实例；`window.__queryParams` 是解析后的查询参数；`window.__debug` 是调试模式开关。
 
@@ -36,7 +37,7 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 ```
 
 - 页面自检只在 `?selftest=1` 时由 `main.js` 动态加载 `js/selftest.js`，正常运行零成本。
-- 断言覆盖：引导就绪、移动、快照同步、击退守恒、装填暂停跨端一致、预测偏差、重生后花瓣世代号、Leaf 持续回血、多体数量数据化、复活点区域内随机且可站人、多节生物用本节轮廓。
+- 断言覆盖：引导就绪、移动、快照同步、击退守恒、装填暂停跨端一致、预测偏差、重生后花瓣世代号、Leaf 持续回血、多体数量数据化、复活点区域内随机且可站人、多节生物用本节轮廓与贴图、F3 屏幕开关（含碰撞箱联动）、触控层在桌面不出现、触控层自缩放尺寸合法。
 - 性能数据来自 `Game.stepFrames` 固定步长回放，多轮取中位数；headless 噪声较大，只用于相对比较。
 - `?selftest=1` 也可直接在真浏览器打开，控制台/页面底部会留下 `#selftest-result`（JSON）。
 
@@ -56,6 +57,8 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `js/ui/tooltip.js` | 悬浮框：卡牌详情 canvas + 简易按钮提示（`Object.assign(UI, {...})` 挂回 UI） |
 | `js/ui/drag.js` | 拖拽、飞卡、吸附与统一幽灵动画 |
 | `js/ui/minimap.js` | 小地图三档模式与平滑过渡 |
+| `js/ui/touch.js` | 移动端触控层：自缩放浮动摇杆 + `A`(reach)/`B`(detect)，桌面不创建元素（`?touch=1` 可强制） |
+| `js/ui/debug-screen.js` | `F3` 调试屏幕：帧/玩家/引擎/花瓣分栏，碰撞箱与小地图生物点跟着它开关 |
 | `js/map.js` | 读取 `garden.tmj` + `.tsj`、Tiled 瓦片/翻转/对象层解析、碰撞（瓦片遮罩 + 多边形）、检查点、生成区、瓦片渲染、小地图位图 |
 | `js/ai.js` | `MobAI`：只输出“移动欲望”，不直接改坐标；随机游走 + 仇恨/追击（`step/notifyMoved/facing`） |
 | `js/petal-effects.js` | `PetalFX`：花瓣特殊效果注册引擎，按 `card.type.slug` 匹配（如 `rose`），在花瓣上轨后每帧 `detect`，可 `heal/consumePetal` |
@@ -76,11 +79,11 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `dev/selftest.py` | 自测驱动：起静态服务器 + 无头 Chrome/Edge（CDP），解析结果并给退出码 |
 | `dev/check_versions.py` | 静态检查：引用是否存在、跨文件顶层重名、i18n 键、版本号提醒 |
 | `js/chat.js` | 全局聊天：四频道标签、漂浮消息、指令解析与本地实现、`/tp` 标点确认 |
-| `js/game.js` | `Game`：主循环、输入、相机/渲染、快照镜像、事件表现、背包/装备/掉落拾取、小地图、调试绘制 |
+| `js/game.js` | `Game`：主循环（含 `perf` 指标）、输入（键盘/鼠标/触控）、相机/渲染、快照镜像、事件表现、背包/装备/掉落拾取、小地图、调试绘制 |
 | `assets/registry.js` | **数据单一来源**（约 198KB），由 `scripts/build_manifest.py` 生成，也可手改；`assets/registry.js.bak` 是备份 |
 | `assets/i18n/<code>/<code>.js` | 官方语言包（`window.I18N_EN` / `window.I18N_ZH_CN`），`lang.js` 注册；同目录 `.txt` 是抓取源 |
-| `assets/lang/en.js` | 旧版命名空间包（`ui.*` 等），属遗留/兼容文件，新文本不要往这里加 |
-| `assets/mob-shapes.js` | 离线预计算的生物碰撞轮廓（`tools/gen_mob_shapes.py` 生成） |
+| `js/i18n-extra.js` | **本项目新增文案的唯一落点**（F3 调试屏幕、触控按钮等），`I18N.addPack` 增量注册 en_US/zh_CN；官方语言包不要手改 |
+| `assets/mob-shapes.js` | 离线预计算的生物碰撞轮廓 + 旋转轴心（`tools/gen_mob_shapes_vector.py` 生成，只取主体部件） |
 | `assets/petal-metrics.js` | 卡面布局参数（`vb/t/sw`），运行时不做测量 |
 | `assets/static/maps/*.tmj` | 22 张官方地图；运行时只用 `garden.tmj` |
 | `assets/static/maps/garden.json` / `garden.js` | `scripts/build_map.py` 生成的烘焙产物，**运行时不用**（运行时直接读 tmj） |
@@ -95,14 +98,14 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 `index.html` 中的脚本顺序不能随意调整，存在硬依赖：
 
 ```
-util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
+util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 → mob-shapes.js → registry.js → data.js → petal-metrics.js → cards.js
 → ui.js → ui/tooltip.js → ui/drag.js → ui/minimap.js
 → map.js → ai.js → petal-effects.js
 → sim/constants.js → render/render-util.js → sim/physics.js → sim/mob-shape.js
 → sim/player.js → sim/mob.js → sim/drops.js → render/fx.js → entities.js(空壳)
 → net/protocol.js → net/server.js → net/client.js → net.js(空壳)
-→ chat.js → game.js → main.js
+→ chat.js → i18n-extra.js → ui/touch.js → ui/debug-screen.js → game.js → main.js
 ```
 
 关键点：
@@ -110,6 +113,8 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 - `lang.js` 必须在 `data.js` 之前：`RARITIES`/花瓣名在加载时就要取译文。
 - `registry.js` 必须在 `data.js` 之前：`data.js` 用它构建类型表。
 - `entities.js` 依赖 `MobAI`、`PetalFX`；`game.js` 依赖几乎所有模块。
+- `i18n-extra.js` 必须在 `game.js` 之前：`DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 里读取这些键。
+- `ui/touch.js`、`ui/debug-screen.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用（`?selftest=1` 时才由自测驱动）。
 - `main.js` 最后执行 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 后台加载素材。
 - 素材全部加载完才 `UI.hideLoading()`；20 秒未完成显示慢加载提示但继续等。
 - 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`MobAI`、`Chat`、`Settings`。
@@ -123,10 +128,11 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 1. 读输入，推导移动方向与 `mode`（`normal/reach/detect`）。
 2. **本地玩家预测**：`player.update(dt, dir, map, mobs)`，手感零延迟。
 3. 上行 `loadout` + `input`，调用 `net.step(dt)` 推进服务端并收快照/事件。
-4. `_tickMobViews(dt)`：生物视图按快照插值 + 动画计时。
-5. 玩家与生物按质量/动能推挤（`physicsPush`）。
+4. `_tickMobViews(dt)`：生物视图按快照插值 + 动画计时。**屏幕外的只贴位置**（`farR = max(W,H)*0.85+260`，超出直接 `x=tx` 并跳过血条/轮廓），全图 4700 只不参与每帧动画。
+5. 玩家与生物按质量/动能推挤（`physicsPush`），**先用平方距预筛**（`(m.r + p.r + 24)²`），只对可能接触的那几只调用。
 6. 死亡界面、仇恨清理、地面卡/掉落物/粒子/飘字更新。
-7. 相机夹紧到地图边界（不越界）、屏幕抖动衰减、`updateHUD()`。
+7. 相机夹紧到地图边界（不越界）、屏幕抖动衰减、F3 屏幕刷新（仅打开时，限频 5Hz）。
+8. 主循环在 `update`/`render` 两侧记 `perf.updateMs / renderMs / frameMs`（F3 屏幕读它）。
 
 ### 5.2 服务端权威 + 客户端预测（`net.js`）
 
@@ -138,7 +144,8 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 - 快照含：`player`（位置/血量/无敌/死因/受伤红闪等）、`petals`（按 `slot|sub|gen` 定位的血量/碎裂状态）、`ents`（全量生物，含表现层计时）。
 - 事件类型：`dmg`（飘字）、`kill`（图鉴 + 掉落）、`hurt`（玩家击退份额 + 屏幕抖动）、`chat`/`sys`（聊天）、`respawned`/`teleported`（同步预测副本与相机）。
 - 客户端差分镜像：新 `netId` 建视图 `Mob`，消失的播放退场后回收；`px/tx/blend` 做插值。
-- 远处生物休眠：`MOB_ACTIVE_R = 2200`，超出不跑 AI/物理；全图人口仍下发（小地图可见）。
+- 远处生物休眠：`MOB_ACTIVE_R = 2200`，超出不跑 AI/物理；全图人口仍下发（小地图可见，但只有 F3 打开才画点）。
+- **生物互相推挤用均匀网格宽相位**（`LocalServer.step` 第 4 步）：格距 192px，按最大半径自动扩相邻圈数，`_pseq` 序号保证每对只算一次。改造前是 O(醒着的只数²)（蜈蚣一条几十节，实测 50 万次配对/帧、`net.step` 14.7ms），改后约 6.9ms。
 - 换成真实网络时：新增一个 `Net` 子类（WebSocket）即可，客户端代码不用改。
 
 ### 5.3 实体层（`entities.js`）
@@ -170,7 +177,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 - 相机锁定玩家并夹紧到地图边界；屏幕抖动 `HURT_SHAKE = 5.98`，按 `dt*30` 衰减。
 - 渲染顺序：草地底色 → 瓦片 → 地面卡/掉落物粒子/掉落卡 → `/tp` 标记 → 尸体 → 生物（按 y 排序）→ 活玩家 → 粒子/飘字 → 碰撞箱调试 → 坐标/边缘指示/小地图。
 - 视口裁剪给屏幕外 2 倍余量；大生物按半径判定，避免贴边消失。
-- 小地图 3 档，`M` 切换；位图缓存。
+- 小地图 3 档，`M` 切换；位图缓存。**生物点（粉色）只在 F3 调试屏幕打开时绘制**（`game._drawMinimap` 传 `null` 即不画），常规游玩只显示地形与玩家。
 - **复活落点**：`map.checkpointSpawnPoint(cp, r)` 在检查点【整片矩形区域内随机】取一个
   `map.canStandAt(x, y, r)` 为真的位置（点不在实心瓦片 + 玩家半径内不压墙），
   **不再优先生效区域中心**；随机采样失败时网格扫描兜底，最后才用中心 + 碰撞推离。
@@ -183,7 +190,8 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 - 快捷栏：主槽 `slots` + 副槽 `subSlots`；点击主/副槽同列互换；`1..9,0` 直接换列；`R` 整行交换主/副。
 - `CardRenderer`：稀有度外框深色 + 内板亮色，花瓣图形去名称、名称实时按 i18n 绘制（Ubuntu 800，白字黑描边）；`drawReload` 装填扇形、`drawHpShadow` 花瓣血量阴影。
 - 聊天：四频道 `local/squad/guild/whisper`，**只有 Local 可真正发送**；非输入态消息漂浮后渐隐；红色字体一律表示系统消息。所有消息经 `Net` 上行、由服务端路由后下行。
-- 聊天指令：`/local /global /map /guild /squad /whisper(/w) /reply(/r) /help /rot-speed /speed /show-coord /pending crash /print-players /unblock /unblock-all /give /tp /sure /init /resphere /summon /kill /kill-mob`。
+- 聊天指令：`/local /global /map /guild /squad /whisper(/w) /reply(/r) /help /rot-speed /speed /print-players /unblock /unblock-all /give /tp /sure /init /resphere /summon /kill /kill-mob`。
+  **`/show-coord` 与 `/pending crash` 已移除**，调试信息统一走 F3 调试屏幕。
 
 ### 5.7 花瓣特效引擎（`petal-effects.js`）
 
@@ -193,6 +201,22 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 - `ctx` 提供 `player/petal/stats/dt`、`onOrbit()`、`heal(n)`、`consumePetal()`、`floatText()`。
 - 现有实现：`rose`（主动：血量不满 → 1.5s 飞向主角回血 → 退场）；`leaf`（被动：按 `heal/s` 连续回血，与碰撞/伤害并存）；`PetalFX.textSink` 把治疗数字接到 `DamageText`。
 - `honey / peas / pollen` 的物理与运动能力**不走 PetalFX**，而是 `data.js` 的 `PETAL_TRAITS` 数据字段（`hardCollide` / `attractMobs` / `holdReloadUntilDeath` / `launch` / `detachAfter`）：行为层只读字段、不判断 slug。新增同类花瓣只需在 `PETAL_TRAITS` 声明。
+
+### 5.8 调试屏幕（`ui/debug-screen.js`）与移动端触控（`ui/touch.js`）
+
+- **F3 调试屏幕**：按 `F3` 开关（`DebugScreen.toggle()`），`C` 单独切碰撞箱（仅屏幕打开时接管）。
+  分栏显示：Frame（fps / 帧耗时 / 逻辑 / 渲染 / JS 堆）、Player（坐标 / 复活区 / 朝向 / 当前与最大移速 / 模式 / 血量 / 无敌）、
+  Engine（生物总数 / 屏幕内 / 休眠 / 掉落卡 / 地面卡 / 粒子 / 飘字 / 快照数 / 快照延迟 / 预测偏差）、
+  Petals（每槽名称 / 血量百分比 / 转速 rad·s⁻¹ 与 rpm）。
+  只在可见时更新，且限频 5Hz（`_acc >= 0.2`），DOM 元素建一次、之后只改 `textContent`。
+  打开时自动打开碰撞箱，并让小地图画出生物点。
+- **触控层**：`TouchCtl.init(game)` 只在粗指针设备创建（`pointer: coarse` / `maxTouchPoints>0`；
+  桌面调试可用 `?touch=1` 强制）。左下半屏浮动摇杆（`--t-stick` 按屏幕短边 0.28 自缩放，84~160px），
+  输出写入 `game.touchDir`（`_readDir` 里优先级最高）；右下 `A`=reach（= 空格）、`B`=detect（= Shift），
+  按住即置 `game.keys.mouse1 / mouse2`，与键鼠走同一条逻辑通路。
+- 排布相关的尺寸全部走 CSS 变量（`--t-stick / --t-btn / --t-knob`），JS 只在 resize/orientationchange 时算一次。
+- **拖拽卡牌走 Pointer Events**（`ui/drag.js`）：`pointerdown/pointermove/pointerup/pointercancel` 统一处理鼠标、触摸、触控笔，按 `pointerId` 过滤多指；卡面/卡槽声明 `touch-action: none`（否则系统把手势判成滚动会直接发 `pointercancel`，拖拽必挂），窗口内容区 `.win-body` 用 `pan-y` 保留手指滚动。
+  触摸后浏览器会补发一次合成 mouse 事件，`_bindCard` 用 800ms 时间窗把这类事件丢掉，避免"一次点击算两次"。`pointercancel` 视同取消：回滚画廊数量、销毁幽灵、重渲染来源区域。
 
 ## 6. 关键数值
 
@@ -207,7 +231,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 | `SPAWN_INTERVAL` | 0.1 s | 服务端补怪间隔 |
 | `CP_RESPAWN_STAYS` | 3 | 每个检查点保底复活次数 |
 | `DROP_PICK_R` | 2 | 拾取半径 = 2 × 玩家直径 |
-| `ASSET_VER` | 15 | 素材内容版本（改素材时 +1） |
+| `ASSET_VER` | 16 | 素材内容版本（改素材时 +1；16 为强制重拉 12_h/12_b） |
 | `RECONCILE_RATE` / `RECONCILE_SNAP` | 14 / 120 | 预测位置向权威位置收敛速率（每秒）与硬吸附阈值（px） |
 
 生物速度口径：追击 = 0.90×玩家最高速（蜜蜂 1.05×）；游荡 = 0.95 × 0.3~0.5 随机 × 0.75（蜜蜂 ×1.2），只有蜜蜂走 S 型。
@@ -215,7 +239,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js → assets/lang/en.js
 ## 7. 代码约定（重要）
 
 1. **缓存版本号**：修改 `js/*.js` 或 `css/style.css` 后，把 `index.html` 里对应文件的 `?v=N` 加 1（只加改到的文件）。修改 `assets/` 下图片/SVG 内容但文件名不变时，把 `js/util.js` 的 `ASSET_VER` 加 1。历史上多次因为忘记 bump 导致“改了没生效”。
-2. **i18n**：所有用户可见文本必须走 `I18N.t('...')`，不要在代码/HTML 硬编码中文或英文。新 key 同时补 `en_US` 和 `zh_CN`。缺失键会显示 `<key>`，这是故意的。
+2. **i18n**：所有用户可见文本必须走 `I18N.t('...')`，不要在代码/HTML 硬编码中文或英文。**新增 key 一律写进 `js/i18n-extra.js`**（`en_US` + `zh_CN` 成对），不要改 `assets/i18n/` 下抓取生成的语言包。缺失键会显示 `<key>`，这是故意的；旧的 `assets/lang/en.js` 命名空间包已删除，回退链只有「当前语言 → en_US」。
 3. **编码/换行**：JS/HTML/CSS/Markdown 都是 **UTF-8 无 BOM**；`.js/.html/.css` 使用 **CRLF**，`.md` 使用 LF。中文注释不要转码。
 4. **不要引入构建链/依赖**：保持“打开 HTML 就能跑”的零依赖形态。
 5. **数据优先改 registry**：`assets/registry.js` 是数据源；能改数据就不要在代码里写死。它可由脚本重新生成，手改后注意不要被覆盖。
@@ -269,15 +293,24 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 ## 10. 已知限制 / 待办
 
 - **Net 已抽象但未做真联机验证**：协议/服务端/传输已分层，`WebSocketNet` 骨架在 `js/net/client.js`（连接失败自动回退 `LocalNet`）；本机没有 Node 环境，端到端联机未测。`LocalServer.handleRequest` 是请求入口，`LocalNet.requestSync` 仅本地可用。
-- **快照仍是每帧全量**（未池化/未降频）：`LocalNet.step` 每帧推进模拟并立刻投递快照，本地零延迟优先；`SNAP_DT` 只用于客户端插值步长基准。真服务器应改为按 `SNAP_HZ` 投递 + 对象池。
+- **快照仍是每帧全量**（未池化/未降频）：`LocalNet.step` 每帧推进模拟并立刻投递快照（约 2.5ms/帧，4700 只实体的对象分配是当前 GC 主要来源），本地零延迟优先；`SNAP_DT` 只用于客户端插值步长基准。真服务器应改为按 `SNAP_HZ` 投递 + 对象池。
 - **生物实体数远超 `GLOBAL_MAX_MOBS`**：上限按"只"统计，而一条蜈蚣会展开成多节实体（实测约 4500~4900 个视图实体）。
 - 只有 Garden 一张图；`/init <map>` 只能初始化当前地图，不能切图（其余 `.tmj` 未被加载）。
 - 只有 8 种花瓣（`basic/light/rose/stinger/pollen/honey/peas/leaf`）、3 种可生成生物（瓢虫/蜜蜂/蜈蚣）；大量 registry 数据尚未接入玩法。
 - 聊天只有 Local 可用；Squad/Guild/Whisper 是 UI + 提示占位。没有真实多人/账号系统。
 - 没有存档：除设置 Cookie 外，装备/图鉴/进度都在内存，刷新即重置。
-- 没有音效/音乐；没有移动端触控适配（鼠标/键盘为主）。
-- `assets/lang/en.js` 是旧命名空间，和新 i18n 并存，新增文本不要用它。
-- 代码仍有几个大文件（`game.js` ~64KB、`net/server.js` ~61KB、`ui.js` ~54KB、`sim/player.js` ~54KB、`assets/registry.js` ~198KB）；改动时尽量局部化，避免整文件重排。
+- 没有音效/音乐。触控已适配（摇杆 + A/B），但**未在真机验证**：`pointer` 事件与 `env(safe-area-inset-*)` 只在桌面用 `?touch=1` 和 headless 尺寸断言验证过。
+- 代码仍有几个大文件（`game.js` ~66KB、`net/server.js` ~64KB、`ui.js` ~54KB、`sim/player.js` ~54KB、`assets/registry.js` ~198KB）；改动时尽量局部化，避免整文件重排。
+
+### 待办（按价值排序）
+
+1. **快照降频 + 对象池**：`LocalNet` 里把"模拟推进"与"快照投递"分开，按 `SNAP_HZ` 投递并复用对象；客户端插值已就绪（`_applySnap` 支持任意 `snap.dt`），改完要把自测里"1~2 帧内同步"的断言改成按秒推进。
+2. **服务端 tick 降到 25Hz**：与服务端战斗步长、快照频率对齐，客户端预测（零延迟）不受影响；预计再省一半 `net.step` 时间。
+3. **真联机**：Node 起 `LocalServer` + 一个 `WebSocketNet` 连接，验证 `request/on/step` 三条契约；目前所有请求都是同进程同步返回。
+4. **快照裁剪**：远距离生物只下发 `(netId, x, y, 类型, 稀有度)`，详细字段按复制半径下发（小地图只需前者）。
+5. `MOB_SIZE_SCALE` / `MOB_ART_ROT` 仍是代码内表（`sim/mob-shape.js`），可下沉进 `MOB_TYPES`。
+6. 图鉴/背包仍无持久化；没有账号系统。
+7. 移动端真机回归（`?touch=1` 可桌面预览）：多指同按（摇杆 + A/B）、横屏、刘海安全区、聊天输入时摇杆让位。
 
 ## 11. 改动后自检清单
 

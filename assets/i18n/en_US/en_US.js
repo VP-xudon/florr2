@@ -1894,10 +1894,6 @@ window.I18N_EN = {
 "Chat/Command/kill-mob/BadScope": "Scope must be 'near' or 'all'.",
 "Chat/Command/kill-mob/BadCount": "Count is required (>0) when using 'near'.",
 "Chat/Command/kill-mob/Done": "Killed {0} mob(s).",
-"Chat/Command/show-coord/Args": "",
-"Chat/Command/show-coord/Description": "Toggle the coordinate readout",
-"Chat/Command/show-coord/On": "Coordinates shown.",
-"Chat/Command/show-coord/Off": "Coordinates hidden.",
 "Chat/Command/speed/Args": "<multiplier>",
 "Chat/Command/speed/Description": "Set the flower's max movement speed (x default)",
 "Chat/Command/speed/Usage": "Usage: /speed <multiplier> (0.1 - 10)",
@@ -1948,10 +1944,3 @@ window.I18N_EN = {
 // 官方 Petal/Attribute/MaxMobRarity 的值带 {#Rarities/{0}/NameColored} 参数占位，
 // 我们不能直接把它当纯文本标签用（嵌套花括号剥不干净），所以单独开一条纯文本标签。
 window.I18N_EN['UI/Petal/MaxMobRarityLabel'] = 'Max Mob Rarity:';
-
-// /pending crash <0|1>：碰撞箱显示开关（默认关闭）
-window.I18N_EN['Chat/Command/pending/Args'] = 'crash <0|1>';
-window.I18N_EN['Chat/Command/pending/Description'] = 'Show / hide collision boxes (off by default).';
-window.I18N_EN['Chat/Command/pending/Usage'] = 'Usage: /pending crash <0|1>';
-window.I18N_EN['Chat/Command/pending/On'] = 'Collision boxes: ON';
-window.I18N_EN['Chat/Command/pending/Off'] = 'Collision boxes: OFF';

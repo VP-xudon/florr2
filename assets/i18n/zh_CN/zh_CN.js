@@ -2315,10 +2315,6 @@ window.I18N_ZH_CN = {
 "Chat/Command/kill-mob/BadScope": "范围必须为 near 或 all。",
 "Chat/Command/kill-mob/BadCount": "使用 near 时数量必填且 >0。",
 "Chat/Command/kill-mob/Done": "已击杀 {0} 只生物。",
-"Chat/Command/show-coord/Args": "",
-"Chat/Command/show-coord/Description": "切换坐标显示",
-"Chat/Command/show-coord/On": "已显示坐标。",
-"Chat/Command/show-coord/Off": "已隐藏坐标。",
 "Chat/Command/speed/Args": "<倍数>",
 "Chat/Command/speed/Description": "设置主人物最高移动速度（默认速度的倍数）",
 "Chat/Command/speed/Usage": "用法：/speed <倍数>（0.1 - 10）",
@@ -2367,10 +2363,3 @@ window.I18N_ZH_CN = {
 
 // --- 本项目补充的自定义键 ---
 window.I18N_ZH_CN['UI/Petal/MaxMobRarityLabel'] = '最高生物稀有度：';
-
-// /pending crash <0|1>：碰撞箱显示开关（默认关闭）
-window.I18N_ZH_CN['Chat/Command/pending/Args'] = 'crash <0|1>';
-window.I18N_ZH_CN['Chat/Command/pending/Description'] = '显示 / 隐藏碰撞箱（默认关闭）。';
-window.I18N_ZH_CN['Chat/Command/pending/Usage'] = '用法：/pending crash <0|1>';
-window.I18N_ZH_CN['Chat/Command/pending/On'] = '碰撞箱显示：开';
-window.I18N_ZH_CN['Chat/Command/pending/Off'] = '碰撞箱显示：关';

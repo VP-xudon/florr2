@@ -384,6 +384,8 @@
       const segs = game.mobs.filter((m) => m.artSvg === '12_h' || m.artSvg === '12_b');
       const seg = segs[0];
       if (!seg) return '场上没有蜈蚣节（跳过）';
+      // 远处生物不再每帧建轮廓（见 _tickMobViews 的视口预筛），这里显式建一次
+      seg._ensureShape();
       if (!seg.shape) return { ok: false, detail: '节无碰撞轮廓（shape=null）' };
       const own = SpriteStore.contour('mob' + seg.artSvg, seg.drawSize);
       const whole = SpriteStore.contour('mob' + seg.svg, seg.drawSize);
@@ -394,6 +396,80 @@
         detail: 'art=' + seg.artSvg + ' 同源=' + (own === seg.shape) +
           ' r节=' + own.r.toFixed(3) + ' r整条=' + (whole ? whole.r.toFixed(3) : 'null') +
           ' 节数=' + segs.length
+      };
+    });
+
+    // 9) F3 调试屏幕：能开关、有内容、关掉后碰撞箱一起关
+    check('ui: F3 调试屏幕', () => {
+      if (typeof DebugScreen === 'undefined' || !DebugScreen.refs) return '未初始化（跳过）';
+      const el = DebugScreen.refs.root;
+      DebugScreen.toggle();
+      const onShown = !el.classList.contains('hidden') && !!el.querySelector('.f3-row');
+      const hitOn = game.showHitbox === true;
+      DebugScreen.toggle();
+      const offHidden = el.classList.contains('hidden') && game.showHitbox === false;
+      return {
+        ok: onShown && hitOn && offHidden,
+        detail: 'show=' + onShown + ' hitbox=' + hitOn + ' hide=' + offHidden
+      };
+    });
+
+    // 10) 触控层：桌面（细指针）不创建任何元素
+    check('ui: 桌面不启用触控层', () => {
+      if (typeof TouchCtl === 'undefined') return { ok: false, detail: 'TouchCtl 未加载' };
+      if (TouchCtl.on) return '触摸设备（跳过）';
+      const el = document.getElementById('touchLayer');
+      return { ok: !el, detail: el ? '桌面环境出现了 #touchLayer' : '无 #touchLayer' };
+    });
+
+    // 11) 触控层构建路径（桌面环境强制走一次，验证摇杆/按钮的尺寸与位置合法）
+    check('ui: 触控层布局（自缩放）', () => {
+      if (TouchCtl.on) return '已是触摸设备（跳过强制构建）';
+      TouchCtl.init(game, true);
+      const layer = document.getElementById('touchLayer');
+      const stick = layer && layer.querySelector('.t-stick');
+      const a = document.getElementById('tBtnA');
+      const b = document.getElementById('tBtnB');
+      const sizeOf = (el) => (el ? el.getBoundingClientRect() : { width: 0, height: 0 });
+      const s = sizeOf(stick), sa = sizeOf(a), sb = sizeOf(b);
+      const small = Math.min(innerWidth, innerHeight);
+      const ok = !!layer && s.width > 0 && sa.width > 0 && sb.width > 0 &&
+        s.width >= 84 - 1 && s.width <= 160 + 1 &&                       // 自缩放区间
+        sa.width === sb.width &&                                          // A/B 同尺寸
+        s.width >= sa.width;                                              // 摇杆不小于按钮
+      // 还原：删掉测试创建的元素与状态
+      if (layer) layer.remove();
+      TouchCtl.on = false; TouchCtl.refs = null; TouchCtl._stick.id = -1;
+      document.body.classList.remove('touch-ui');
+      return {
+        ok,
+        detail: 'viewport=' + Math.round(small) + ' stick=' + Math.round(s.width) +
+          ' A=' + Math.round(sa.width) + ' B=' + Math.round(sb.width)
+      };
+    });
+
+    // 12) 触控拖拽卡牌：pointer 事件必须能拿起幽灵（触屏上 mouse 事件不会随手指移动）
+    check('ui: 触控拖拽卡牌', () => {
+      if (!window.PointerEvent) return '无 PointerEvent（跳过）';
+      const cv = document.querySelector('#quickbar .qslot .card') ||
+                 document.querySelector('#quickbar .qslot canvas');
+      if (!cv) return '卡槽里没有卡（跳过）';
+      const r = cv.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const ev = (type, x, y, extra) => new PointerEvent(type, Object.assign({
+        pointerId: 91, pointerType: 'touch', isPrimary: true,
+        bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1
+      }, extra || {}));
+      // touch-action 必须被关掉，否则真实设备上系统会先发 pointercancel
+      const ta = getComputedStyle(cv).touchAction;
+      cv.dispatchEvent(ev('pointerdown', cx, cy));
+      window.dispatchEvent(ev('pointermove', cx + 70, cy - 90));
+      const ghost = document.getElementById('dragGhost');
+      window.dispatchEvent(ev('pointercancel', cx + 70, cy - 90, { buttons: 0 }));
+      const cleaned = !document.getElementById('dragGhost') && !UI._drag;
+      return {
+        ok: ta === 'none' && !!ghost && cleaned,
+        detail: 'touch-action=' + ta + ' ghost=' + !!ghost + ' cleanup=' + cleaned
       };
     });
 

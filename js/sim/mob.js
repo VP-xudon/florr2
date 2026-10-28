@@ -212,7 +212,11 @@ class Mob {
   // 调试碰撞箱(/pending crash)就会显示空或残留的旧外形。
   _ensureShape() {
     if (this.shape) return;
-    const ct = SpriteStore.contour('mob' + (this.artSvg || this.svg), this.drawSize);
+    let ct = SpriteStore.contour('mob' + (this.artSvg || this.svg), this.drawSize);
+    // 本节贴图缺失时退回物种贴图（多节生物 = 整条外形，虽然不准，但总比没有碰撞/不可见好）
+    if (!ct && this.artSvg && this.artSvg !== this.svg) {
+      ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
+    }
     if (!ct) return;                       // 素材未就绪：不缓存失败，下一帧再试
     this.shape = ct;
     const uniq = [];
@@ -306,7 +310,12 @@ class Mob {
       scale *= spawnPop(this.age);          // Q 弹出场（过冲回落）
     }
     // 注意：生物【不做】呼吸/浮动特效（用户明确要求），尺寸只由受击挤压与退场缩放决定。
-    const key = 'mob' + (this.artSvg || this.svg);   // 多节生物：头节/身体节用不同贴图
+    // 多节生物：头节/身体节用不同贴图。本节贴图【没加载成功】时退回物种贴图，
+    // 否则 drawMob 会直接 return —— 表现就是"整条蜈蚣没有头"（12_h 素材 404/缓存损坏时）。
+    let key = 'mob' + (this.artSvg || this.svg);
+    if (!SpriteStore.ready(key) && this.artSvg && this.artSvg !== this.svg) {
+      key = 'mob' + this.svg;
+    }
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     let bodyAlpha = alpha;

@@ -56,12 +56,18 @@ class Game {
     this.camera = { x: 0, y: 0 };
     this.shake = 0;
     this.tpTarget = null;    // /tp 标出的待传送点（世界 + 小地图红点）
-    this.showCoord = false;  // /show-coord：左上角坐标读数开关
-    this.showHitbox = false; // /pending crash 1：碰撞箱显示开关（默认关闭）
+    // 碰撞箱开关：F3 调试屏幕打开时自动置 true，屏幕内按 C 可单独关掉
+    this.showHitbox = false;
+    this.touchDir = null;    // 移动端摇杆输出（{x,y}，null = 未推杆）
     this.last = 0;
     this.selectedSlot = 0;
     this._netPos = null;     // 服务端下发的权威位置（预测软校正的目标）
     this._snapDt = SNAP_DT;  // 最近一次快照覆盖的模拟时长（插值步长基准）
+    // F3 调试屏幕用的运行时指标（只做累加/赋值，不做任何计算密集的事）
+    this.perf = {
+      updateMs: 0, renderMs: 0, frameMs: 0,
+      snapAge: 0, predErr: 0, tick: 0
+    };
 
     this.player = null;
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
@@ -104,6 +110,16 @@ class Game {
       }
       if (e.repeat) return;            // 长按不重复触发开关类热键
       const k = (e.key || '').toLowerCase();
+      // F3：调试屏幕（取代原 /pending crash 与 /show-coord 两个指令）
+      if (e.code === 'F3' || k === 'f3') {
+        e.preventDefault();
+        if (typeof DebugScreen !== 'undefined') DebugScreen.toggle();
+      }
+      // C：只切碰撞箱（调试屏幕关闭时也可单独看）
+      if (k === 'c' && (typeof DebugScreen === 'undefined' || DebugScreen.on)) {
+        e.preventDefault();
+        this.showHitbox = !this.showHitbox;
+      }
       // 背包热键：Z（B / Tab 已移除）；生物图鉴没有热键，只能点左下角按钮。
       if (k === 'z') { e.preventDefault(); this.toggleBag(); }
       if (k === 'r') { e.preventDefault(); this.swapSlotRows(); }
@@ -171,6 +187,11 @@ class Game {
     UI.onCloseAll = () => this.closeAllWindows();
     UI.onDrop = (drag, target) => this.dispatchDrop(drag, target);
     UI.onRespawn = () => this.respawn();   // 死亡界面 Continue 按钮 -> 重生
+
+    // 移动端触控层（粗指针设备才创建元素）：自缩放摇杆 + A(reach)/B(detect)
+    if (typeof TouchCtl !== 'undefined') TouchCtl.init(this);
+    // F3 调试屏幕：坐标 / 移速 / 花瓣转速 / 碰撞箱 / 引擎计数
+    if (typeof DebugScreen !== 'undefined') DebugScreen.init(this);
 
     // 花瓣特效（如玫瑰回血）的文字输出口：统一走 spawnText，样式与攻击飘字一致
     PetalFX.textSink = (x, y, text, color) => this.spawnText(x, y, text, color);
@@ -315,6 +336,9 @@ class Game {
     if (!snap) return;
     // 记录本快照覆盖的模拟时长：插值步长按它算，而不是硬编码 1/25
     if (snap.dt > 0) this._snapDt = snap.dt;
+    // F3 指标：快照间隔归零 + 计数（不参与任何逻辑）
+    this.perf.snapAge = 0;
+    this.perf.snapCount = (this.perf.snapCount || 0) + 1;
 
     // ---- 本地玩家对账：只取服务端权威的"结果类"字段，位置仍信自己的预测 ----
     if (snap.player) {
@@ -437,7 +461,18 @@ class Game {
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
     // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
     const k = dt / (this._snapDt || SNAP_DT);
+    // 远处生物（不在屏幕附近）只贴位置、不做插值与动画计时：
+    // 全图 4600+ 只，每帧给它们算插值/血条/轮廓纯属白做（本帧根本不会画）。
+    const cx = this.camera.x, cy = this.camera.y;
+    const farR = Math.max(this.W, this.H) * 0.85 + 260;
+    const far2 = farR * farR;
     for (const m of this.mobs) {
+      const dxc = m.tx - cx, dyc = m.ty - cy;
+      if (dxc * dxc + dyc * dyc > far2) {
+        m.blend = 1;
+        m.x = m.tx; m.y = m.ty;
+        continue;
+      }
       if (m.blend < 1) m.blend = Math.min(1, m.blend + k);
       const b = m.blend;
       // 统一插值：服务端已把整条链【刚体解算】好，各节位移量一致，
@@ -506,10 +541,17 @@ class Game {
       if (dt > 0.25) dt = 0.25;                 // 极端掉帧/切后台封顶，防止一次性补几千步
       this.acc = (this.acc || 0) + dt;
       let n = 0;
+      const t0 = performance.now();
       while (this.acc >= STEP && n < MAX_STEPS) { this.update(STEP); this.acc -= STEP; n++; }
       // 只保留不超过一步的余量：既避免卡顿后"螺旋补偿"，也不再把这帧剩下的时间整段丢掉
       if (n >= MAX_STEPS) this.acc = Math.min(this.acc, STEP);
+      const t1 = performance.now();
       this.render();
+      const t2 = performance.now();
+      const pf = this.perf;
+      pf.updateMs = (t1 - t0) / Math.max(1, n);
+      pf.renderMs = t2 - t1;
+      pf.frameMs = dt * 1000;
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -533,7 +575,7 @@ class Game {
 
     // 鼠标移动模式：平滑地把朝向转向指针。停住/开窗口时 Player.update 不再更新朝向，
     // 这里补上——做到"眼睛跟随鼠标但不走动"（玩家 facing 不在快照里，纯客户端表现）。
-    if (this.moveMode === 'mouse' && this.mouse) {
+    if (this.moveMode === 'mouse' && this.mouse && !this.touchDir) {
       const mx = this.mouse.x + this.camera.x - this.W / 2;
       const my = this.mouse.y + this.camera.y - this.H / 2;
       p.facing = lerpAngle(p.facing, Math.atan2(my - p.y, mx - p.x), clamp(dt * 12, 0, 1));
@@ -546,6 +588,8 @@ class Game {
     this.net.send({ t: 'loadout', slots: p.slots, hold: p.reloadHold });
     this.net.sendInput({ dx: dir.x, dy: dir.y, mode: p.mode });
     this.net.step(dt);
+    // 快照延迟：_applySnap 里清零，这里累加（本地实现每帧都有快照 -> 恒 ≈ 0）
+    this.perf.snapAge += dt;
 
     // —— 视图层生物：插值坐标推进 + 自身动画计时（AI/移动已归服务端）——
     this._tickMobViews(dt);
@@ -554,13 +598,22 @@ class Game {
     // 因此"生物冲过来"的动能与服务端同源；视图实体不积分位置，冲量写入后下一帧即被覆盖，
     // 不会像旧实现那样在视图对象上留下永不衰减的幽灵速度。
     if (!p.dead) {
+      // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个调用 physicsPush 是纯浪费，
+      // 这个距离预筛用平方距（无开方），比函数调用本身还便宜。
       for (const m of this.mobs) {
         if (m.dead) continue;
+        const dx = m.x - p.x, dy = m.y - p.y;
+        const rr = (m.r || 0) + p.r + 24;
+        if (dx * dx + dy * dy > rr * rr) continue;
         physicsPush(p, m);
       }
     }
     // 残余偏差（快照滞后 / 插值位置不同）按速率收敛，避免攒到阈值再瞬移
     this._reconcile(dt);
+    if (this._netPos) {
+      const ex = this._netPos.x - p.x, ey = this._netPos.y - p.y;
+      this.perf.predErr = Math.sqrt(ex * ex + ey * ey);
+    }
 
     // 死亡检测：弹出死亡界面（只弹一次，重生时复位）
     if (p.dead && !this._deathShown) {
@@ -634,6 +687,8 @@ class Game {
     this.camera.x = clamp(p.x, -half + hw, half - hw);
     this.camera.y = clamp(p.y, -half + hh, half - hh);
     this.shake = Math.max(0, this.shake - dt * 30);
+    // F3 调试屏幕：只在打开时更新（内部再限频 5Hz）
+    if (typeof DebugScreen !== 'undefined' && DebugScreen.on) DebugScreen.update(dt);
 
 
   }
@@ -658,6 +713,8 @@ class Game {
   }
 
   _readDir() {
+    // 触控摇杆优先：手机上没有键盘，且摇杆是"当前手指位置"的绝对意图
+    if (this.touchDir && (this.touchDir.x || this.touchDir.y)) return this.touchDir;
     if (this.moveMode === 'mouse') return this._readMouseDir();
     // 方向 = 当前按住的所有方向键的组合（WASD 与方向键等价、可混按）。
     // 逐个物理键独立判断：多个键同时按住就是对角移动，绝不互相覆盖。
@@ -816,7 +873,9 @@ class Game {
     const visible = this._visibleMobs || (this._visibleMobs = []);
     visible.length = 0;
     for (const m of this.mobs) {
-      const mr = (m.r || 0) + 4;
+      // 裁剪半径取「碰撞半径」与「贴图半边长」的较大者：
+      // 带触角/翅膀的生物，贴图会比等面积圆大一圈，只按 r 裁会在贴边时整只消失。
+      const mr = Math.max(m.r || 0, (m.drawSize || 0) * 0.5) + 4;
       if (m.x + mr < mx0 || m.x - mr > mx1 || m.y + mr < my0 || m.y - mr > my1) continue;
       visible.push(m);
     }
@@ -834,8 +893,6 @@ class Game {
 
     ctx.restore();
 
-    // /show-coord 的坐标读数（屏幕空间，不受相机抖动影响）
-    this._drawCoord(ctx);
     // /tp 目标在屏幕外时，在屏幕边缘画一个红点指向它（保证"一定看得见"）
     this._drawTpEdge(ctx, camX, camY);
     this._drawMinimap();
@@ -918,24 +975,6 @@ class Game {
     ctx.restore();
   }
 
-  // 左上角坐标读数：/show-coord 打开后每帧刷新（与按钮组同字体风格：白字黑描边）
-  _drawCoord(ctx) {
-    const p = this.player;
-    if (!this.showCoord || !p) return;
-    const txt = 'X ' + Math.round(p.x) + '   Y ' + Math.round(p.y);
-    ctx.save();
-    ctx.font = '800 14px ' + ((typeof CardRenderer !== 'undefined' && CardRenderer.FONT) ? CardRenderer.FONT : 'Ubuntu, sans-serif');
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = '#000';
-    ctx.strokeText(txt, 18, 66);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(txt, 18, 66);
-    ctx.restore();
-  }
-
   // 屏幕边缘的传送指示点（只在目标离开视野时绘制）
   _drawTpEdge(ctx, camX, camY) {
     const t = this.tpTarget;
@@ -968,8 +1007,10 @@ class Game {
   }
 
   _drawMinimap() {
+    // 生物点（粉色）只在 F3 调试屏幕打开时显示：常规游玩只看地形与玩家，信息更干净。
     // 把 /tp 标记一起传进去（小地图是独立绘制的，不能靠全局变量取）
-    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, this.mobs, this.tpTarget);
+    const dots = (typeof DebugScreen !== 'undefined' && DebugScreen.on) ? this.mobs : null;
+    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, dots, this.tpTarget);
   }
 
   // ---------- 图鉴 ----------

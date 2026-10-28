@@ -87,7 +87,11 @@ def check_globals(scripts: list[Path]) -> None:
 
 
 def check_i18n(scripts: list[Path]) -> None:
+    # 官方语言包 + 项目自建增量包（js/i18n-extra.js）都算"已定义"
     packs = list((ROOT / "assets" / "i18n").glob("*/*.js"))
+    extra = ROOT / "js" / "i18n-extra.js"
+    if extra.is_file():
+        packs = packs + [extra]
     pack_text = "".join(read(p) for p in packs if p.is_file())
     if not pack_text:
         warn("未找到语言包，跳过 i18n key 检查")

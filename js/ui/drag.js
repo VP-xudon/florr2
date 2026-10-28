@@ -3,13 +3,32 @@
 
 Object.assign(UI, {
   // ---------------- 交互：点击 / 拖拽 ----------------
-  // 只响应鼠标左键（右键不产生任何卡牌幽灵，清理右键残留）
+  // 鼠标 / 触摸 / 触控笔统一走 Pointer Events（老浏览器退回 mouse + touch 双通道）。
+  // 触屏上必须声明 touch-action:none，否则浏览器会把"手指按住拖动"当成页面滚动，
+  // 直接发 pointercancel 把这次拖拽掐掉 —— 这就是移动端拖不动卡牌的根因。
   _bindCard(el, card, from, onClick) {
-    el.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
+    el.style.touchAction = 'none';
+    const down = (e) => {
+      const type = e.pointerType || (e.touches ? 'touch' : 'mouse');
+      if (type === 'mouse') {
+        if (e.button !== 0) return;
+        // 触摸后浏览器会补发一次合成 mouse 事件：800ms 内一律忽略，避免一次点击算两次
+        if (performance.now() - (this._lastTouchTs || -1e9) < 800) return;
+      } else {
+        this._lastTouchTs = performance.now();
+        if (e.touches && e.touches.length > 1) return;   // 双指缩放等手势不参与拖卡
+      }
       e.preventDefault();
+      if (type !== 'mouse') this._hideTip();   // 触屏没有 hover：别让悬浮框黏在卡上
       this._beginPointer(card, from, e, onClick, el);
-    });
+    };
+    if (window.PointerEvent) {
+      el.addEventListener('pointerdown', down);
+      el.addEventListener('contextmenu', (e) => e.preventDefault());   // 长按不弹系统菜单
+    } else {
+      el.addEventListener('mousedown', down);
+      el.addEventListener('touchstart', down, { passive: false });
+    }
   },
   // 画廊卡「按住前先取走一张」：库存不足直接返回 false，整次交互不产生任何效果
   _canTakeFromGallery(card) {
@@ -23,7 +42,20 @@ Object.assign(UI, {
   _beginPointer(card, from, ev, onClick, srcEl) {
     // 库存校验必须在最前面：卡已取完时连点击都不生效，避免"按了却凭空多出一张"
     if (from.type === 'gallery' && !this._canTakeFromGallery(card)) return;
-    const startX = ev.clientX, startY = ev.clientY;
+    // ---- 指针归一化：PointerEvent / MouseEvent / TouchEvent 三种来源取同一组坐标 ----
+    // 只用 pointerId 过滤（多指时每根手指各走一次交互，互不干扰）。
+    const isTouch = ev.pointerType === 'touch' || !!ev.touches;
+    const pid = (ev.pointerId != null) ? ev.pointerId : null;
+    const pt = (e) => {
+      if (e.changedTouches || e.touches) {
+        const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+        return t ? { x: t.clientX, y: t.clientY } : null;
+      }
+      return { x: e.clientX, y: e.clientY };
+    };
+    const own = (e) => pid == null || e.pointerId == null || e.pointerId === pid;
+    const startPt = pt(ev) || { x: 0, y: 0 };
+    const startX = startPt.x, startY = startPt.y;
     const startTime = ev.timeStamp || performance.now();
     let windowsClosed = false;   // 延迟关闭窗口标志
     const bagWasOpen = !this.refs.inv.classList.contains('hidden');   // 拖拽前背包是否开着（用于落点后自动重开）
@@ -33,11 +65,11 @@ Object.assign(UI, {
 
     // 进入拖拽态才生成幽灵：卡片会被放大到 1.3 倍、开始跟随指针，源卡即时隐藏。
     // （点击路径绝不调用它 —— 0.1s 内松手时卡片不放大、不变形、不产生幽灵。）
-    const startDrag = (e) => {
+    const startDrag = (p) => {
       if (dragging || over) return;
       dragging = true;
       this._hideTip();
-      this._createGhost(card, e, srcEl);
+      this._createGhost(card, p, srcEl);
       // 暂不关闭窗口，等按住时长够再关
       if (from.type === 'gallery') { this._decGallery(card); this.renderInventory(); }
       // 卡槽/物品栏卡：拿起瞬间隐藏源卡，由幽灵从原卡中心无缝接替（不再有残影）
@@ -47,17 +79,20 @@ Object.assign(UI, {
     };
 
     // 0.1s 后仍未松手 -> 升级为拖拽（此时才放大、才产生幽灵）
-    const clickTimer = setTimeout(() => startDrag(ev), 100);
+    const clickTimer = setTimeout(() => startDrag(startPt), 100);
 
     const move = (e) => {
-      if (over) return;
-      const md = Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY);
+      if (over || !own(e)) return;
+      const q = pt(e);
+      if (!q) return;
+      if (isTouch) e.preventDefault();     // 拖卡期间不让页面跟着滚（需 passive:false）
+      const md = Math.abs(q.x - startX) + Math.abs(q.y - startY);
       if (md > movedMax) movedMax = md;
       if (!dragging) {
         // 还没到 0.1s，但已经明显移动 -> 也立即升级为拖拽
         if (md <= 6) return;
         clearTimeout(clickTimer);
-        startDrag(e);
+        startDrag(q);
       }
       const held = (e.timeStamp || performance.now()) - startTime;
       if (held >= 200 && !windowsClosed) {
@@ -65,14 +100,15 @@ Object.assign(UI, {
         this._closeAllWindows();
         windowsClosed = true;
       }
-      this._moveGhost(e);
+      this._moveGhost(q);
     };
     const up = (e) => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
+      if (!own(e)) return;
+      unbind();
       if (over) return;
       over = true;
       clearTimeout(clickTimer);
+      const q = pt(e) || { x: startX, y: startY };
       if (!dragging) {
         // —— 点击（按住 < 0.1s）：无幽灵、无放大、无形态变化 ——
         // 但仍要播「飞入空槽」动画并正常扣数量（这两件事此前被一起弄丢了）。
@@ -94,7 +130,7 @@ Object.assign(UI, {
       }
       const target = this._snap
         ? { type: this._snap.type, index: this._snap.index, el: this._snap.el }
-        : this._dropTargetAt(e.clientX, e.clientY);
+        : this._dropTargetAt(q.x, q.y);
       const handled = this.onDrop ? !!this.onDrop({ card, from }, target) : false;
       const ghost = this._drag;
       // 已像素级焊死在卡槽上 -> 无需再飞，直接移除幽灵（renderInvBar 已重建，卡面即刻显示）
@@ -145,8 +181,29 @@ Object.assign(UI, {
           }
         });
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+    // 指针被系统抢走（触屏上来了电话 / 手势被系统判定为返回）：按"取消"收尾，绝不留下幽灵
+    const cancel = (e) => {
+      if (!own(e)) return;
+      unbind();
+      if (over) return;
+      over = true;
+      clearTimeout(clickTimer);
+      if (dragging) {
+        if (from.type === 'gallery') { this._incGallery(card); this.renderInventory(); }
+        this._removeGhost();
+      }
+      this._restoreAfterCancel(from);
+    };
+
+    const usePtr = !!window.PointerEvent;
+    const evs = usePtr
+      ? [['pointermove', move, { passive: false }], ['pointerup', up], ['pointercancel', cancel]]
+      : [['mousemove', move], ['mouseup', up],
+         ['touchmove', move, { passive: false }], ['touchend', up], ['touchcancel', cancel]];
+    function unbind() {
+      for (const [n, fn, opt] of evs) window.removeEventListener(n, fn, opt);
+    }
+    for (const [n, fn, opt] of evs) window.addEventListener(n, fn, opt);
   },
 
   // 拖拽落入卡槽：先把目标卡藏起来，并暂停该槽装填计时。
@@ -340,7 +397,8 @@ Object.assign(UI, {
     return g;
   },
   // 拿起：幽灵从「源卡牌位置」长出来并放大（0.2s），位置由跟踪循环每帧逼近指针
-  _createGhost(card, e, srcEl) {
+  // p = { x, y }（已归一化的指针坐标，鼠标/触摸通用）
+  _createGhost(card, p, srcEl) {
     // 防御：上一次交互的幽灵还挂着（快速连点时飞行动画未结束）-> 立即清掉，绝不叠加；
     // 待触发的完成回调仍会照常执行（其 _removeGhost 只会移除它自己的幽灵）
     if (this._drag) { this._drag.remove(); this._drag = null; }
@@ -349,7 +407,7 @@ Object.assign(UI, {
     g.id = 'dragGhost';
     g.classList.add('dragging');
     // 起点 = 源卡牌中心，终点 = 指针位置（缩放 1 -> 1.3）
-    let x = e.clientX, y = e.clientY;
+    let x = p.x, y = p.y;
     const r = (srcEl && srcEl.getBoundingClientRect) ? srcEl.getBoundingClientRect() : null;
     if (r && r.width > 0) { x = r.left + r.width / 2; y = r.top + r.height / 2; }
     g.style.transition = 'none';          // 位置完全交给 JS 跟踪，绝不再让 CSS transition 拖后腿
@@ -359,12 +417,12 @@ Object.assign(UI, {
     document.body.appendChild(g);
     this._drag = g;
     this._dragCur = { x: x, y: y };
-    this._dragTarget = { x: e.clientX, y: e.clientY };
+    this._dragTarget = { x: p.x, y: p.y };   // 目标点 = 指针位置，随后由 pointermove 更新
     this._dragStart = performance.now();
     this._dragLast = 0;
     this._startDragLoop();
   },
-  // 跟踪算法：mousemove 只更新"目标点"，实际位置在 rAF 里按指数逼近（帧率无关）。
+  // 跟踪算法：pointermove 只更新"目标点"，实际位置在 rAF 里按指数逼近（帧率无关）。
   // 好处：① 事件合并/丢帧时目标始终是最新指针位置，不会越拖越偏；
   //      ② 没有 CSS transition 参与，快速甩动时不会出现橡皮筋式的滞后。
   _startDragLoop() {
@@ -530,10 +588,11 @@ Object.assign(UI, {
   _stopDragLoop() {
     if (this._dragRaf) { cancelAnimationFrame(this._dragRaf); this._dragRaf = 0; }
   },
-  _moveGhost(e) {
+  // p = { x, y }：只更新目标点，由 rAF 循环去追
+  _moveGhost(p) {
     if (!this._drag || !this._dragTarget) return;
-    this._dragTarget.x = e.clientX;      // 只更新目标点，由 rAF 循环去追
-    this._dragTarget.y = e.clientY;
+    this._dragTarget.x = p.x;
+    this._dragTarget.y = p.y;
   },
   _removeGhost(g) {
     const ghost = g || this._drag;

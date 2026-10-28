@@ -712,17 +712,45 @@ class LocalServer {
     }
 
     // 4) 生物之间：同样按重量 + 动能推挤（替代原来"各半"的等权推开）
-    //    只算"醒着"的：远处休眠的既不动也不该参与，顺带把 O(n²) 压到近处规模。
+    //    只算"醒着"的（远处休眠的既不动也不该参与）。
+    //    【宽相位用均匀网格】：醒着的往往上千只（蜈蚣一条就几十节），
+    //    两两配对是 O(k²) ≈ 50 万次/帧，即使每次只是一次距离判断也会打爆帧率。
+    //    这里按格子分桶，只比较同格与相邻格（格距按最大半径自动扩）——
+    //    实际配对数量降到"每只周围真正贴着的几只"。
     const ms = this.ents;
-    for (let i = 0; i < ms.length; i++) {
-      const a = ms[i]; if (a.dead || a.sleeping) continue;
-      for (let j = i + 1; j < ms.length; j++) {
-        const b = ms[j]; if (b.dead || b.sleeping) continue;
-        // 多节生物【直接相连的两节】之间不做推挤：
-        // 它们本来就是故意重叠的（见 _solveChains 的 GLUE），
-        // 推挤会把链硬生生推开 -> 错位、拉伸、尾节脱节、并给速度顶出巨大冲量。
-        if (a._next === b || b._next === a) continue;
-        physicsPush(a, b);
+    const CELL = 192;
+    const grid = this._pushGrid || (this._pushGrid = new Map());
+    grid.clear();
+    let maxR = 0, seq = 0;
+    for (const m of ms) {
+      if (m.dead || m.sleeping) continue;
+      if (m.r > maxR) maxR = m.r;
+      m._pseq = seq++;                       // 本帧唯一序号：保证每对只处理一次
+      const gx = Math.floor(m.x / CELL), gy = Math.floor(m.y / CELL);
+      const k = (gx + 4096) * 8192 + (gy + 4096);
+      let arr = grid.get(k);
+      if (!arr) { arr = []; grid.set(k, arr); }
+      arr.push(m);
+    }
+    // 两个半径之和可能超过一格 -> 按最大半径决定要看几圈相邻格
+    const ring = Math.max(1, Math.ceil((maxR * 2) / CELL));
+    for (const a of ms) {
+      if (a.dead || a.sleeping) continue;
+      const gx = Math.floor(a.x / CELL), gy = Math.floor(a.y / CELL);
+      for (let dx = -ring; dx <= ring; dx++) {
+        for (let dy = -ring; dy <= ring; dy++) {
+          const arr = grid.get((gx + dx + 4096) * 8192 + (gy + dy + 4096));
+          if (!arr) continue;
+          for (let i = 0; i < arr.length; i++) {
+            const b = arr[i];
+            if (b._pseq <= a._pseq) continue;         // 同一对只算一次
+            // 多节生物【直接相连的两节】之间不做推挤：
+            // 它们本来就是故意重叠的（见 _solveChains 的 GLUE），
+            // 推挤会把链硬生生推开 -> 错位、拉伸、尾节脱节、并给速度顶出巨大冲量。
+            if (a._next === b || b._next === a) continue;
+            physicsPush(a, b);
+          }
+        }
       }
     }
 

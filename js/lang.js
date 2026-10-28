@@ -24,11 +24,12 @@ window.I18N = (function () {
   function hasLang(code) { return !!packs[code]; }
   function lang() { return current; }
 
-  // 查找顺序：当前语言 -> en_US（官方英文，永远注册）-> en（本项目自定义小包）-> null。
+  // 查找顺序：当前语言 -> en_US（官方英文，永远注册）-> null。
   // 中文包只有 2282 条，覆盖不到全部键，所以这条回退链是必需的：
   // 缺键时显示英文，而不是把 key 本身当文案显示出来。
+  // （旧的 assets/lang/en.js 自建命名空间包已删除，不再参与查找。）
   function lookup(key) {
-    const order = [current, 'en_US', 'en'];
+    const order = [current, 'en_US'];
     for (let i = 0; i < order.length; i++) {
       const d = packs[order[i]];
       if (d && d[key] != null) return d[key];

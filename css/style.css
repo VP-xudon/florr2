@@ -274,7 +274,13 @@ body {
   pointer-events: none; -webkit-user-drag: none;
 }
 
-/* 拿起卡牌：放大并摇晃（与窗口动画一致，平滑反馈） */
+/* 卡牌/卡槽：触屏上禁止滚动手势与长按菜单（否则拖动会被 pointercancel 掐断） */
+.card, .cardcell, .qslot, .qinner, .flyghost {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+}
+
 /* 拿起卡牌：左右小幅晃动。只作用在幽灵元素本身（内部卡面不再另加动画），
    否则父子两层旋转叠加（±9°×2）会放大成左上/右下的抖动。 */
 .dragging { animation: cardWobble .6s ease-in-out infinite; opacity: 1; }  /* 不透明 */
@@ -305,7 +311,9 @@ body {
 .win-close:hover { filter: brightness(1.1); }
 .win-close:active { filter: brightness(.85); }
 /* 自绘滚动条：仅一根半透明灰色条，不用浏览器默认样式 */
-.win-body { padding: 10px 16px 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+/* pan-y：窗口内容区可以用手指上下滚动；落在卡面上的手势仍然是"拖卡"（卡上是 none，
+   取交集后以 none 为准，所以拖卡不会被滚动抢走）。 */
+.win-body { padding: 10px 16px 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; touch-action: pan-y; }
 .win-body::-webkit-scrollbar { width: 8px; }
 .win-body::-webkit-scrollbar-track { background: transparent; }
 .win-body::-webkit-scrollbar-thumb { background: rgba(226,232,236,.5); border-radius: 8px; }
@@ -512,3 +520,100 @@ body {
   paint-order: stroke fill;
 }
 .chat-float .chat-line { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
+/* ================= 移动端触控层（ui/touch.js） ================= */
+/* 只在粗指针设备创建（JS 判断）；桌面浏览器不会出现这些元素。
+   只占左下这一块（摇杆活动区），不覆盖整屏 —— 免得挡住快捷栏/聊天/按钮。 */
+#touchLayer {
+  position: fixed; left: 0; bottom: 0;
+  width: 64vw; height: 78vh; z-index: 30;
+  pointer-events: auto; touch-action: none;
+}
+/* 触屏上禁止整页滚动/下拉刷新，避免拖摇杆时页面跟着动 */
+html, body { overscroll-behavior: none; }
+body.touch-ui { touch-action: none; -webkit-user-select: none; user-select: none; }
+body.touch-ui canvas { touch-action: none; }
+.t-stick {
+  position: fixed; z-index: 30;
+  width: var(--t-stick, 120px); height: var(--t-stick, 120px);
+  pointer-events: none;
+  transition: left .12s ease-out, top .12s ease-out;
+}
+.t-stick.active { transition: none; }
+.t-stick-base {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: rgba(16, 28, 20, .26);
+  border: 2px solid rgba(255, 255, 255, .35);
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, .25);
+}
+.t-stick-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: var(--t-knob, 52px); height: var(--t-knob, 52px);
+  margin-left: calc(var(--t-knob, 52px) / -2);
+  margin-top: calc(var(--t-knob, 52px) / -2);
+  border-radius: 50%;
+  background: rgba(226, 244, 214, .55);
+  border: 2px solid rgba(255, 255, 255, .7);
+  will-change: transform;
+}
+.t-stick.active .t-stick-base { border-color: rgba(255, 255, 255, .6); }
+
+.t-btns {
+  position: fixed; right: calc(14px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; gap: 12px; align-items: flex-end;
+  z-index: 31;
+}
+.t-btn {
+  width: var(--t-btn, 68px); height: var(--t-btn, 68px);
+  border-radius: 50%; padding: 0; border: 2px solid rgba(255, 255, 255, .5);
+  background: rgba(18, 32, 22, .38); color: #eaf7e4;
+  font-family: 'Ubuntu', sans-serif; line-height: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.t-btn b { font-size: calc(var(--t-btn, 68px) * .38); font-weight: 800; }
+.t-btn i { font-size: calc(var(--t-btn, 68px) * .16); font-style: normal; opacity: .85; }
+.t-btn-a { border-color: rgba(255, 214, 102, .7); }
+.t-btn-b { border-color: rgba(120, 214, 255, .7); }
+.t-btn.down { transform: scale(.94); background: rgba(60, 96, 68, .6); }
+
+/* 触控设备上隐藏桌面提示类文字，并把快捷栏整体缩小，给摇杆/按钮让位 */
+body.touch-ui #touchLayer { touch-action: none; }
+body.touch-ui #quickbar { transform: scale(.82); transform-origin: 50% 100%; }
+body.touch-ui .chat-float { max-width: 46vw; }
+
+/* ================= F3 调试屏幕（ui/debug-screen.js） ================= */
+#f3 {
+  position: fixed; left: 0; top: 0; z-index: 80;
+  display: flex; align-items: flex-start; gap: 26px;
+  padding: 10px 14px; pointer-events: none;
+  font-family: 'Consolas', 'DejaVu Sans Mono', monospace;
+  font-size: 12px; line-height: 1.55; color: #eaf7e4;
+  text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+  max-width: 100vw; overflow: hidden;
+}
+#f3.hidden { display: none; }
+#f3 .f3-col { min-width: 208px; }
+#f3 .f3-head {
+  margin: 6px 0 2px; color: #9fe870; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; font-size: 11px;
+}
+#f3 .f3-col > .f3-head:first-child { margin-top: 0; }
+#f3 .f3-row { display: flex; justify-content: space-between; gap: 14px; }
+#f3 .f3-k { color: #b9d8ab; }
+#f3 .f3-v { color: #fff; font-variant-numeric: tabular-nums; }
+#f3 .f3-petals { display: flex; flex-direction: column; gap: 1px; }
+#f3 .f3-petal { white-space: nowrap; }
+#f3 .f3-petal b { display: inline-block; width: 16px; color: #7EEF6D; }
+#f3 .f3-petal i { color: #ffd166; font-style: normal; }
+#f3 .f3-petal em { color: #8fb3a7; font-style: normal; font-size: 11px; }
+#f3 .f3-hint {
+  position: fixed; left: 14px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  color: #9fe870; font-size: 11px;
+}
+@media (max-width: 760px) {
+  #f3 { font-size: 11px; gap: 12px; flex-wrap: wrap; }
+  #f3 .f3-col { min-width: 44vw; }
+}
