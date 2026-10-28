@@ -70,7 +70,8 @@ function createMap(R) {
     spawnZones: [], zoneAt: () => null, randomPointInZone: () => null,
     checkpoints: [], checkpointAt: () => -1,
     checkpointSpawnPoint: () => ({ x: 0, y: 0 }),
-    spawnCheckpointPoint: () => null
+    spawnCheckpointPoint: () => null,
+    canStandAt: (x, y, r) => Math.hypot(x, y) < R - (r || 0)
   };
 }
 
@@ -705,23 +706,51 @@ function createGardenMap(data) {
     return -1;
   }
 
-  // 复活落点：优先生效区域中心；中心不可站立时在区域内随机找一个可站立点
-  function checkpointSpawnPoint(cp) {
+  // "这个点能站人吗"：点本身不在实心瓦片，且【玩家半径内不压墙】（含碰撞多边形）。
+  // 与 /tp 的判定同一口径 —— 只判一个点会让"贴着墙出生"把角色卡进墙里。
+  function canStandAt(x, y, r) {
+    if (solidAtPoint(x, y)) return false;
+    if (r > 0 && circleContact(x, y, r)) return false;
+    return true;
+  }
+
+  // 复活落点：【在复活区域内部随机】取一个能站人的位置。
+  //   · 不再优先区域中心 —— 检查点是一大片矩形（常常是一整段走廊/房间），
+  //     中心既可能正好压墙，也会让每次复活都固定在同一点；
+  //   · 区域内随机 = 每次重生落在整片区域里的不同位置（同一次死亡重试也一样）。
+  function checkpointSpawnPoint(cp, radius) {
     if (!cp) return { x: 0, y: 0 };
-    if (!solidAtPoint(cp.cx, cp.cy)) return { x: cp.cx, y: cp.cy };
-    for (let i = 0; i < 48; i++) {
-      const x = cp.x + Math.random() * cp.w;
-      const y = cp.y + Math.random() * cp.h;
-      if (!solidAtPoint(x, y)) return { x, y };
+    const r = (typeof radius === 'number' && radius > 0) ? radius : 22;
+    const w = Math.max(1, cp.w), h = Math.max(1, cp.h);
+    // 1) 随机采样：区域通常是一大片空地，命中率很高
+    for (let i = 0; i < 96; i++) {
+      const x = cp.x + Math.random() * w;
+      const y = cp.y + Math.random() * h;
+      if (canStandAt(x, y, r)) return { x, y };
     }
-    return { x: cp.cx, y: cp.cy };
+    // 2) 兜底：网格扫描，把区域内所有能站人的点收集起来再随机取一个。
+    //    狭窄 L 形走廊等"随机点几乎全落墙里"的地形也能复活，且仍然是随机的。
+    const step = Math.max(24, r * 1.5);
+    const cand = [];
+    for (let y = cp.y + step * 0.5; y < cp.y + h; y += step) {
+      for (let x = cp.x + step * 0.5; x < cp.x + w; x += step) {
+        if (canStandAt(x, y, r)) cand.push([x, y]);
+      }
+    }
+    if (cand.length) {
+      const q = cand[(Math.random() * cand.length) | 0];
+      return { x: q[0], y: q[1] };
+    }
+    // 3) 最后兜底：区域中心 + 碰撞推离（宁可贴着墙，也不嵌进墙里）
+    const c = collide(cp.cx, cp.cy, r);
+    return { x: c[0], y: c[1] };
   }
 
   // 出生点 = 等级最低的那个复活区域（checkpoints 已按 level/距离排序）。
   // 客户端开局与服务端"未解锁任何复活区时的复活"都用它 —— 不再固定落在世界原点 (0,0)。
-  function spawnCheckpointPoint() {
+  function spawnCheckpointPoint(radius) {
     if (!checkpoints.length) return null;
-    return checkpointSpawnPoint(checkpoints[0]);
+    return checkpointSpawnPoint(checkpoints[0], radius);
   }
 
   // ---- 减速瓦片（地形效果）----
@@ -805,7 +834,7 @@ function createGardenMap(data) {
     name: data.name || 'map',
     slowAt,
     spawnZones, zoneAt, randomPointInZone,
-    checkpoints, checkpointAt, checkpointSpawnPoint, spawnCheckpointPoint,
+    checkpoints, checkpointAt, checkpointSpawnPoint, spawnCheckpointPoint, canStandAt,
     buildCollision
     };
     }

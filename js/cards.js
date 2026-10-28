@@ -77,7 +77,15 @@ const CardRenderer = (function () {
   //   · svg 里小就是小，大就是大；防裁切：内容超出窗口时窗口放大到刚好包住
   //     （只放大、不缩小，绝不把小图充大）。
   const PETAL_CARD_REF = [68.2557, 79.3829];   // Basic vb 宽高 = 卡面统一基准
-  let PETAL_ENT_REF = null;                    // 实体统一基准 [w,h]（Basic 实测，懒加载）
+  // 实体统一基准 = Basic(1.svg) 的【离线实测内容包围盒】。
+  // 由 tools/analyze_petals.py 从 1.svg 量得：外层圆 32.858、内层高光 24.286，与外层同为圆。
+  // 为什么改成常量而不是运行时 loadRaw('1') 异步实测：
+  //   异步实测在首帧可能还没就绪 -> 退回"自身 bbox"（旧行为）-> 同一张素材在
+  //   首帧与之后的大小不一致（比例抖动）。常量是单一来源、无竞态。
+  // 注意：卡面基准(68.2557) 与实体基准(32.858) 本来就不同 —— 卡面要把下半部分
+  //   留给名称文字，所以图形只占框 48%；实体则占满框。这个差异对【所有花瓣一致】，
+  //   花瓣之间的相对大小（bb/基准）两边完全相同，因此不需要也不应该把两个数强行相等。
+  const PETAL_ENT_REF = [32.858, 32.858];      // Basic 内容包围盒（离线实测常量）
 
   const _bb = {};    // svgId -> [x, y, w, h] | null（离屏 getBBox 实测内容包围盒）
   // 实测 SVG 内容包围盒（含 <g transform> 的整体范围）。
@@ -111,25 +119,16 @@ const CardRenderer = (function () {
   }
 
   // ---- 多体花瓣（Light）----
-  // Light 由 N 个相同小圆组成，N 随稀有度增长（官方维基 + 本作实装口径）：
-  //   common 1 / unusual,rare 2 / epic,legendary 3 / mythic,ultra 5 / super,eternal 6
-  //   —— 顶层 6 个对应 Duplicator 天赋的效果（10 个 super Light 槽 = 60 个光点）；
-  //      按约定【不存在 4 个】这种排布。
+  // 数量（N）由数据层给出，唯一来源是 data.js 的 PETAL_SUB_COUNT（见 lightSubCount）。
+  // 官方维基 + 本作实装口径：common 1 / unusual,rare 2 / epic,legendary 3 /
+  //   mythic,ultra 5 / super,eternal 6（顶层 6 个对应 Duplicator 天赋效果；
+  //   按约定【不存在 4 个】这种排布）。
   // 所有排布都以「单个 Light 的直径 D」为单位，卡面与实体共用同一套布局：
   //   1 -> 单个居中
   //   2 -> 平行并排，中间留缝，不越出卡面
   //   3 -> 三角形
   //   5 -> 五边形紧贴，中心留空
   //   6 -> 更紧贴、轻微交叠，逐个叠压（风车感）
-  function lightCount(rarity) {
-    switch (rarity) {
-      case 'unusual': case 'rare': return 2;
-      case 'epic': case 'legendary': return 3;
-      case 'mythic': case 'ultra': return 5;
-      case 'super': case 'eternal': return 6;
-      default: return 1;
-    }
-  }
   function lightRing(n, r, k, start) {
     const out = [];
     for (let i = 0; i < n; i++) {
@@ -182,17 +181,39 @@ const CardRenderer = (function () {
     3: formRing(3, 0.88, 1, 0, false),
     5: formRing(5, 0.95, 1, -Math.PI / 2, true)
   };
+  // Peas：4 个绿色小球（单个小球才是实体），排布是【菱形】（上/右/下/左），并非 2×2 网格。
+  // 形状完全由原 44.svg 实测复现（tools/analyze_petals.py 量的原始四球素材）：
+  //   4 个球心 (67.143,55) (55,67.143) (42.857,55) (55,42.857)，即菱形半径 12.143；
+  //   每颗球本体直径 24.286（高光 15.715）。
+  //   -> 菱形半径 / 球径 = 12.143 / 24.286 = 0.5（相邻球心距 17.18 = 0.707 球径，部分重合）。
+  // 现在 44.svg 是【单颗球、直径 23.001 = 0.7 × rose】，
+  // 所以半径按同一比例换算：r = 12.143 / 23.001 = 0.5279（单位 = 单球直径 D）。
+  // 于是卡面 4 球的相对间距与原始素材完全一致，只是整体缩到 0.7×rose。
+  function formDiamond(r, k) {
+    return [
+      { x: 0, y: -r, k, rot: 0, part: 0 },   // 上
+      { x: r, y: 0, k, rot: 0, part: 1 },    // 右
+      { x: 0, y: r, k, rot: 0, part: 2 },    // 下
+      { x: -r, y: 0, k, rot: 0, part: 3 }    // 左
+    ];
+  }
+  // 与 Stinger【完全相同的约定】，没有任何 Peas 专属系数：
+  //   · k = 1 —— 子体就是素材本身，不做额外缩放；x/y 的单位是 D（管线实测的单体直径）。
+  //   · 卡面与实体用同一套 k / r，所以两边比例天然一致（不存在 1/k 补偿之类的特例）。
+  // r = 0.5279 是【原素材实测比例】的等比换算：
+  //   原始四球：菱形半径 12.143、球径 24.286 -> r/球径 = 0.5
+  //   现在单球径缩到 23.001（0.7×rose），但菱形间距沿用原始绝对值 12.143
+  //   -> r = 12.143 / 23.001 = 0.5279（相邻球心距 = 0.747 球径，仍部分重合，与原图观感一致）
+  const PEAS_LAYOUTS = { 4: formDiamond(0.5279, 1) };
   // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
-  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS };
+  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS };
 
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
+  // 数量唯一来源是数据层 type.subCount（PETAL_SUB_COUNT），这里不再按 slug 特判。
   function lightSubCount(type, rarity) {
-    if (!type) return 1;
-    if (type.slug === 'light') return lightCount(rarity);
-    // 数据驱动的多体（如 Pollen：common/unusual 1、rare 2、epic+ 3）
-    if (type.subCount) return type.subCount[rarity] || 1;
-    return 1;
+    if (!type || !type.subCount) return 1;
+    return type.subCount[rarity] || 1;
   }
 
   // 该花瓣的多体布局（卡面用）；非多体花瓣返回 null。
@@ -223,21 +244,30 @@ const CardRenderer = (function () {
 
   // 绘制多体花瓣：cv = 单体素材（canvas/Image），boxW×boxH = 单体素材该画多大，
   // D = 单个 Light 的像素直径，layout = multiLayout() 的结果。
-  function drawMulti(ctx, cv, boxW, boxH, D, cx, cy, rot, scale, alpha, layout) {
+  function drawMulti(ctx, cv, boxW, boxH, D, cx, cy, rot, scale, alpha, layout, svgId) {
     ctx.save();
     ctx.translate(cx, cy);
     if (rot) ctx.rotate(rot);
     if (scale && scale !== 1) ctx.scale(scale, scale);
     if (alpha != null) ctx.globalAlpha = alpha;
     for (const s of layout) {
+      // 子体尺寸 = 整张素材框 × k（所有阵型花瓣统一口径，不能改这里）。
       const w = boxW * s.k, h = boxH * s.k;
       const dx = s.x * D, dy = s.y * D;
-      if (!s.rot) { ctx.drawImage(cv, dx - w / 2, dy - h / 2, w, h); continue; }
+      // 阵型型子体（如 Peas）：每个实例画【单球】素材，由布局摆回原图排列。
+      // 未就绪时【不画】，绝不能回退整张素材 cv —— 那会让 4 个实例各画一整张 44.svg
+      // （表现为"开局先冒出 4 个完整的四球图"）。
+      // 一套逻辑，没有兜底：每个实例一律画【单球】素材 44_s.svg，由布局摆成菱形。
+      // 素材还没加载完就不画（绝不回退成整张素材，也不存在第二种显示）。
+      // 与 Stinger 完全一致：每个实例画的就是素材本身（44.svg 现在就是一颗球）
+      const im = cv;
+      if (!im) continue;
+      if (!s.rot) { ctx.drawImage(im, dx - w / 2, dy - h / 2, w, h); continue; }
       // 每个实例自己的朝向（如 Ultra Stinger 的"尖端朝向中心"）
       ctx.save();
       ctx.translate(dx, dy);
       ctx.rotate(s.rot);
-      ctx.drawImage(cv, -w / 2, -h / 2, w, h);
+      ctx.drawImage(im, -w / 2, -h / 2, w, h);
       ctx.restore();
     }
     ctx.restore();
@@ -299,19 +329,13 @@ const CardRenderer = (function () {
       if (!txt) return null;
       const bb = measureBox(svgId, txt);
       if (!bb) return txt;
-      // 统一基准：Basic 的实测包围盒（与 svgId 无关，全局测一次缓存）
-      return loadRaw('1').then((basicTxt) => {
-        let rw = bb[2], rh = bb[3];               // 取不到 Basic 时退回自身大小（旧行为）
-        if (basicTxt) {
-          const b = measureBox('1', basicTxt);
-          if (b) { PETAL_ENT_REF = [b[2], b[3]]; rw = b[2]; rh = b[3]; }
-        }
-        const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
-        _entWinW[svgId] = v[2];      // 实体窗口宽：多体花瓣直径换算基准
-        return /viewBox="[^"]*"/.test(txt)
-          ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
-          : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
-      });
+      // 统一基准：PETAL_ENT_REF（Basic 内容包围盒，离线实测常量 —— 与 svgId 无关、无竞态）
+      const rw = PETAL_ENT_REF[0], rh = PETAL_ENT_REF[1];
+      const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
+      _entWinW[svgId] = v[2];      // 实体窗口宽：多体花瓣直径换算基准
+      return /viewBox="[^"]*"/.test(txt)
+        ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
+        : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
     });
     return _artSvg[svgId];
   }
@@ -336,7 +360,9 @@ const CardRenderer = (function () {
     });
     return null;
   }
-
+  // 阵型型【单球】：某些素材是"多个实体画在一张图里"（如 Peas 的 4 个球），
+  // 这类素材要按 SINGLE_BALL_SVG 指定的【单个体】文件来画每个实体，
+  // 再由布局把它们摆回原图的排列 —— 绝不对原图做像素裁剪（那样必然错位）。
   // ---- 卡牌 = 一张 <canvas>：外框/内板/素材/数量角标全部由 JS 绘制 ----
   // 不再产生任何 DOM 文字或 <img>/<svg> 节点：卡面即像素，天然不可被选中。
   // opts: { rarity, svg, count, pad, radius }
@@ -538,7 +564,7 @@ const CardRenderer = (function () {
         const lay = multiLayout(st.svg, st.rarity);
         if (lay) {
           const D = lightDRatio(st.svg, false) * dw;    // 单个 Light 的像素直径
-          drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay);
+          drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay, st.svg);
         } else {
           ctx.drawImage(im, ox, oy, dw, dh);
         }

@@ -4,7 +4,7 @@ const TAU = Math.PI * 2;
 
 // 素材版本号：只要 assets/ 下的图片/SVG 内容变了（文件名不变），就把它 +1。
 // 浏览器会按 URL 缓存这些素材，不加版本号时改动可能不生效（表现为"还在用旧素材"）。
-const ASSET_VER = 5;
+const ASSET_VER = 15;  // 44.svg = 从原四球素材中提取的【单颗豌豆】（含浅色高光），缩放到 Basic 统一窗口尺度
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
@@ -94,14 +94,4 @@ function lerpAngle(a, b, t) {
 // 指数平滑（帧率无关）
 function damp(cur, target, rate, dt) {
   return lerp(cur, target, 1 - Math.exp(-rate * dt));
-}
-
-// 一维值噪声（平滑，用于地图不规则形态）
-function noise1(x) {
-  const i = Math.floor(x), f = x - i;
-  const u = f * f * (3 - 2 * f);
-  const a = Math.sin(i * 127.1) * 43758.5453;
-  const b = Math.sin((i + 1) * 127.1) * 43758.5453;
-  const ra = a - Math.floor(a), rb = b - Math.floor(b);
-  return lerp(ra, rb, u);
 }

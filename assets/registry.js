@@ -3846,66 +3846,16 @@ window.REGISTRY = {
    "desc": "It's just there doing its thing.",
    "spawn": "A Super Centipede has spawned somewhere!",
    "rarities": {
-    "common": {
-     "hp": 10,
-     "dmg": 0,
-     "exp": 1,
-     "type": "Passive"
-    },
-    "unusual": {
-     "hp": 30,
-     "dmg": 0,
-     "exp": 1,
-     "type": "Passive"
-    },
-    "rare": {
-     "hp": 90,
-     "dmg": 0,
-     "exp": 3,
-     "type": "Passive"
-    },
-    "epic": {
-     "hp": 270,
-     "dmg": 0,
-     "exp": 15,
-     "type": "Neutral"
-    },
-    "legendary": {
-     "hp": 810,
-     "dmg": 0,
-     "exp": 133,
-     "type": "Neutral"
-    },
-    "mythic": {
-     "hp": 2430,
-     "dmg": 0,
-     "exp": 2000,
-     "type": "Neutral"
-    },
-    "ultra": {
-     "hp": 7290,
-     "dmg": 0,
-     "exp": 76700,
-     "type": "Neutral"
-    },
-    "super": {
-     "hp": 21870,
-     "dmg": 0,
-     "exp": 3900000,
-     "type": "Neutral"
-    },
-    "eternal": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 3900000,
-     "type": "Neutral"
-    }
+    "common": { "hp": 25, "dmg": 10, "armor": 1, "exp": 1, "type": "Passive" },
+    "unusual": { "hp": 93.8, "dmg": 30, "armor": 2, "exp": 1, "type": "Passive" },
+    "rare": { "hp": 337.5, "dmg": 90, "armor": 7, "exp": 2, "type": "Passive" },
+    "epic": { "hp": 1350, "dmg": 270, "armor": 22, "exp": 14, "type": "Neutral" },
+    "legendary": { "hp": 8100, "dmg": 810, "armor": 65, "exp": 133, "type": "Neutral" },
+    "mythic": { "hp": 78975, "dmg": 2430, "armor": 194, "exp": 2038, "type": "Neutral" },
+    "ultra": { "hp": 3645000, "dmg": 7290, "armor": 583, "exp": 59386, "type": "Neutral" },
+    "super": { "hp": 109350000, "dmg": 21870, "armor": 583, "exp": 3895257, "type": "Neutral" },
+    "eternal": { "hp": 656100000, "dmg": 65610, "armor": 583, "exp": 3895257, "type": "Neutral" },
+    "unique": { "hp": 656100000, "dmg": 65610, "armor": 583, "exp": 3895257, "type": "Neutral" }
    },
    "ai": {
     "aggro": false,

@@ -63,10 +63,10 @@ window.I18N = (function () {
 
   function t(key, fallback) {
     const raw = lookup(key);
-    // 不偏袒任何语言：查不到键时显示 <键名>，而非回退 fallback（那会隐藏缺失问题）。
-    // 让缺失的键在界面上明显可见，开发者/用户能立刻发现并补充译文。
-    const s = raw != null ? raw : '<' + key + '>';
-    return resolveRefs(s);
+    if (raw != null) return resolveRefs(raw);
+    // 调用方显式给了兜底就用兜底（ui/chat 里有大量 t(key, '默认文案') 的用法）；
+    // 没给兜底才显示 <键名>，让缺失的键在界面上明显可见，便于补齐译文。
+    return (fallback != null) ? String(fallback) : '<' + key + '>';
   }
   // 带参数：先替换 {0},{1}... 再解析引用
   function tf(key, params, fallback) {

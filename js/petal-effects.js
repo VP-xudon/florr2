@@ -14,6 +14,12 @@
 //     draw?(ctx2d, ctx)              可选：额外绘制（在花瓣本体之后调用）
 //   });
 //
+// —— 被动形态（passive）——
+//   PetalFX.register(key, { passive: true, tick(ctx, dt) });
+//   每帧都会调用 tick，但【不接管位置、不跳过战斗】。用于"持续回血/持续光环"这类
+//   必须与轨道运动和战斗结算并存的能力（如 Leaf）。主动效果会在激活期间跳过战斗，
+//   所以物理属性优先用数据表字段（PETAL_TRAITS.hardCollide / attractMobs / launch）。
+//
 // —— ctx API ——
 //   ctx.player / ctx.petal / ctx.stats / ctx.dt
 //   ctx.onOrbit()       花瓣是否已弹出至轨道（age ≥ ORBIT_T，出场 Q 弹完成）
@@ -36,23 +42,34 @@ const PetalFX = {
   // 每帧对每片【在轨】花瓣推进：未激活 -> detect；已激活 -> update
   tick(body, player, dt) {
     if (!body || body.dead || body.fxDone) return;
+    // 查表键用 type.slug（'rose'/'basic' 等，稳定英文名）。
+    // 注意不能用 type.key —— data.js 里 key 是 'p'+id（玫瑰是 'p5'），永远对不上注册名。
+    const type = body.card && body.card.type;
+    const key = type && (type.slug || type.key);
+    const def = key ? this.defs[key] : null;
+    if (!def) return;
+
+    // ---- 被动效果（passive）----
+    // 每帧都跑，但不接管位置、不置 fxNoCombat：花瓣照常参与轨道弹簧、碰撞与伤害结算。
+    // 适合"持续回血 / 持续光环"这类必须与战斗并存的能力（Leaf）。
+    if (def.passive) {
+      if (def.tick) def.tick(this._ctx(body, player, dt), dt);
+      return;
+    }
+
+    // ---- 主动效果（detect -> start/update）----
+    // 命中后由特效驱动位置、战斗结算跳过（b.fxNoCombat）：玫瑰"飞到脸上吃"。
     if (!body.fxActive) {
-      // 查表键用 type.slug（'rose'/'basic' 等，稳定英文名）。
-      // 注意不能用 type.key —— data.js 里 key 是 'p'+id（玫瑰是 'p5'），永远对不上注册名。
-      const type = body.card && body.card.type;
-      const key = type && (type.slug || type.key);
-      const def = key ? this.defs[key] : null;
-      if (!def || !def.detect) return;
+      if (!def.detect) return;
       const c = this._ctx(body, player, dt);
       if (!def.detect(c)) return;
       body.fx = { key, state: {} };
       body.fxActive = true;
-      body.fxNoCombat = true;       // 特效进行中不参与战斗结算
+      body.fxNoCombat = true;
       if (def.start) def.start(c);
       return;
     }
-    const def = this.defs[body.fx && body.fx.key];
-    if (!def || !def.update) { body.fxActive = false; return; }
+    if (!def.update) { body.fxActive = false; return; }
     const done = def.update(this._ctx(body, player, dt), dt);
     if (done) { body.fxActive = false; body.fxNoCombat = false; body.fxDone = true; }
   },
@@ -137,4 +154,17 @@ PetalFX.register('rose', {
     }
     return false;
   },
+});
+
+// —— 内置特效 2：叶（Leaf）——
+// 持续回血：只要实体在轨且未死亡，就按 heal/s 连续回血（封顶 maxHp，不弹字）。
+// 被动形态：不接管位置、不跳过战斗 —— 叶子照常参与碰撞与伤害结算。
+// 这段规则原先是 net/server.js 战斗循环里按 slug 特判、且被 25Hz 节流成阶梯回血；
+// 现在和其它花瓣能力一样，由效果引擎按类型驱动。
+PetalFX.register('leaf', {
+  passive: true,
+  tick(ctx, dt) {
+    const heal = (ctx.stats.heal || 0) * dt;
+    if (heal > 0 && ctx.player.hp < ctx.player.maxHp) ctx.heal(heal);
+  }
 });

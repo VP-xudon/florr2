@@ -358,16 +358,16 @@ const Chat = {
   },
   // 自己的名字（密语 [@self -> @its] 用）
   _selfName() {
-    const p = (this._net && this._net.server && this._net.server.player) || null;
+    const p = (this._net && typeof this._net.requestSync === 'function')
+      ? this._net.requestSync('player') : null;
     return (p && p.name) ? p.name : 'You';
   },
   // 匹配玩家：全名 / 忽略大小写，以及 "#0333" -> "Guest #0333"（客人玩家）
   _matchPlayer(input) {
     if (!input) return null;
-    const srv = this._net && this._net.server;
-    const cands = [];
-    if (srv && srv.player) cands.push(srv.player);
-    if (srv && Array.isArray(srv.players)) for (const pl of srv.players) cands.push(pl);
+    const list = (this._net && typeof this._net.requestSync === 'function')
+      ? this._net.requestSync('players') : null;
+    const cands = Array.isArray(list) ? list : [];
     const q = String(input).trim(), ql = q.toLowerCase();
     for (const pl of cands) {
       const pn = pl && pl.name;
@@ -448,7 +448,8 @@ const Chat = {
     this._sys(g.showCoord ? 'Chat/Command/show-coord/On' : 'Chat/Command/show-coord/Off');
   },
   _printPlayers() {
-    const p = (this._net && this._net.server && this._net.server.player) || null;
+    const p = (this._net && typeof this._net.requestSync === 'function')
+      ? this._net.requestSync('player') : null;
     const name = (p && p.name) ? p.name : 'Guest';
     this._sys(I18N.tf('Chat/Command/PrintPlayers', { 0: name + ' (you)' }, 'Players near you: ' + name + ' (you)'));
   },

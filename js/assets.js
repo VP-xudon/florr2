@@ -71,11 +71,6 @@ const SpriteStore = {
     return cv;
   },
 
-  whiteCanvas(key, size) {
-    this.canvas(key, size);
-    return this.white[key] ? this.white[key][size] : null;
-  },
-
   // 实心度网格：把贴图按 N×N 光栅化，alpha>96 记 1。碰撞箱"完全依照外观"的数据源
   //（含凹形轮廓，凸包做不到）。网格坐标与 drawMob 的整图绘制一一对应。
   // 【只缓存成功结果】素材还没加载好时 canvas() 返回 null，若把 null 也缓存下来，
@@ -144,10 +139,56 @@ const SpriteStore = {
     const hit = this.contourCache[ck];
     if (hit) return hit;                 // 只认成功结果：失败不缓存，素材就绪后下次就能建出来
     let out = null;
-    const g = this.alphaGrid(key, CONTOUR_N);
-    if (g) out = contourFromGrid(g, CONTOUR_N);
-    if (!out) out = this.vectorContour(key, size);
+    // 优先用【矢量几何】提取的精确轮廓（assets/mob-shapes.js，由
+    // tools/gen_mob_shapes_vector.py 从 SVG 路径直接展平而来）——
+    // 它比像素网格精确得多：像素网格受限于 CONTOUR_N 的分辨率，且"逐行左右极值"
+    // 无法表达凹形，看起来就"很不对"。
+    out = this.vectorContour(key, size);
+    if (!out) {
+      // 没有离线矢量数据时才退到像素轮廓（仍然与外观一致）
+      const g = this.alphaGrid(key, CONTOUR_N);
+      if (g) out = contourFromGrid(g, CONTOUR_N);
+    }
     if (out) this.contourCache[ck] = out;
+    return out;
+  },
+
+  // 贴图的【旋转轴心】= 主体图形的中心，单位 = size（-0.5~0.5，相对绘制框中心）。
+  //
+  // 为什么需要：drawMob 是 translate -> rotate -> drawImage(-size/2 ...) 画的，
+  // 所以旋转轴恒为【裁剪框中心】。但有些贴图的主体并不在画布中央
+  // （蜈蚣头 12_h 的绿色身体在 viewBox 归一化 (0.619,0.619)，触角把画布撑向另一侧），
+  // 于是绕裁剪框中心旋转时，身体会绕着"错的轴"转 -> 大角度时脖子断开。
+  //
+  // 一视同仁的做法：轴心取 MOB_PIVOT（生成脚本按 SVG 主色算出的主体中心，viewBox 归一化）。
+  // 主体本来居中的贴图（瓢虫/12_b）算出来自然≈(0,0)，不会有任何额外位移。
+  //
+  // 关键换算：pv = (pivotNorm - 0.5) / cropRatio
+  //   （由 pv = (nx - off)/d - 0.5 化简而来，与 artCanvas 的裁剪换算严格等价）
+  //
+  // 【为什么不能等 cropRatio 就绪再算】：
+  //   cropRatio 来自瓢虫贴图的像素实测，开局时还没就绪。曾经的写法在未就绪时
+  //   直接 return {0,0}，而 vectorContour 的结果会被 contour() 缓存下来 ——
+  //   于是碰撞轮廓永久停在 pv=0，画面却用真实 pv 平移，两者相差 0.119×size ≈ 5px：
+  //   表现为"渲染的头比碰撞箱靠前，转弯时错位随朝向一起转"。
+  //   现在未就绪时按 1.0（= 不裁剪的回退渲染路径，等价）计算且不缓存，永远不会算错。
+  mobPivot(key) {
+    const D = (typeof window !== 'undefined') ? window.MOB_PIVOT : null;
+    const bare = String(key).replace(/^mob/, '');
+    const pv = D && (D[key] || D[bare]);
+    if (!pv || pv.length !== 2) return { x: 0, y: 0 };   // 非生物贴图：轴心 = 画布中心
+
+    this._pivotCache = this._pivotCache || {};
+    const hit = this._pivotCache[bare];
+    if (hit) return hit;
+
+    const ratio = this._cropRatio();
+    if (!ratio) {
+      // 比例未就绪：按"不裁剪"(1.0) 算，并且【不缓存】，等就绪后重算
+      return { x: pv[0] - 0.5, y: pv[1] - 0.5 };
+    }
+    const out = { x: (pv[0] - 0.5) / ratio, y: (pv[1] - 0.5) / ratio };
+    this._pivotCache[bare] = out;
     return out;
   },
 
@@ -155,13 +196,20 @@ const SpriteStore = {
   // 换算到与 artCanvas 完全相同的坐标系（有裁剪框就按裁剪框归一化，没有就是整图）。
   vectorContour(key, size) {
     const D = (typeof window !== 'undefined') ? window.MOB_SHAPES : null;
-    const shape = D && D[key];
+    // 离线外形表里的键是【裸 id】（如 '3' / '12_h'），而调用方传的是带前缀的 'mob3' / 'mob12_h'。
+    // 之前只按 key 原样查，结果永远查不到 —— 像素轮廓一旦失败就没有任何兜底，
+    // 碰撞箱直接为 null（表现为"打不到、也不参与伤害结算"）。
+    const bare = String(key).replace(/^mob/, '');
+    const shape = D && (D[key] || D[bare]);
     if (!shape || !shape.pts || shape.pts.length < 3) return null;
     const r = this._cropRect(size);          // 与 artCanvas 同一固定裁剪框
+    // 再减去【旋转轴心】位移：drawMob 现在按主体中心旋转（贴图整体平移了 -pv），
+    // 碰撞轮廓必须做同样的平移，否则画面居中了、判定还偏在旧位置。
+    const pv = this.mobPivot(key);
     const pts = r
-      ? shape.pts.map(([nx, ny]) => [(nx * size - r[0]) / r[2] - 0.5,
-                                     (ny * size - r[1]) / r[3] - 0.5])
-      : shape.pts.map(([nx, ny]) => [nx - 0.5, ny - 0.5]);
+      ? shape.pts.map(([nx, ny]) => [(nx * size - r[0]) / r[2] - 0.5 - pv.x,
+                                     (ny * size - r[1]) / r[3] - 0.5 - pv.y])
+      : shape.pts.map(([nx, ny]) => [nx - 0.5 - pv.x, ny - 0.5 - pv.y]);
     let rad = 0;
     for (const [x, y] of pts) { const d = Math.hypot(x, y); if (d > rad) rad = d; }
     return { pts, r: rad || 0.5 };
@@ -281,16 +329,6 @@ const SpriteStore = {
     o.fillRect(0, 0, size, size);
     this.artRedCache[ck] = out;
     return out;
-  },
-
-  // 固定裁剪框的归一化矩形（相对整张画布）。所有生物共用同一个，可直接用于矢量裁剪绘制。
-  artRect(key) {
-    if (this.artRectCache[key] !== undefined) return this.artRectCache[key];
-    const REF = 160;
-    const b = this._cropRect(REF);
-    const r = b ? [b[0] / REF, b[1] / REF, b[2] / REF, b[3] / REF] : null;
-    this.artRectCache[key] = r;
-    return r;
   },
 
   // 碰撞外形：从贴图的 alpha 通道提取【实际轮廓】做凸包，归一化到 [-0.5, 0.5]。

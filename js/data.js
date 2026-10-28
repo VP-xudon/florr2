@@ -35,7 +35,7 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 //   basic  = id 1（Basic / 基本）
 //   light  = id 2（Light / 轻：外观同 Basic 但更小，按稀有度由 1 个圆组成 1~5 个）
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
-const ENABLED_PETAL_SLUGS = new Set(['basic', 'light', 'rose', 'stinger', 'pollen', 'honey']);
+const ENABLED_PETAL_SLUGS = new Set(['basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf']);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
 const REACH_IMMUNE_SLUGS = new Set(['rose']);
@@ -84,15 +84,45 @@ const PETAL_RARITY_OVERRIDES = {
     super:     { dmg: 0, hp: 109350 },
     eternal:   { dmg: 0, hp: 328050 },
     unique:    { dmg: 0, hp: 328050 }
+  },
+  // Peas：4 个绿色小球实体（阵型型），数值为【每个小球】的 dmg/hp（card 总 hp = 4×，见 entities.js 阵型不分均）。
+  peas: {
+    common:    { dmg: 15,    hp: 5 },
+    unusual:   { dmg: 45,    hp: 15 },
+    rare:      { dmg: 135,   hp: 45 },
+    epic:      { dmg: 405,   hp: 135 },
+    legendary: { dmg: 1215,  hp: 405 },
+    mythic:    { dmg: 3645,  hp: 1215 },
+    ultra:     { dmg: 10935, hp: 3645 },
+    super:     { dmg: 32805, hp: 10935 },
+    eternal:   { dmg: 98415, hp: 32805 },
+    unique:    { dmg: 98415, hp: 32805 }
+  },
+  // Leaf：从 Unusual 起；持续给主人回血（heal 为每秒计数，连续回血，无反馈）。dmg/hp/heal 均为此花瓣值。
+  leaf: {
+    unusual:   { dmg: 48,     hp: 36,    heal: 3 },
+    rare:      { dmg: 144,    hp: 108,   heal: 9 },
+    epic:      { dmg: 432,    hp: 324,   heal: 27 },
+    legendary: { dmg: 1296,   hp: 972,   heal: 81 },
+    mythic:    { dmg: 3888,   hp: 2916,  heal: 243 },
+    ultra:     { dmg: 11664,  hp: 8748,  heal: 420.9 },
+    super:     { dmg: 34992,  hp: 26244, heal: 729 },
+    eternal:   { dmg: 104976, hp: 78732, heal: 1261.2 },
+    unique:    { dmg: 104976, hp: 78732, heal: 1261.2 }
   }
 };
 
 // 一卡多体的【数量】表：某稀有度这张卡实际由几个独立实体组成（表外稀有度 = 1）
+//   light  : common 1 / unusual·rare 2 / epic·legendary 3 / mythic·ultra 5 / super·eternal 6
+//            （按约定【不存在 4 个】这种排布；顶层 6 个对应 Duplicator 天赋效果）
 //   pollen : common 1 / unusual 2 / rare 2 / epic 及以上 3（等同"一次放出 N 个 pollen 实体"）
 //   stinger: Mythic 3 个 / Ultra 及以上 5 个
 const PETAL_SUB_COUNT = {
+  light: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 5, ultra: 5, super: 6, eternal: 6, unique: 6 },
   pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
-  stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 }
+  stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 },
+  // Peas：所有稀有度均为 4 个实体（单个绿色小球才是实体，见阵型布局）
+  peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 }
 };
 
 // ================= 一卡多体的两种排布模型（重要） =================
@@ -109,7 +139,7 @@ const PETAL_SUB_COUNT = {
 //   2) 在 cards.js 的 FORMATION_LAYOUTS 里登记它的布局：
 //      { <实体数>: [ {x, y, k, rot}, ... ] }  // x/y 单位 = 单体直径 D，k = 相对单体缩放，
 //                                             // rot = 相对"单体朝向"的额外旋转（弧度）
-const PETAL_FORMATION_SLUGS = new Set(['stinger']);
+const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas']);
 
 // Honey 的「Max Mob Rarity」：只能吸引到这一档及以下的生物（颜色 #d2eb34）
 //   · common  【没有这项属性】-> 什么都吸引不了（缺失 = 无吸引，绝不能当成"不限"）
@@ -121,8 +151,28 @@ const HONEY_MAX_MOB_RARITY = {
 };
 const MAX_MOB_RARITY_COLOR = '#d2eb34';
 
-// 滞留型花瓣：出轨道后 0.5s 脱离（因惯性减速后留在原地，不再跟随）
-const PETAL_DETACH_AFTER = { pollen: 0.5, honey: 0.5 };
+// ---- 花瓣能力声明 ----
+// 行为层（运动 / 装填 / 战斗 / UI）只读这些字段，不再按 slug 写分支。
+// 新增一种花瓣：registry 登记 + 加进 ENABLED_PETAL_SLUGS，需要特殊能力时在这里声明。
+// 字段含义：
+//   detachAfter            脱轨延时（>0 = 滞留型：脱离轨道后留在原地）
+//   launch                 脱轨瞬间喷射 { count 方向数, speedK 速度倍率, life 存活秒数 }
+//   hardCollide            与生物重叠即按穿透深度强制分离（有质量的实体）
+//   attractMobs            把周围生物的仇恨拉到自己身上
+//   holdReloadUntilDeath   实体未死亡前卡片不重新装填
+//   noDamage               不造成伤害（只挨打）
+//   healOverTime           持续回血，数值单位为「每秒」（展示为 x/s）
+//   maxMobRarity           可吸引的最高生物稀有度表
+const PETAL_TRAITS = {
+  honey: {
+    reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5,
+    hardCollide: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
+    maxMobRarity: HONEY_MAX_MOB_RARITY
+  },
+  pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5 },
+  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 } },
+  leaf: { reload: 1.8, healOverTime: true }
+};
 
 function buildPetalTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.petals) ? window.REGISTRY.petals : [];
@@ -149,6 +199,7 @@ function buildPetalTypes() {
     // 白名单：不在可用花瓣表中的一律视为冗余素材（文件保留，不加载；日后加 slug 即可启用）
     if (!ENABLED_PETAL_SLUGS.has(slug)) { DISABLED_PETALS.push({ id, name }); continue; }
     const key = 'p' + id;   // 稳定 key，避免名称冲突
+    const tr = PETAL_TRAITS[slug] || {};   // 该花瓣声明的能力（见 PETAL_TRAITS）
     const t = {
       id, key, name,
       slug,                                    // 供 I18N 查 Description（Petals/<slug>/Description）
@@ -165,17 +216,20 @@ function buildPetalTypes() {
       rarityMultipliers: p.rarityMultipliers || null,  // 稀有度倍率表（仅Basic有）
       rarityStats: p.rarityStats || null,        // 各稀有度数值表（Rose 有：dmg/hp/heal）
       kind: p.kind || 'misc',
-      // 滞留型（Pollen / Honey）：出轨道 PETAL_DETACH_AFTER 秒后脱离，留在原地
-      detachAfter: PETAL_DETACH_AFTER[slug] || 0,
+      // ---- 能力字段：全部来自 PETAL_TRAITS，行为层只读字段、不判断 slug ----
+      detachAfter: tr.detachAfter || 0,            // 滞留型：脱轨延时（>0 生效）
+      launch: tr.launch || null,                    // 喷射参数（Peas）
+      hardCollide: !!tr.hardCollide,                // 硬碰撞实体（Honey）
+      attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
+      holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
+      noDamage: !!tr.noDamage,
+      healOverTime: !!tr.healOverTime,              // 持续回血，数值单位为「每秒」（Leaf）
+      maxMobRarity: tr.maxMobRarity || null,
       // 一卡多体（Pollen / Stinger）：每个实体各占一个轨道位、各自结算
       subCount: PETAL_SUB_COUNT[slug] || null,
       // 【阵型多体】（Stinger 起）：整坨只占一个轨道位，子实体按卡面布局锁定成一坨，
       // 外观与卡面一致，但各子实体仍独立结算碰撞与血量
       formation: PETAL_FORMATION_SLUGS.has(slug),
-      // Honey 专属：可吸引的最高生物稀有度表 + 实体未死亡前卡片不重装填
-      maxMobRarity: (slug === 'honey') ? HONEY_MAX_MOB_RARITY : null,
-      holdReloadUntilDeath: slug === 'honey',
-      noDamage: slug === 'honey',
       // reach 模式免疫：轨道半径不随空格（reach）放大（见 entities.js _syncPetals）
       noReach: REACH_IMMUNE_SLUGS.has(slug),
       identified: true,
@@ -187,11 +241,11 @@ function buildPetalTypes() {
       t.rarityStats = Object.assign({}, t.rarityStats || {});
       for (const rk in ov) t.rarityStats[rk] = Object.assign({}, t.rarityStats[rk] || {}, ov[rk]);
     }
-    if (slug === 'pollen' || slug === 'honey') {
-      // 冷却 2.0s，实体的 0.5s 滞留时间单独记（卡面展示为 "2.0s + 0.5s"）
-      t.reload = 2.0;
-      t.reloadText = '2.0s + 0.5s';
-    }
+    // 冷却与展示文案同样来自 PETAL_TRAITS。
+    // registry 里这些卡没有 reload 字段，若走 stats.spd 回退会取到"移速修正"值，
+    // 得到 16s 这种错误冷却 —— 所以冷却必须由数据表显式声明。
+    if (tr.reload != null) t.reload = tr.reload;
+    if (tr.reloadText) t.reloadText = tr.reloadText;
     out.push(t);
     PETAL_BY_ID[id] = t;
   }
@@ -245,6 +299,19 @@ const MOB_RARITY_OVERRIDES = {
   }
 };
 
+// ---- 生物行为/体型声明 ----
+// 行为代码（Mob 构造、AI、生成器）只读这些字段，不再按 slug 写分支。
+//   segmented     一次生成整条（多节生物），由 LocalServer._spawnChain 展开
+//   sizeScale     视觉等比倍数（碰撞半径不受影响：collSize = diam / sizeScale）
+//   sPath         走 S 型（持续左右摆头）
+//   chaseMult     追击速度 = 该倍率 × 玩家默认最高速度
+//   wanderFactor  游荡速度相对同类基准的倍率
+const MOB_TRAITS = {
+  ladybug: {},
+  bee: { sPath: true, sizeScale: 1.395 * 0.9, chaseMult: 1.05, wanderFactor: 1.2 },
+  centipede: { segmented: true, sizeScale: 1.4 }
+};
+
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
   const out = [];
@@ -276,6 +343,7 @@ function buildMobTypes() {
     // slug = 官方英文名的小写下划线形式：i18n 的键（Mobs/<slug>/Name、Mobs/<slug>/Description）
     // 与显示语言无关，必须用【原始英文名】算，不能拿翻译后的 name 反推。
     const slug = (m.name || '').toLowerCase().replace(/ /g, '_');
+    const mt = MOB_TRAITS[slug] || {};
     const t = {
       id, slug, name: I18N.t('Mobs/' + slug + '/Name', m.name), zh: m.zh || '', svg: id,
       hp: m.hp, dmg: m.dmg, speed: m.speed, size: m.size, tier: m.tier,
@@ -286,7 +354,13 @@ function buildMobTypes() {
       hostility: MOB_HOSTILITY[m.type] || 'neutral',
       rarities: m.rarities || null,
       rarityStats,                       // 英文稀有度键 -> { hp, dmg, exp, armor }
-      ai: m.ai || null                   // 官方 AI 开关（aggro/chase/flee/retaliate…）
+      ai: m.ai || null,                  // 官方 AI 开关（aggro/chase/flee/retaliate…）
+      // ---- 行为/体型字段：全部来自 MOB_TRAITS，行为层只读字段、不判断 slug ----
+      segmented: !!mt.segmented,          // 多节生物：一次生成整条
+      sizeScale: mt.sizeScale || 1,       // 视觉等比倍数（不影响碰撞半径）
+      sPath: !!mt.sPath,                  // S 型游荡
+      chaseMult: (mt.chaseMult != null) ? mt.chaseMult : null,   // null = 通用追击倍率
+      wanderFactor: (mt.wanderFactor != null) ? mt.wanderFactor : 1
     };
     out.push(t);
     MOB_BY_ID[id] = t;
@@ -321,9 +395,12 @@ const MOB_DROP_TABLE = {
 // 每种生物掉哪些花瓣（顺序 = 悬浮框里的展示顺序）。
 // Mana Orb 是日后魔法变种的专属掉落：**只登记在数据表里**，
 // 既不出现在悬浮框、也不参与实际掷骰掉落（见 DROP_HIDDEN_SLUGS）。
+// 键用 slug（稳定英文名），不用 registry 的数字 id：
+// 数字 id 一旦随 registry 重排就会静默错位到别的生物身上，且没有任何报错。
 const MOB_DROP_ITEMS = {
-  3: ['light', 'rose', 'mana_orb'],      // Ladybug / 瓢虫
-  4: ['stinger', 'pollen', 'honey']      // Bee / 蜜蜂（按此顺序展示与掷骰）
+  ladybug: ['light', 'rose', 'mana_orb'],      // Ladybug / 瓢虫
+  bee: ['stinger', 'pollen', 'honey'],         // Bee / 蜜蜂（按此顺序展示与掷骰）
+  centipede: ['leaf', 'peas']                  // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
 };
 
 // 个别生物的每种掉落物有【各自】的稀有度分布。蜜蜂的 Stinger / Pollen / Honey 是三张不同的表：
@@ -351,6 +428,59 @@ const MOB_DROP_TABLE_ITEM = {
     super:     [['mythic', 0.662], ['ultra', 0.338]],
     eternal:   [['mythic', 0.662], ['ultra', 0.338]],
     unique:    [['mythic', 0.662], ['ultra', 0.338]]
+  },
+  // Peas / Blueberries：掉落稀有度分布（Peas 掉落用；Blueberries 是 Peas 的魔法变种隐藏版，分布同 Peas）。
+  // 注意：每档各列【声明宽度之和 < 1】，意味着有一定概率"这一档不掉 Peas"。
+  peas: {
+    common:    [['common', 0.191], ['unusual', 0.035]],
+    unusual:   [['common', 0.510], ['unusual', 0.132]],
+    rare:      [['common', 0.243], ['unusual', 0.722], ['rare', 0.035]],
+    epic:      [['unusual', 0.582], ['rare', 0.392], ['epic', 0.026]],
+    legendary: [['unusual', 0.002], ['rare', 0.591], ['epic', 0.399], ['legendary', 0.010]],
+    mythic:    [['epic', 0.596], ['legendary', 0.402], ['mythic', 0.002]],
+    ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
+    super:     [['mythic', 0.814], ['ultra', 0.186]],
+    eternal:   [['mythic', 0.814], ['ultra', 0.186]],
+    unique:    [['mythic', 0.814], ['ultra', 0.186]]
+  },
+  // Blueberries：Peas 的魔法变种（隐藏），分布与 Peas 完全一致（见下方 DROP_HIDDEN_SLUGS）
+  blueberries: {
+    common:    [['common', 0.191], ['unusual', 0.035]],
+    unusual:   [['common', 0.510], ['unusual', 0.132]],
+    rare:      [['common', 0.243], ['unusual', 0.722], ['rare', 0.035]],
+    epic:      [['unusual', 0.582], ['rare', 0.392], ['epic', 0.026]],
+    legendary: [['unusual', 0.002], ['rare', 0.591], ['epic', 0.399], ['legendary', 0.010]],
+    mythic:    [['epic', 0.596], ['legendary', 0.402], ['mythic', 0.002]],
+    ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
+    super:     [['mythic', 0.814], ['ultra', 0.186]],
+    eternal:   [['mythic', 0.814], ['ultra', 0.186]],
+    unique:    [['mythic', 0.814], ['ultra', 0.186]]
+  },
+  // Leaf / Magic Leaf：掉落分布（列从 Unusual 起，无 Common）。Magic Leaf 是 Leaf 的魔法变种隐藏版。
+  leaf: {
+    common:    [['unusual', 0.035]],
+    unusual:   [['unusual', 0.132]],
+    rare:      [['unusual', 0.722], ['rare', 0.035]],
+    epic:      [['unusual', 0.582], ['rare', 0.392], ['epic', 0.026]],
+    legendary: [['unusual', 0.002], ['rare', 0.591], ['epic', 0.399], ['legendary', 0.010]],
+    mythic:    [['epic', 0.596], ['legendary', 0.402], ['mythic', 0.002]],
+    ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
+    super:     [['mythic', 0.814], ['ultra', 0.186]],
+    eternal:   [['mythic', 0.814], ['ultra', 0.186]],
+    unique:    [['mythic', 0.814], ['ultra', 0.186]]
+  },
+  // Magic Leaf：Leaf 的魔法变种（隐藏），分布与 Leaf 完全一致
+  magic_leaf: {
+    common:    [['unusual', 0.035]],
+    unusual:   [['unusual', 0.132]],
+    rare:      [['unusual', 0.722], ['rare', 0.035]],
+    epic:      [['unusual', 0.582], ['rare', 0.392], ['epic', 0.026]],
+    legendary: [['unusual', 0.002], ['rare', 0.591], ['epic', 0.399], ['legendary', 0.010]],
+    mythic:    [['epic', 0.596], ['legendary', 0.402], ['mythic', 0.002]],
+    ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
+    super:     [['mythic', 0.814], ['ultra', 0.186]],
+    eternal:   [['mythic', 0.814], ['ultra', 0.186]],
+    unique:    [['mythic', 0.814], ['ultra', 0.186]]
   }
 };
 
@@ -361,7 +491,38 @@ function dropDistFor(slug, rarity) {
   return MOB_DROP_TABLE[rarity] || null;    // 没有专属表：走官方通用表
 }
 // 仅入库、不展示/不掉落的花瓣 slug。
-const DROP_HIDDEN_SLUGS = new Set(['mana_orb']);
+//  · mana_orb      : 瓢虫魔法变种的隐藏掉落（Rose -> Mana Orb）
+//  · blueberries   : 蜈蚣魔法变种隐藏掉落（Peas -> Blueberries）
+//  · magic_leaf    : 蜈蚣魔法变种隐藏掉落（Leaf -> Magic Leaf）
+// 三者与 Mana Orb 同款：仅登记进掉落表"不实装"，被替换后不显示、不参与实际掷骰掉落。
+const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf']);
+
+// 魔法变种替换：仅对【特定生物】生效（其他生物掉落照旧，未来由你口述扩展）。
+// 当击杀者拥有 magician 战斗属性时，把原始掉落物替换为未实装变种（见 DROP_HIDDEN_SLUGS）。
+//   · 瓢虫(3)         : Rose -> Mana Orb
+//   · 蜈蚣(14)        : Leaf -> Magic Leaf，Peas -> Blueberries
+const MOB_DROP_MAGICIAN = {
+  ladybug:   { rose: 'mana_orb' },
+  centipede: { leaf: 'magic_leaf', peas: 'blueberries' }
+};
+
+// 掉落表查询入口：对外仍接受「数字 id / slug / type 对象」，内部统一转 slug。
+// 这样调用方（服务端事件、图鉴、悬浮框）不必关心 id 与 slug 的区别。
+function mobSlugOf(mobKey) {
+  if (mobKey && typeof mobKey === 'object') return mobKey.slug || null;
+  if (typeof mobKey === 'string' && !/^\d+$/.test(mobKey)) return mobKey;
+  const t = (typeof MOB_BY_ID !== 'undefined' && MOB_BY_ID) ? MOB_BY_ID[mobKey] : null;
+  return t ? t.slug : null;
+}
+function mobDropList(mobKey) {
+  const slug = mobSlugOf(mobKey);
+  return (slug && MOB_DROP_ITEMS[slug]) ? MOB_DROP_ITEMS[slug] : null;
+}
+function mobMagicianMap(mobKey, magician) {
+  if (!magician) return null;
+  const slug = mobSlugOf(mobKey);
+  return (slug && MOB_DROP_MAGICIAN[slug]) ? MOB_DROP_MAGICIAN[slug] : null;
+}
 
 // 展示用花瓣素材索引：即使花瓣未实装（如 Mana Orb），悬浮框也要能画出它的卡面。
 // 直接扫 registry 建立 slug -> { svg, name }，与 ENABLED_PETAL_SLUGS 无关。
@@ -412,12 +573,13 @@ function dropChances(dist) {
 
 // 某生物在某稀有度下的掉落物，按【花瓣种类】分组（悬浮框里一种一行）：
 //   [{ slug, name, svg, items: [{ rarity, chance }] }]
-function mobDropRows(mobId, rarity) {
-  // 键容错：registry 的 id 可能是数字也可能是字符串
-  const list = MOB_DROP_ITEMS[mobId] || MOB_DROP_ITEMS[String(mobId)];
+function mobDropRows(mobId, rarity, magician) {
+  const list = mobDropList(mobId);
   if (!list || !list.length) return [];
+  const magicMap = mobMagicianMap(mobId, magician);
   const out = [];
-  for (const slug of list) {
+  for (const slugRaw of list) {
+    const slug = (magicMap && magicMap[slugRaw]) ? magicMap[slugRaw] : slugRaw;  // 魔法变种替换
     if (DROP_HIDDEN_SLUGS.has(slug)) continue;   // Mana Orb 等：只入库，不在悬浮框显示
     const dist = dropDistFor(slug, rarity);      // 每件掉落物各自的稀有度分布
     if (!dist || !dist.length) continue;         // 这一档不掉这件：整行不显示
@@ -438,11 +600,14 @@ function mobDropRows(mobId, rarity) {
 // 掷骰掉落（生物死亡时调用）：**每种掉落物各自掷一次**——
 // 按该生物【当前稀有度】那一行的分布决定这一件掉落的稀有度，落在"不掉落"区间就没有这一件。
 // 返回 [{ slug, svg, name, rarity }, ...]（可能为空 = 这次什么都不掉）。
-function rollMobDrops(mobId, rarity) {
-  const list = MOB_DROP_ITEMS[mobId] || MOB_DROP_ITEMS[String(mobId)];
+function rollMobDrops(mobId, rarity, magician) {
+  const list = mobDropList(mobId);
   if (!list || !list.length) return [];
+  // 魔法变种替换表（仅特定生物）：击杀者带 magician 属性时启用第二套掉落物表
+  const magicMap = mobMagicianMap(mobId, magician);
   const out = [];
-  for (const slug of list) {
+  for (const slugRaw of list) {
+    const slug = (magicMap && magicMap[slugRaw]) ? magicMap[slugRaw] : slugRaw;  // 先替换，再判断是否隐藏
     if (DROP_HIDDEN_SLUGS.has(slug)) continue;     // 只入库、不实际掉落
     const dist = dropDistFor(slug, rarity);        // 每件掉落物各自的稀有度分布
     if (!dist || !dist.length) continue;           // 这一档不掉这件
@@ -524,7 +689,7 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
 // 组内成员写成 [slug, 组内权重]；权重只在组内比较，外层 ":w" 会再乘上来。
 const MOB_GROUPS = {
-  garden: [['ladybug', 3], ['bee', 2]]
+  garden: [['ladybug', 3], ['bee', 2], ['centipede', 1]]
 };
 
 // 兜底物种（生成区解析不出任何有效物种时使用）
@@ -552,7 +717,8 @@ function rollMobRarityByDifficulty(diff) {
 // 只有"行为已完整实现"的物种才参与地图生成。rock / ant_hole / ant_soldier 等
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee']);
+// 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede']);
 
 function parseSpawnMobs(str) {
   const out = [];

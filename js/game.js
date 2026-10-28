@@ -6,6 +6,12 @@ const WORLD_R = 1500 * 0.75;  // 1125：地图/世界缩至原 0.75（主角不�
 // 衰减沿用既有的 shake -= dt*30。
 const HURT_SHAKE = 5.98;
 
+// 客户端预测位置向服务端权威位置收敛的速率（每秒）与硬吸附阈值（像素）。
+// 客户端只预测"自主移动 + 击退"，接触推挤由服务端计算，所以每帧会有几像素偏差：
+// 用速率收敛代替"攒到 90px 再瞬移"，避免贴怪行走时的橡皮筋。
+const RECONCILE_RATE = 14;    // ≈70ms 时间常数，几乎不可感知
+const RECONCILE_SNAP = 120;   // 传送/长时间卡顿等极端偏差才直接吸附
+
 // 物理键位 -> 逻辑动作。用 e.code 而非 e.key：e.key 会被输入法吞成 'Process'、
 // 且受键盘布局影响；这里每个物理键各占一个标记，方向键之间互不干扰，
 // 按住空格/Shift 时四个方向（含右方向）依然能任意组合。
@@ -54,6 +60,8 @@ class Game {
     this.showHitbox = false; // /pending crash 1：碰撞箱显示开关（默认关闭）
     this.last = 0;
     this.selectedSlot = 0;
+    this._netPos = null;     // 服务端下发的权威位置（预测软校正的目标）
+    this._snapDt = SNAP_DT;  // 最近一次快照覆盖的模拟时长（插值步长基准）
 
     this.player = null;
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
@@ -173,7 +181,7 @@ class Game {
       if (msg.t === 'snap') this._applySnap(msg.snap);
       else if (msg.t === 'evt') this._applyEvt(msg.ev);
     });
-    this.net.connect();
+    // 真正的连接（含世界初始化）放在玩家构造完成之后，见下方 connect({ map, playerTemplate })
 
     // 聊天走同一条网络通道（服务器全局设定）：上行发送、下行收事件
     if (typeof Chat !== 'undefined') {
@@ -182,8 +190,9 @@ class Game {
       Chat.onTpTarget = (x, y) => { this.tpTarget = { x, y }; };
       Chat.onTpCancel = () => { this.tpTarget = null; };
       Chat.onTpConfirm = (x, y) => {
-        const srv = this.net && this.net.server;
-        const err = (srv && srv.teleport) ? srv.teleport(x, y) : 'Chat/CommandError/InternalError';
+        const err = (this.net && typeof this.net.requestSync === 'function')
+          ? this.net.requestSync('teleport', { x, y })
+          : 'Chat/CommandError/InternalError';
         if (err) return err;                 // 墙体/不可行走 -> 返回错误键，人不动
         this.tpTarget = null;
         this.camera.x = x; this.camera.y = y;   // 相机直接到位，避免长距离滑行
@@ -193,6 +202,8 @@ class Game {
 
     // 玩家与初始装备
     this.player = new Player();
+    this.player.net = this.net;   // 供花瓣系统（如 Peas 炸开）上行 RPC
+    this.player.magician = !!(window.__queryParams && window.__queryParams.magician);  // 调试：?magician 开启魔法变种掉落 用
     this._resetPlayer(true);
     // 调试参数 ?hp=N（可与 mode/lang 逗号混搭）：直接设定人物血量上限与当前血量。
     // 【必须在 attach 之前应用】服务端副本要从这里继承 maxHp/hp，
@@ -206,14 +217,16 @@ class Game {
     }
     // 游客名：本地实现没有账号系统，按官方游客样式给一个随机编号（聊天里显示）
     this.player.name = 'Guest #' + (1000 + Math.floor(Math.random() * 9000));
-    // 把地图与玩家初始状态交给服务端（此后权威状态归它管）
-    this.net.server.attach(this.map, this.player);
+    // 把地图与玩家初始状态交给服务端（此后权威状态归它管）。
+    // 走 connect(opts) 而不是直连 net.server：远端实现（WebSocketNet）没有本地世界，
+    // 客户端代码不该知道自己连的是进程内服务端还是真服务器。
+    this.net.connect({ map: this.map, playerTemplate: this.player });
     this.camera.x = this.player.x; this.camera.y = this.player.y;
     // 注意：生物一律由服务端按【地图自带的生成区】生成（tmj 的 mobs/mobs2 对象层），
     // 客户端只在快照里按 id 镜像出视图实体（见 _applySnap）。
 
     this.buildBackground();
-    this.updateHUD();
+
   }
 
 
@@ -221,16 +234,12 @@ class Game {
     const p = this.player;
     // 出生点 = 地图里【等级最低的那个复活区域】（不是世界原点 0,0）。
     // 地图没有复活区（简易圆形地图）时才退回原点。
-    p.x = 0; p.y = 0; p.vx = 0; p.vy = 0;
-    const sp = (this.map && this.map.spawnCheckpointPoint) ? this.map.spawnCheckpointPoint() : null;
-    if (sp) { p.x = sp.x; p.y = sp.y; }
-    p.hp = p.maxHp = 100; p.xp = 0; p.level = 1; p.xpNext = 24;
-    p.dead = false; p.deathTimer = 0; p.flash = 0;
-    p.invuln = 0; p.invulnSrc = {}; p.invulnTotal = 0; p.invulnA = 0;
-    InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);   // 出生无敌（3s，含光晕与金/白血条）
+    const sp = (this.map && this.map.spawnCheckpointPoint)
+      ? this.map.spawnCheckpointPoint(p.r || 22) : { x: 0, y: 0 };
+    p.maxHp = FLOWER_BASE_HP;
+    p.xp = 0; p.level = 1; p.xpNext = 24;
     p.slots = emptySlots();
     p.subSlots = emptySlots();
-    p.dispHp = null; p.ghostHp = null; p.ghostV = 0;   // 血条平滑值重置（update 中重新对齐）
     p.invBar = full ? [] : p.invBar;
     p.backpack = full ? [] : p.backpack;
     // 初始花瓣（非调试模式）：4 张 common Basic + 1 张 common Rose，全部装在主槽。
@@ -241,6 +250,8 @@ class Game {
       p.slots[nBasic] = makePetal(STARTER_ROSE_KEY, 'common');
     }
     p.recompute();
+    // 状态重置统一走 Player.resetForSpawn（出生无敌 / 花瓣实体 / 世代号 / 装填）
+    p.resetForSpawn(sp);
   }
 
   // 重生：死亡界面 Continue 按钮触发。与 _resetPlayer 的关键区别：
@@ -251,25 +262,19 @@ class Game {
     // 复活位置由【服务端】按地图复活区域结算（见 net.js _respawnPos）：
     // 本地模拟服务端可以直接拿返回值，避免先跳到原点再被拽回来那一帧抖动。
     let pos = null;
-    const srv = this.net && this.net.server;
-    if (srv && typeof srv.requestRespawn === 'function') pos = srv.requestRespawn();
-    if (pos) { p.x = pos.x; p.y = pos.y; }
-    p.vx = 0; p.vy = 0;
-    p.hp = p.maxHp;
-    p.dead = false; p.deathTimer = 0;
-    InvulnFX.add(p, 'spawn', FLOWER_SPAWN_INVULN);   // 起身无敌：与出生同一套无敌表现
-    p.hurtT = 0; p.flash = 0; p.killedBy = null;
-    p.age = 0;                                     // 本体 Q 弹重生（spawnPop）
-    p.dispHp = p.hp; p.ghostHp = p.hp; p.ghostV = 0;
-    p.petalGhosts = [];                            // 死亡时的退场幽灵早已播完，兜底清空
-    // 所有花瓣重新装填：reload 各槽从头结算
-    for (let i = 0; i < p.slots.length; i++) {
-      const c = p.slots[i];
-      p.reloadHold[i] = false;
-      p.reload[i] = c
-        ? { card: c, age: 0, dur: (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0) }
-        : null;
+    const canSync = this.net && typeof this.net.requestSync === 'function';
+    if (canSync) pos = this.net.requestSync('respawn');
+    // 统一重置：客户端与服务端走同一个 Player.resetForSpawn，
+    // 不再各维护一份字段清单（客户端此前漏清 petals/_petalGen，导致重生后花瓣世代号失配）。
+    p.resetForSpawn(pos);
+    if (!canSync && this.net) {
+      // 远端实现没有本地世界：先本地重置（位置稍后对齐），回执到了再搬到服务端指定的复活点
+      this.net.request('respawn').then((r) => {
+        p.resetForSpawn(r);
+        this.camera.x = p.x; this.camera.y = p.y;
+      }).catch(() => {});
     }
+    this._netPos = null;                           // 旧权威坐标作废，避免复活当帧被拉回死亡点
     this._deathShown = false;
     this._aggroCleared = false;      // 复位一次性标志：下次死亡要再清一次仇恨
     this.camera.x = p.x; this.camera.y = p.y;
@@ -278,12 +283,26 @@ class Game {
     if (!pos && this.net) this.net.send({ t: 'respawn' });
     // 仇恨豁免（兜底）：复活后再清一次，确保没有生物带着旧仇恨追杀过来
     this._clearAggro();
-    this.updateHUD();
+
   }
 
   // 清空全场生物的仇恨表（threat）。用 length = 0 原地复用数组，避免每帧 GC。
   _clearAggro() {
     for (const m of this.mobs) if (m.threat && m.threat.length) m.threat.length = 0;
+  }
+
+  // 预测位置 -> 权威位置的软校正。
+  // 客户端预测"自主移动 + 击退"（零延迟手感），接触推挤由服务端权威结算，
+  // 两者每帧相差几像素；按速率收敛把这个偏差吃掉，只有极端偏差才直接吸附。
+  _reconcile(dt) {
+    const p = this.player, t = this._netPos;
+    if (!t || p.dead) return;
+    const dx = t.x - p.x, dy = t.y - p.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > RECONCILE_SNAP * RECONCILE_SNAP) { p.x = t.x; p.y = t.y; return; }
+    if (d2 < 0.0025) return;                       // <0.05px：视为重合，省掉无意义的写入
+    const k = 1 - Math.exp(-RECONCILE_RATE * dt);
+    p.x += dx * k; p.y += dy * k;
   }
 
   // ---------------- 快照 / 事件：客户端与"服务端"的唯一下行入口 ----------------
@@ -294,11 +313,17 @@ class Game {
   _applySnap(snap) {
     const p = this.player;
     if (!snap) return;
+    // 记录本快照覆盖的模拟时长：插值步长按它算，而不是硬编码 1/25
+    if (snap.dt > 0) this._snapDt = snap.dt;
 
     // ---- 本地玩家对账：只取服务端权威的"结果类"字段，位置仍信自己的预测 ----
     if (snap.player) {
       const sp = snap.player;
+      const wasDead = p.dead;
       p.hp = sp.hp; p.maxHp = sp.maxHp; p.dead = sp.dead; p.killedBy = sp.killedBy;
+      // 客户端不跑 hurt()/die()，死亡这一刻要在这里补一次：花瓣转退场幽灵 + 尸体旋转。
+      // 少了它花瓣会"啪一下消失"，且 _petalGen 只有在 die() 里才会与实体一起清空。
+      if (p.dead && !wasDead) p.die();
       // 无敌状态以服务端为准（花瓣/技能给的无敌必须能立刻反映到光晕与白血条上）
       if (sp.invuln > p.invuln) InvulnFX.add(p, 'server', sp.invuln);
       else if (sp.invuln <= 0 && p.invulnSrc && p.invulnSrc.server != null) {
@@ -310,8 +335,8 @@ class Game {
       if (sp.flash > (p.flash || 0)) p.flash = sp.flash;
       // 死亡旋转角：服务端 die() 里随机生成，必须回填，否则客户端尸体不旋转
       if (sp.dead) { p.deathRot = sp.deathRot; p.deathTimer = Math.max(p.deathTimer || 0, sp.deathTimer || 0); }
-      // 偏差过大时纠正位置（真网络下预测失败时的兜底；本地实现偏差≈0，不会触发）
-      if (!p.dead && dist2(p.x, p.y, sp.x, sp.y) > 90 * 90) { p.x = sp.x; p.y = sp.y; }
+      // 只记录权威位置，由 _reconcile 每帧按速率收敛（不再在这里硬拉，避免攒到阈值瞬移）
+      this._netPos = { x: sp.x, y: sp.y };
     }
 
     // ---- 花瓣战斗状态：转成 slot -> 状态 的表，交给 _syncPetals 回填 ----
@@ -348,6 +373,10 @@ class Game {
       v.tx = e.x; v.ty = e.y;
       v.blend = 0;
       v.hp = e.hp; v.maxHp = e.maxHp; v.dead = e.dead;
+      v.vx = e.vx || 0; v.vy = e.vy || 0;   // 只用于推挤的动能项（视图实体不积分位置）
+      if (e.artSvg) v.artSvg = e.artSvg;   // 多节生物：头节/身体节贴图区分
+      if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
+      if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
       // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）
       if (e.hurtT > (v.hurtT || 0)) v.hurtT = e.hurtT;
       if (e.flash > (v.flash || 0)) v.flash = e.flash;
@@ -374,8 +403,8 @@ class Game {
     } else if (ev.kind === 'kill') {
       this.recordDefeat(ev.mobId, ev.rarity);
       // 掉落：在生物死亡位置按【该生物稀有度】的掉落表逐种掷骰（可能与不掉落）
-      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y);
-      this.updateHUD();
+      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y, !!(this.player && this.player.magician));
+  
     } else if (ev.kind === 'hurt') {
       // 玩家份额的反弹：以【速度冲量】施加到预测实体上（随后指数衰减 -> 平滑滑出去），
       // 不再是直接改坐标（那样会看到人物瞬移一下）。无敌免伤时服务端不会发这个事件。
@@ -384,25 +413,40 @@ class Game {
       this.shake = Math.max(this.shake, HURT_SHAKE);   // 很轻微地抖一下
     } else if (ev.kind === 'chat' || ev.kind === 'sys') {
       if (typeof Chat !== 'undefined') Chat.push(ev);
-    } else if (ev.kind === 'respawned' || ev.kind === 'teleported') {
-      // 服务端把权威副本挪到了新位置（复活点/传送）：预测副本与相机一起搬过去，
-      // 否则下一帧快照会把人物硬拽过去（瞬移 + 相机滑行）。
+    } else if (ev.kind === 'respawned') {
+      // 服务端复活（含 /resphere 原地复活）：客户端走同一个 resetForSpawn，
+      // 保证花瓣实体、世代号、装填状态与服务端一致。
+      const p = this.player;
+      if (!p) return;
+      p.resetForSpawn(ev);
+      this._netPos = null;
+      this.camera.x = p.x; this.camera.y = p.y;
+    } else if (ev.kind === 'teleported') {
+      // 传送：位置直接搬过去，相机直接到位（避免长距离滑行）
       const p = this.player;
       if (!p) return;
       p.x = ev.x; p.y = ev.y; p.vx = 0; p.vy = 0;
+      this._netPos = null;
       this.camera.x = ev.x; this.camera.y = ev.y;
-      if (ev.kind === 'teleported') this.tpTarget = null;
+      this.tpTarget = null;
     }
   }
 
   // 视图生物每帧推进：插值坐标 + 自身动画计时（AI/移动/战斗都在服务端）
   _tickMobViews(dt) {
-    const k = dt / SNAP_DT;               // 一个快照间隔内走完插值
+    // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
+    // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
+    const k = dt / (this._snapDt || SNAP_DT);
     for (const m of this.mobs) {
       if (m.blend < 1) m.blend = Math.min(1, m.blend + k);
       const b = m.blend;
+      // 统一插值：服务端已把整条链【刚体解算】好，各节位移量一致，
+      // 25Hz -> 60fps 插值后整条平滑移动（不做逐帧硬贴，避免 25Hz 台阶抖动）。
       m.x = m.px + (m.tx - m.px) * b;
       m.y = m.py + (m.ty - m.py) * b;
+      // 主角血条模式（多节生物的非头节）：血条满血渐隐 / 掉血渐显 —— 视图不走 Mob.update，
+      // 所以这个淡入淡出必须在这里推进，否则 hpBarA 永远是 0，血条根本不出现。
+      if (m.plateStyle === 'player') m._tickHpBarA(dt);
       // 动画计时：出生渐显 / 受伤红闪 / 死亡放大渐隐
       m.age += dt;
       m.hurtT = Math.max(0, m.hurtT - dt);
@@ -413,17 +457,10 @@ class Game {
       m._tickHpSmooth(dt);          // 血条双层平滑（主条 + 缓冲条），与花朵血条同款
       if (m.dead) m.deathTimer += dt;
       // 碰撞外形贴图就绪后提取一次（与绘制同源）
-      if (!m.shape && !m.gone) {
-        const ct = SpriteStore.contour('mob' + m.svg, m.drawSize);
-        if (ct) {
-          m.shape = ct;
-          const uniq = [];
-          for (const q of ct.pts) {
-            if (!uniq.some((r) => Math.abs(r[0] - q[0]) < 1e-6 && Math.abs(r[1] - q[1]) < 1e-6)) uniq.push(q);
-          }
-          m.hull = uniq.length >= 3 ? convexHull(uniq) : null;
-        }
-      }
+      // 必须走 Mob._ensureShape：它会按【本节实际贴图】(artSvg) 取轮廓。
+      // 早期这里手写了一份 'mob' + m.svg，多节生物（蜈蚣）就变成了整条 12.svg 的轮廓，
+      // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
+      if (!m.shape && !m.gone) m._ensureShape();
     }
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）
     this.mobs = this.mobs.filter((m) => !(m.gone && m.deathTimer > FADE_T));
@@ -460,7 +497,9 @@ class Game {
     // 固定步长累加器：真实经过多少时间就模拟多少（低帧率不再"减速"）。
     // 单帧最多补 MAX_STEPS 步并丢弃剩余，避免卡顿后"螺旋补偿"越积越多。
     const STEP = 1 / 60, MAX_STEPS = 8;
+    this._running = true;
     const loop = (ts) => {
+      if (!this._running) return;               // stop() 之后不再自调度（自测/回放会接管推进）
       const now = ts / 1000;
       let dt = now - (this.last || now);
       this.last = now;
@@ -468,11 +507,21 @@ class Game {
       this.acc = (this.acc || 0) + dt;
       let n = 0;
       while (this.acc >= STEP && n < MAX_STEPS) { this.update(STEP); this.acc -= STEP; n++; }
-      if (n >= MAX_STEPS) this.acc = 0;
+      // 只保留不超过一步的余量：既避免卡顿后"螺旋补偿"，也不再把这帧剩下的时间整段丢掉
+      if (n >= MAX_STEPS) this.acc = Math.min(this.acc, STEP);
       this.render();
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  // 停止 rAF 主循环。世界状态不变，可随时用 stepFrames 继续推进（自测/回放用）。
+  stop() { this._running = false; }
+
+  // 以固定步长推进 n 帧，不自调度。render=true 时最后渲染一次。
+  stepFrames(n, dt = 1 / 60, render = false) {
+    for (let i = 0; i < n; i++) this.update(dt);
+    if (render) this.render();
   }
 
   update(dt) {
@@ -494,23 +543,24 @@ class Game {
     p.update(dt, dir, this.map, this.mobs);   // 传入生物视图：花瓣会与生物碰撞
 
     // —— 上行：把输入意图与最新装备交给服务端；随后推进服务端并收取快照/事件 ——
-    this.net.send({ t: 'loadout', slots: p.slots });
+    this.net.send({ t: 'loadout', slots: p.slots, hold: p.reloadHold });
     this.net.sendInput({ dx: dir.x, dy: dir.y, mode: p.mode });
     this.net.step(dt);
 
     // —— 视图层生物：插值坐标推进 + 自身动画计时（AI/移动已归服务端）——
     this._tickMobViews(dt);
 
-    // 玩家 vs 昆虫碰撞：用生物 SVG 实绘图形的【轮廓多边形】做圆 vs 多边形挤出
-    // （思路同地图的 circleContact：命中即沿法线推出，含凹形轮廓）。
-    // 多边形未就绪（贴图还没光栅化）时退回圆形互斥 —— 保证任何时刻都有碰撞箱。
+    // 玩家 vs 昆虫：同一套 physicsPush（反质量 + 动能）。生物速度来自快照（vx/vy），
+    // 因此"生物冲过来"的动能与服务端同源；视图实体不积分位置，冲量写入后下一帧即被覆盖，
+    // 不会像旧实现那样在视图对象上留下永不衰减的幽灵速度。
     if (!p.dead) {
       for (const m of this.mobs) {
         if (m.dead) continue;
-        // 与服务器同一套"反质量 + 动能"推挤（physicsPush）：重生物难推动，轻生物被推飞
         physicsPush(p, m);
       }
     }
+    // 残余偏差（快照滞后 / 插值位置不同）按速率收敛，避免攒到阈值再瞬移
+    this._reconcile(dt);
 
     // 死亡检测：弹出死亡界面（只弹一次，重生时复位）
     if (p.dead && !this._deathShown) {
@@ -585,7 +635,7 @@ class Game {
     this.camera.y = clamp(p.y, -half + hh, half - hh);
     this.shake = Math.max(0, this.shake - dt * 30);
 
-    this.updateHUD();
+
   }
 
   // ---------------- 战斗结算（25 tick/s 固定步长） ----------------
@@ -604,7 +654,7 @@ class Game {
   // 昆虫死亡落地：记入图鉴（退场放大渐隐动画由 Mob.draw 负责）
   _onMobKilled(m) {
     this.recordDefeat(m.type.id != null ? m.type.id : m.name, m.rarity);
-    this.updateHUD();
+
   }
 
   _readDir() {
@@ -656,7 +706,7 @@ class Game {
   //   · 1 件：正中央；2 件：水平并排；3~6 件：环形（比 Light 排布更松散）
   //   · 与附近已有的【完全相同卡牌】堆叠到同一张卡上（数量角标 +1）
   //   · 每张新卡落地时炸一次正方形粒子；Ultra+ 之后持续冒（见 update）
-  spawnMobDrops(mobId, rarity, x, y) {
+  spawnMobDrops(mobId, rarity, x, y, magician) {
     if (typeof rollMobDrops !== 'function') return;
     if (x == null || y == null) return;
     const got = rollMobDrops(mobId, rarity) || [];
@@ -754,18 +804,24 @@ class Game {
     // 层级定数：尸体固定在最底层，生物彼此按 y 排序，活玩家固定在最上层（不再忽上忽下）
     const me = this.player;
     if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
-    const mobs = this.mobs.slice().sort((a, b) => a.y - b.y);
-    // 视口裁剪：屏幕【及其边缘外 2 倍长宽】范围内的生物都要绘制。
-    //   · 余量按屏幕尺寸算（左右各 2W、上下各 2H），快速移动/镜头缩放时不会突然消失
-    //   · 判定用「圆心 ± 半径」而不是只测圆心：大生物（legendary 蜜蜂直径 209px）
-    //     边缘露出屏幕时必须照常绘制，否则会出现"贴边直接不见"
-    // 全图 1600+ 只，这层裁剪仍然把 canvas 调用压到屏幕附近的几百只。
-    const padX = this.W * 2, padY = this.H * 2;
+    // 视口裁剪：先筛出可见集合，再只对可见集合按 y 排序。
+    // 旧实现每次 render 都对全图（4600+ 只）切片排序（约百万次比较/秒），
+    // 而真正在屏内的只有个位数到十几只 —— 排序成本全花在屏幕外。
+    // 余量取半屏：足够覆盖一帧最大位移（约 4px）与最大生物半径（约 105px），
+    // 又不至于像旧的 2 屏余量那样把 95% 的绘制留在屏幕外白做。
+    // 判定用「圆心 ± 半径」而不是只测圆心：大生物贴边时必须照常绘制。
+    const padX = this.W * 0.5, padY = this.H * 0.5;
     const mx0 = camX - this.W / 2 - padX, mx1 = camX + this.W / 2 + padX;
     const my0 = camY - this.H / 2 - padY, my1 = camY + this.H / 2 + padY;
-    for (const m of mobs) {
+    const visible = this._visibleMobs || (this._visibleMobs = []);
+    visible.length = 0;
+    for (const m of this.mobs) {
       const mr = (m.r || 0) + 4;
       if (m.x + mr < mx0 || m.x - mr > mx1 || m.y + mr < my0 || m.y - mr > my1) continue;
+      visible.push(m);
+    }
+    visible.sort((a, b) => a.y - b.y);
+    for (const m of visible) {
       try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
     }
     if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
@@ -774,7 +830,7 @@ class Game {
     for (const d of this.dmgTexts) d.draw(ctx);
 
     // /pending crash 1：碰撞箱叠加层（世界坐标系，画在实体之上，不影响任何判定）
-    this._drawHitboxes(ctx, mobs);
+    this._drawHitboxes(ctx, this._visibleMobs);
 
     ctx.restore();
 
@@ -914,12 +970,6 @@ class Game {
   _drawMinimap() {
     // 把 /tp 标记一起传进去（小地图是独立绘制的，不能靠全局变量取）
     UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, this.mobs, this.tpTarget);
-  }
-
-  // ---------- HUD / 背包 ----------
-  updateHUD() {
-    UI.updateHUD(this.player);
-    // 卡槽"水缸"阴影已改由 ui.js _reloadTick 在卡牌 canvas 内驱动，HUD 无需再推
   }
 
   // ---------- 图鉴 ----------

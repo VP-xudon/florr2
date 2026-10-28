@@ -1,0 +1,108 @@
+{
+  "ok": true,
+  "generatedAt": "2026-10-28T16:01:22.063Z",
+  "errors": [],
+  "checks": [
+    {
+      "name": "boot: game/map/player 就绪",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: 网络层接口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: 常量存在",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: i18n 关键键已注册",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 玩家坐标有限",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 血量在 [0, maxHp]",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 生物 id 唯一",
+      "ok": true,
+      "detail": "4653 只"
+    },
+    {
+      "name": "sim: 花瓣槽位与实体一致",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 键盘移动生效",
+      "ok": true,
+      "detail": "Δx=142.4"
+    },
+    {
+      "name": "net: 快照应用后玩家血量同步",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "runtime: 无未捕获异常",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "perf": {
+    "update": {
+      "frames": 240,
+      "render": false,
+      "avgMs": 15.952,
+      "p50Ms": 14.5,
+      "p95Ms": 28.2,
+      "maxMs": 45.3
+    },
+    "updateRender": {
+      "frames": 120,
+      "render": true,
+      "avgMs": 25.267,
+      "p50Ms": 20.6,
+      "p95Ms": 59.3,
+      "maxMs": 82.5
+    }
+  },
+  "stats": {
+    "mobs": 4653,
+    "mobViews": 4653,
+    "drops": 0,
+    "cards": 0,
+    "particles": 0,
+    "dmgTexts": 0,
+    "petals": 0,
+    "playerHp": 100,
+    "playerDead": false
+  },
+  "env": {
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "dpr": 1,
+    "viewport": "764x429",
+    "assetVer": 15
+  },
+  "statsAfter": {
+    "mobs": 4653,
+    "mobViews": 4653,
+    "drops": 0,
+    "cards": 0,
+    "particles": 0,
+    "dmgTexts": 0,
+    "petals": 5,
+    "playerHp": 100,
+    "playerDead": false
+  }
+}

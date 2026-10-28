@@ -278,6 +278,17 @@ def build(svg_path, key):
         if not d or fill == 'none':
             continue
         subs.extend(flatten(d[0]))
+    # 应用 <g transform>（translate/scale）：路径坐标默认停在"预变换空间"，
+    # 不换算到 viewBox 空间就会与 viewBox 对不上 —— 12_h/12_b 正是因此扫不到任何行。
+    # 这一步对所有生物一视同仁（瓢虫/蜜蜂的变换是恒等，等于没变）。
+    try:
+        from fit_mob_viewbox import compose_transforms
+        sc, tx, ty = compose_transforms(s)
+        if sc != 1.0 or tx or ty:
+            subs = [[(x * sc + tx, y * sc + ty) for (x, y) in poly] for poly in subs]
+    except Exception:
+        pass
+
     # 丢弃明显的小装饰（面积 < 视窗 0.2%），保留主体
     def area(poly):
         a = 0.0
@@ -340,8 +351,48 @@ def build(svg_path, key):
     return vb, out
 
 
+# 蜈蚣是【多节生物】：头节(带触角)与身体节是两张独立贴图，各自都要有碰撞外形。
+# 单节的碰撞箱按【圆】推导：节本身近似圆，按贴图像素轮廓取会把腿脚等凹凸带进来，
+# 而且两张素材的内容比例不同，像素轮廓连大小都对不齐。
+# 圆不是硬编码 —— 由脚本从素材几何【算出】：取内容包围盒的中心与短边半径。
+SEGMENT_KEYS = {'12_h', '12_b'}
+
+
+def build_circle(svg_path):
+    """从素材几何推导圆形碰撞箱：内容包围盒中心 + 短边半径（viewBox 归一化 [0,1]）。"""
+    import re
+    s = io.open(svg_path, encoding='utf-8').read()
+    vb = [float(v) for v in re.findall(r'viewBox="([^"]*)"', s)[0].replace(',', ' ').split()]
+    # 复用 fit_mob_viewbox 的解析：<g transform> 合成 + 相对命令解析
+    from fit_mob_viewbox import path_points, compose_transforms
+    sc, tx, ty = compose_transforms(s)
+    pts = []
+    for d in re.findall(r'(?:<path[^>]*?\sd="([^"]*)")', s):
+        pts += path_points(d)
+    if not pts:
+        raise SystemExit('no points for ' + svg_path)
+    tp = [(x * sc + tx, y * sc + ty) for x, y in pts]
+    xs = [p[0] for p in tp]; ys = [p[1] for p in tp]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    rad = min(x1 - x0, y1 - y0) / 2.0
+    # 归一化到 viewBox
+    nx = (cx - vb[0]) / vb[2]
+    ny = (cy - vb[1]) / vb[3]
+    nr = rad / max(vb[2], vb[3])
+    N = 32
+    out = []
+    for i in range(N):
+        a = i * 2 * math.pi / N
+        out.append([round(nx + math.cos(a) * nr, 5), round(ny + math.sin(a) * nr, 5)])
+    return vb, out
+
+
 def main():
-    mobs = [('3', 'assets/mobs/3.svg'), ('4', 'assets/mobs/4.svg')]
+    mobs = [
+        ('3', 'assets/mobs/3.svg'), ('4', 'assets/mobs/4.svg'),
+        ('12_h', 'assets/mobs/12_h.svg'), ('12_b', 'assets/mobs/12_b.svg'),
+    ]
     lines = [
         '// mob-shapes.js — 生物碰撞轮廓（离线预计算，勿手改）',
         '// 由 tools 脚本从 assets/mobs/*.svg 的路径几何直接算出：逐行左右极值多边形，',
@@ -350,6 +401,8 @@ def main():
         'window.MOB_SHAPES = {',
     ]
     for key, path in mobs:
+        # 一视同仁：所有生物（含蜈蚣的头节/身体节）都用同一个 build() 从贴图几何提取，
+        # 不存在"给蜈蚣单独推导一个圆"的特殊分支。
         vb, pts = build(path, key)
         body = ','.join('[%s,%s]' % (p[0], p[1]) for p in pts)
         lines.append("  '%s': { vb: [%s], pts: [%s] }," %
