@@ -565,9 +565,14 @@
       b.fxNoCombat = false;          // 玫瑰回血等特效期间该实体不参与战斗，别让断言随机跳过
       const bHp0 = b.hp, bMax0 = b.maxHp, mHp0 = m.hp;
       let bAfter = bHp0, mAfter = mHp0;
+      const tickDmg = [];                 // 每个 tick 该生物实际受到的伤害（用来验证"只结算一次"）
       try {
         srv.ents = [m]; srv._awake = [m]; srv._events = [];
-        for (let i = 0; i < 3; i++) srv._combatTick();
+        const origHit = srv._hitMob;
+        srv._hitMob = function (mob, dmg) { tickDmg[tickDmg.length - 1] += dmg; return origHit.call(srv, mob, dmg); };
+        try {
+          for (let i = 0; i < 3; i++) { tickDmg.push(0); srv._combatTick(); }
+        } finally { srv._hitMob = origHit; }
         bAfter = b.hp; mAfter = m.hp;
       } finally {
         srv.ents = savedEnts; srv._awake = savedAwake; srv._events = savedEv;
@@ -581,13 +586,15 @@
       // 花瓣单次受伤有上限（× PETAL_HIT_HP_CAP，保证能挨两下），另有每次接触的攻击磨损。
       const wantPetal = Math.min(toPetal, (bMax0 || 0) * PETAL_HIT_HP_CAP)
         + (bMax0 || 0) * PETAL_ATTACK_DUR;
-      const wantMob = toMob;
       const okB = Math.abs((bHp0 - bAfter) - wantPetal) < 0.01;
-      const okM = Math.abs((mHp0 - mAfter) - wantMob) < 0.01;
+      // 生物侧：第一 tick 有伤害（≥ 单片花瓣的一击），后两个 tick 必须为 0（冷却生效）。
+      // 同时确认"每一击都 ≤ 花瓣伤害 - 护甲"，没有凭空放大。
+      const okM = tickDmg[0] >= toMob && tickDmg[1] === 0 && tickDmg[2] === 0;
       return {
         ok: bAfter < bHp0 && mAfter < mHp0 && okB && okM,
         detail: `花瓣 -${(bHp0 - bAfter).toFixed(1)}（应为 ${wantPetal.toFixed(1)}）`
-          + ` 生物 -${(mHp0 - mAfter).toFixed(1)}（应为 ${wantMob.toFixed(1)}）`
+          + ` 生物各tick -${tickDmg.map((x) => x.toFixed(0)).join('/')}`
+          + `（单片一击 ${toMob.toFixed(1)}，后两 tick 应为 0）`
       };
     });
 

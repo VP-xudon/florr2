@@ -1,0 +1,267 @@
+{
+  "ok": true,
+  "generatedAt": "2026-10-29T22:54:02.439Z",
+  "errors": [],
+  "checks": [
+    {
+      "name": "boot: game/map/player 就绪",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: 网络层接口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: 常量存在",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "boot: i18n 关键键已注册",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 玩家坐标有限",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 血量在 [0, maxHp]",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 生物 id 唯一",
+      "ok": true,
+      "detail": "4224 只"
+    },
+    {
+      "name": "sim: 花瓣槽位与实体一致",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "sim: 键盘移动生效",
+      "ok": true,
+      "detail": "Δx=139.0"
+    },
+    {
+      "name": "net: 快照应用后玩家血量同步",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "fix: 击退总位移守恒",
+      "ok": true,
+      "detail": "total=2.77 expect=2.77"
+    },
+    {
+      "name": "fix: 装填暂停跨端一致",
+      "ok": true,
+      "detail": "serverHold=true clientAge 0.02->0.02 serverAge 0.03->0.03"
+    },
+    {
+      "name": "fix: 预测位置偏差受控",
+      "ok": true,
+      "detail": "maxΔ=3.4px"
+    },
+    {
+      "name": "fix: 重生后花瓣世代号一致",
+      "ok": true,
+      "detail": "clientGen=[] serverGen=[] petals=4 unmatched=0 diedSynced=true slowTile=false waited=160"
+    },
+    {
+      "name": "engine: Leaf 持续回血生效",
+      "ok": true,
+      "detail": "hp 40.0 -> 56.0（maxHp 100）"
+    },
+    {
+      "name": "engine: 多体数量来自数据表",
+      "ok": true,
+      "detail": "light/stinger/peas 与 PETAL_SUB_COUNT 一致"
+    },
+    {
+      "name": "fix: 复活点在检查点区域内随机",
+      "ok": true,
+      "detail": "n=40 center=0 spread=813 want>119 区域=477x1314"
+    },
+    {
+      "name": "fix: 多节生物用本节轮廓",
+      "ok": true,
+      "detail": "art=12_h 同源=true r节=0.345 r整条=0.681 节数=2817"
+    },
+    {
+      "name": "ai: 生物 AI 按物种分派",
+      "ok": true,
+      "detail": "分派正确 蜈蚣120帧欲望=5314.6 最大转向=0.0030 限速=208.8"
+    },
+    {
+      "name": "engine: 花瓣能力由 PetalFX 统一接管",
+      "ok": true,
+      "detail": "注册齐全 + 传能/分离/吸附属性能正常"
+    },
+    {
+      "name": "data: 花瓣吸附属性逐个声明",
+      "ok": true,
+      "detail": "共 8 种；会被吸附=honey"
+    },
+    {
+      "name": "sim: 玩家推挤用生物轮廓",
+      "ok": true,
+      "detail": "被推到 266.8px（等面积 r=300.5，外形半径更大）"
+    },
+    {
+      "name": "sim: 花瓣与生物双向受伤",
+      "ok": false,
+      "detail": "花瓣 -50.0（应为 50.0） 生物 -53.0（应为 15.0）"
+    },
+    {
+      "name": "sim: 花瓣与生物实体碰撞（互相让位）",
+      "ok": true,
+      "detail": "深度 28.6 -> 15.2 分离 生物=7.9px 花瓣=5.6px"
+    },
+    {
+      "name": "net: 花瓣血量镜像容错",
+      "ok": true,
+      "detail": "hp=3/10 gen=7（应为 7）"
+    },
+    {
+      "name": "ai: 蜈蚣头节真的会移动",
+      "ok": true,
+      "detail": "1.6s 位移=72.2px"
+    },
+    {
+      "name": "sim: 普通生物真的会移动",
+      "ok": true,
+      "detail": "3s 位移=156.1px 最大速度=68.9 误判堵住帧=0"
+    },
+    {
+      "name": "sim: 掉落粒子时长按概率分级",
+      "ok": true,
+      "detail": "3s/6s/15s/永久/无 分级正确"
+    },
+    {
+      "name": "sim: 超长蜈蚣生成规则",
+      "ok": true,
+      "detail": "common 0.3% 自然 / long 强制 ok"
+    },
+    {
+      "name": "ui: Boss 血条排序与绘制",
+      "ok": true,
+      "detail": "Eternal 优先 / 绘制有像素变化 / 条高=37.0px"
+    },
+    {
+      "name": "ai: 蜈蚣转弯半径与避墙",
+      "ok": true,
+      "detail": "转向半径=55px 大弧半径=594px 最大角速度=0.06"
+    },
+    {
+      "name": "fx: 高稀有度花瓣光环",
+      "ok": true,
+      "detail": "新增=2（eternal + ultra basic；ultra rose 不算）密度=15/s（1.6x）"
+    },
+    {
+      "name": "sim: 行走碰撞箱（1 格通道可通行）",
+      "ok": true,
+      "detail": "Eternal: r=301 -> walkR=130 / walkSize=259（上限 259）；Common 不受影响"
+    },
+    {
+      "name": "chat: Boss 击杀全服公告",
+      "ok": true,
+      "detail": "An Eternal Centipede was destroyed by Guest 1234"
+    },
+    {
+      "name": "ui: F3 调试屏幕",
+      "ok": true,
+      "detail": "show=true hitbox=true hide=true"
+    },
+    {
+      "name": "ui: F3 花瓣血量与朝向归一",
+      "ok": true,
+      "detail": "花瓣=\"0 Leaf 0% 2.75 rad/s (26 rpm)\" 朝向=29° 帧率来源=number"
+    },
+    {
+      "name": "ui: 桌面不启用触控层",
+      "ok": true,
+      "detail": "无 #touchLayer"
+    },
+    {
+      "name": "ui: 触控层布局（自缩放）",
+      "ok": true,
+      "detail": "viewport=429 stick=120 A=74 B=74"
+    },
+    {
+      "name": "ui: 触控拖拽卡牌",
+      "ok": true,
+      "detail": "touch-action=none ghost=true cleanup=true"
+    },
+    {
+      "name": "runtime: 无未捕获异常",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "fix: 花瓣命中生物并结算",
+      "ok": true,
+      "detail": "Δhp=69.0 ring=44.3 armor=1"
+    },
+    {
+      "name": "fix: 花瓣碎裂跨端同步",
+      "ok": true,
+      "detail": "client=3 server=3 reload=0.30/1.80"
+    }
+  ],
+  "perf": {
+    "update": {
+      "frames": 240,
+      "rounds": 3,
+      "render": false,
+      "avgMs": 3.425,
+      "p50Ms": 3.2,
+      "p95Ms": 6,
+      "maxMs": 6.6
+    },
+    "updateRender": {
+      "frames": 120,
+      "rounds": 3,
+      "render": true,
+      "avgMs": 4.058,
+      "p50Ms": 3.9,
+      "p95Ms": 6.8,
+      "maxMs": 7.5
+    }
+  },
+  "stats": {
+    "mobs": 4224,
+    "mobViews": 4224,
+    "visible": 4,
+    "drops": 0,
+    "cards": 0,
+    "particles": 0,
+    "dmgTexts": 0,
+    "petals": 5,
+    "playerHp": 100,
+    "playerDead": false
+  },
+  "env": {
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "dpr": 1,
+    "viewport": "764x429",
+    "assetVer": 16
+  },
+  "statsAfter": {
+    "mobs": 4224,
+    "mobViews": 4224,
+    "visible": 1,
+    "drops": 0,
+    "cards": 0,
+    "particles": 0,
+    "dmgTexts": 0,
+    "petals": 5,
+    "playerHp": 100,
+    "playerDead": false
+  }
+}
