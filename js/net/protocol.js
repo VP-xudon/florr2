@@ -18,7 +18,7 @@ const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
 const HONEY_PULL_R = 700;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
 const HONEY_IMMUNE_T = 40;          // 被蜜影响累计满 40s -> 该生物永久免疫所有蜜
 const PETAL_ATTACK_DUR = 0.004;     // 花瓣每次命中(25Hz)按最大耐久比例磨损：攻击也耗耐久，与其它花瓣一视同仁
-const HONEY_PUSH = 40;              // 蜜硬碰撞时被生物顶开的冲量(px/s)：配合位置强制分离，使蜜被生物推着走
+
 // 多节生物（一次生成整条、每一节独立结算）由数据表字段 MOB_TYPES[].segmented 声明。
 // 这里只保留唯一读取入口，不再维护 slug 白名单 —— 新增多节物种只改数据表。
 function isSegmentMob(type) { return !!(type && type.segmented); }

@@ -503,6 +503,9 @@ const Chat = {
       text: ev.text,
       // 系统消息的 text 是 i18n key（如 'Chat/Alone'），普通消息的 text 就是原文
       label: ev.kind === 'sys' ? I18N.t(ev.text, ev.text) : ev.text,
+      // 可选文字颜色：Boss 击杀公告等"用稀有度配色"的系统消息会带 color；
+      // 不带的系统消息继续用 CSS 默认红字。
+      color: ev.color || null,
       born: performance.now()
     };
     this.history.push(msg);
@@ -536,10 +539,11 @@ const Chat = {
     const d = document.createElement('div');
     d.className = 'chat-line' + (m.sys ? ' sys' : (m.whisper ? ' whisper' : ''));
     if (m.sys) {
-      // 系统消息：整行红字，无频道标签
+      // 系统消息：整行红字，无频道标签；带 color 的（Boss 击杀公告）用稀有度配色
       const s = document.createElement('span');
       s.className = 'chat-sys';
       s.textContent = m.label;
+      if (m.color) s.style.color = m.color;
       d.appendChild(s);
       return d;
     }

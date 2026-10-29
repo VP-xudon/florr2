@@ -7,7 +7,12 @@ class Mob {
     this.level = level || 1;
     this.rarity = rarity || 'common';
     this.aiConf = type.ai || null;      // 官方 AI 配置（aggro/chase/flee/retaliate…）
-    this.ai = MobAI.create(this);       // 运行时 AI 状态（只产出"移动欲望"）
+    // 运行时 AI 状态由 MobAI.attach() 在构造函数【末尾】建立：
+    // 它必须先看到算好的 wanderSpeed / chaseSpeed，才能按物种覆盖速度口径
+    // （蜈蚣就是在这里把游荡压到 0.65×、追击拉回通用倍率的）。
+    this.ai = null;
+    this.aiDef = null;
+    this.aiKey = null;
     // 名牌显示模式（多节生物用）：
     //   'classic' = 经典名牌：名称 + 血条 + 稀有度，常显（普通生物与蜈蚣【头节】）
     //   'player'  = 主角血条模式：只有血条，满血不显示、掉血渐显，不显示名称与稀有度
@@ -31,7 +36,13 @@ class Mob {
     this.collSize = diam;
     this.r = this.collSize / 2;
     this.shape = null;                  // 碰撞外形：SVG 轮廓多边形 { pts, r }（玩家/接触判定用）
-    this.hull = null;                   // 同一轮廓的凸包（墙体碰撞用，凹处不会卡）
+    this.hull = null;                   // 同一轮廓的凸包（伤害/推挤口径的几何外形）
+    // ---- 行走碰撞箱（只用于墙体/禁行地形，见 _ensureShape）----
+    // 与上面的 r / shape 完全解耦：伤害与玩家推挤永远用 r，走路进墙用下面这三个。
+    // 轮廓就绪后会被改写成 min(自身, 1 格瓦片 0.9 倍的内接圆)。
+    this.walkR = this.r;
+    this.walkSize = this.collSize;
+    this.walkHull = null;
     this.x = x; this.y = y; this.vx = 0; this.vy = 0;
     this.maxHp = baseHp; this.hp = baseHp;
     this.dmg = baseDmg;
@@ -47,45 +58,18 @@ class Mob {
     this.wanderSpeed = this.obstacle ? 0
       : (ladybugWander * (type.wanderFactor || 1)) * MOB_WANDER_SCALE;
     this.speed = this.wanderSpeed;
-    // 蜈蚣（多节生物）：整条一起动，视觉位移是"整段"而不是单只，
-    // 所以要比普通生物明显更慢（0.15×），否则看着就是飞出去。
-    // 判定只看数据表字段（segmented），不再同时比对 slug 与 svg id。
+    // 物种差异（蜈蚣的慢速游荡 + 高速追击、蜜蜂的 S 型摆头等）
+    // 全部由各自的 AI 定义在 init(mob) 里声明，构造函数不再按物种写分支。
+    // 这里只保留一个数据标记，方便自测/调试屏幕识别多节生物。
     this._isCentipede = !!type.segmented;
-    if (this._isCentipede) {
-      // 速度口径：
-      //   · 游荡 = 原 0.5×瓢虫游荡 再 ×1.3  = 0.65×瓢虫游荡
-      //   · 追击 = 与瓢虫【完全一致】的通用追击倍率（0.90×玩家默认最高移速）
-      //     —— 之前把它压到和游荡同一量级，所以追人极慢。
-      const base = this.wanderSpeed || (MOB_WANDER_MULT * PLAYER_BASE_SPEED);
-      this.wanderSpeed = base * 0.65;
-      this.chaseSpeed = MOB_CHASE_MULT * PLAYER_BASE_SPEED;
-      // speed 只用于"朝向跟随"的阈值（sp > speed*0.12），保持游荡量级即可
-      this.speed = this.wanderSpeed;
-      // 硬上限必须取【两者较大值】：若仍按游荡速度给，
-      // update 里的限速会直接把追击重新压回慢速，改了也看不出来。
-      this._centSpeedCap = this.chaseSpeed;
-      // 游荡节奏（喂给 MobAI，属于"这个生物的 AI 参数"，不是渲染特判）：
-      //   · 一趟走很远：直线段够长，身体才不会一直处在转弯状态；
-      //   · 转向限幅 ±30°：不会突然掉头（掉头会让整条链瞬间折返、看着像抽搐）；
-      //   · 停顿时间不动 = 与瓢虫同一套（AI 里 rand(2,6)*0.4）。
-      this.wanderRange = [420, 900];
-      // 头部行走规则（用户口径）：
-      //   · 每一趟是【干脆的直线】—— 不做任何 S 型摆动；
-      //   · 换趟时方向变化上限 ±30°（任意时刻的偏转角都不超过 30°）；
-      //   · 转弯不是折角，而是以 turnRate 恒速转向 => 定半径的圆弧
-      //     （半径 ≈ 速度 / turnRate ≈ 40 / 0.45 ≈ 90px）；
-      //   · 唯一例外：刚获得仇恨、且目标在身后 -> 立刻锐角掉头（见 ai.js）。
-      this.maxTurn = Math.PI / 6;
-      this.turnRate = 0.45;
-    }
-    // S 型路线（蜜蜂）：朝向按正弦持续左右偏摆，走出一条蛇形曲线。
-    // 稀有度越高越沉稳：摆幅按比例收窄、单个 S 拉长（频率 = 基准频率 / 长度倍数）。
-    // Common(1.0×摆幅 / 1.0×长度) -> Eternal(0.2×摆幅 / 2.0×长度)，中间按稀有度线性插值。
+    // 视野半径（px）：超出或中间隔墙 -> 看不见（见 canSee / topThreat）
+    this.sightR = type.sightR || MOB_SIGHT_R;
+    this._map = null;                 // 当前地图（update 里写入，canSee 的视线检测要用）
+    this._seeCache = null;            // 视线结果缓存（同一目标 0.15s 内复用，避免每帧采样）
+    this.fleeT = 0;                   // >0 = 正在"逃离看不见的攻击者"
+    this.fleeAX = 0; this.fleeAY = 0; // 逃离的原点（攻击者位置）
+    // S 型路线的摆幅/频率由 bee AI 的 init 写入（稀有度越高越沉稳）。
     this.sPath = !!type.sPath;
-    const _ri = (typeof RARITY_ORDER !== 'undefined') ? RARITY_ORDER.indexOf(this.rarity) : 0;
-    const _t01 = _ri < 0 ? 1 : clamp(_ri / Math.max(1, RARITY_ORDER.length - 1), 0, 1);  // 0=common, 1=eternal
-    this.sAmp = BEE_S_AMP * (1 + (BEE_S_AMP_MIN_K - 1) * _t01);
-    this.sHz = BEE_S_HZ / (1 + (BEE_S_LEN_MAX_K - 1) * _t01);
     // 重量：按横截面积(直径²)；障碍型 ×5（几乎推不动）
     this.weight = rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
     this.color = type.color; this.boss = !!type.boss;
@@ -118,6 +102,10 @@ class Mob {
       : (type.armor != null) ? type.armor : (MOB_ARMOR[this.rarity] || 0);
     this.hurtT = 0;                     // 受伤红色滤镜剩余时间（0.1s）
     this.xpVal = rs ? (rs.exp || 0) : (4 + type.tier * 4);
+    // ---- 最后一步：挂上这个物种的 AI ----
+    // init 会覆盖 wanderSpeed/chaseSpeed/turnRate 等（必须放在速度算完之后），
+    // create 建立运行时状态。未注册的物种自动回落到通用游走。
+    MobAI.attach(this);
   }
 
   // 受击结算：返回 { applied, killed }。
@@ -130,8 +118,19 @@ class Mob {
     const applied = Math.min(dmg, this.hp);
     this.hp -= applied;
     this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈；不缩放，缩放只留给死亡退场）
+    // 【被看不见的敌人偷袭 -> 逃开一段】：判定必须在 noteThreat 之前做，
+    // 因为记完仇恨 topThreat() 就会返回攻击者（若可见）。
+    // 条件：① 这一下是从视野外来的（墙后 / 超出视野 / 对方站在减速瓦片里）
+    //       ② 自己当前也没在追任何【看得见】的目标
+    // 满足就往攻击者的反方向、以【追击速度】跑 MOB_FLEE_DIST 那么远。
+    if (src && applied > 0 && !this.canSee(src) && !this.topThreat()) {
+      this.fleeT = MOB_FLEE_DIST / Math.max(1, this.chaseSpeed);
+      this.fleeAX = src.x; this.fleeAY = src.y;
+    }
     // 仇恨：永久累计（死亡前不清零）。被动型（passive）不记仇恨、永不追击。
     this.noteThreat(src, applied);
+    // AI 受击通知（预留接口）：物种可以据此换阶段/召唤/暴走，默认实现什么都不做。
+    if (applied > 0) MobAI.onHurt(this, src, applied);
     if (this.hp <= 0) {
       this.hp = 0; this.dead = true; this.deathTimer = 0;
       return { applied, killed: true };
@@ -164,10 +163,13 @@ class Mob {
 
   // 当前最恨的实体：蜜（Honey）**强制排首位**（官方：蜜会强行抢走仇恨），
   // 其余按累计伤害最高且还活着；被蜜影响满 40s 后永久免疫所有蜜（honeyImmune）。
+  // 【只看看得见的】：仇恨记账永久保留，但看不见的目标这一帧不算数 ——
+  // 这就是"卡墙 / 卡拐角能甩掉仇恨"的实现点。
   topThreat() {
     let honey = null, best = null;
     for (const t of this.threat) {
       if (!t.ent || t.ent.dead) continue;
+      if (!this.canSee(t.ent)) continue;
       if (t.ent.honey) {
         if (!this.honeyImmune && (!honey || t.dmg > honey.dmg)) honey = t;
         continue;
@@ -176,6 +178,25 @@ class Mob {
     }
     const pick = honey || best;
     return pick ? pick.ent : null;
+  }
+
+  // 视线判定：距离 ≤ sightR、中间没有墙、对方也不在减速瓦片里。
+  // 【减速瓦片 = 生物的禁区】：只有玩家能进，玩家一进去就等于离开生物视野。
+  // 视线采样（lineBlocked）较贵，同一目标 0.15s 内复用上一次结果。
+  canSee(ent) {
+    if (!ent || ent.dead) return false;
+    const map = this._map;
+    if (map && map.slowAt && map.slowAt(ent.x, ent.y)) return false;
+    const dx = ent.x - this.x, dy = ent.y - this.y;
+    const sr = this.sightR || MOB_SIGHT_R;
+    if (dx * dx + dy * dy > sr * sr) return false;
+    if (!map || !map.lineBlocked) return true;
+    const now = this.age || 0;
+    const c = this._seeCache;
+    if (c && c.ent === ent && now - c.t < 0.15) return c.ok;
+    const ok = !map.lineBlocked(this.x, this.y, ent.x, ent.y);
+    this._seeCache = { ent, t: now, ok };
+    return ok;
   }
 
   // 瓢虫鞘翅斑点（贴图上的圆点已删除，全部改为运行时随机生成）：
@@ -237,6 +258,18 @@ class Mob {
     }
     const seqR = Math.sqrt(Math.abs(area2) * 0.5 / Math.PI);
     this.r = (seqR > 0 ? seqR : ct.r) * this.drawSize;
+    // ---- 行走碰撞箱 ----
+    // 同一份凸包，但尺寸换成 min(视觉直径, 1 格瓦片 0.9 倍)：
+    // 反推方式 = 让"凸包外接圆半径"不超过 MOB_WALK_LIMIT_R（= 0.45 格 = 0.9 格正方形的内接圆半径），
+    // 于是巨型生物（Eternal 蜈蚣直径 600+px）撞墙时也只按 0.9 格宽的箱子走 —— 必然能挤进 1 格通道。
+    // 体型没有超过上限的生物 walkSize === drawSize，行为与改动前完全一致。
+    const polyR = Math.max(0.05, ct.r || 0.5);       // 轮廓的归一化外接半径
+    // 两道钳子取小：① 箱子尺寸不超过 0.9 格；② 凸包外接圆不超过 0.45 格（= 0.9 格正方形的内接圆）。
+    // ② 才是"一定塞得进 1 格通道"的充要条件，① 只是别让轮廓特别"扁"的贴图占满整格。
+    this.walkSize = Math.min(this.drawSize, MOB_WALK_LIMIT_R * 2, MOB_WALK_LIMIT_R / polyR);
+    this.walkHull = this.hull;
+    // 圆形口径（追击探路 / 禁行地形判定）：等面积半径与上限取小
+    this.walkR = Math.min(this.r, MOB_WALK_LIMIT_R);
   }
 
   // 血条淡入淡出（【主角血条模式】专用，见 Mob.draw 的 'player' 分支）：
@@ -254,6 +287,7 @@ class Mob {
   update(dt, player, map) {
     if (this.dead) { this.deathTimer += dt; return; }
     this.age += dt;
+    this._map = map || this._map;      // canSee 的视线检测要用（每帧刷新引用，成本为零）
     this._tickHpSmooth(dt);
     this.flash = Math.max(0, this.flash - dt);
     this.hurtT = Math.max(0, this.hurtT - dt);
@@ -271,30 +305,60 @@ class Mob {
     // 这里只服务【段首】（头节）：非头节在上面的 _chainLocked 分支就已返回，
     // 位置全部由 _solveChains 沿头的真实路径解算（不是"跟随前一节"）。
     const want = MobAI.step(this.ai, dt, this, player);
-    // 蜈蚣移速【硬上限】：不管 AI 走的是 chaseSpeed / wanderSpeed / 别的分支，
-    // 都把"移动欲望"的模长钳死在这里，保证整条一定比普通生物慢。
-    if (this._isCentipede) {
-      const lim = this._centSpeedCap || (MOB_WANDER_MULT * PLAYER_BASE_SPEED * 0.5);
-      const wd = Math.hypot(want.x, want.y);
-      if (wd > lim && wd > 1e-6) {
-        want.x = want.x / wd * lim;
-        want.y = want.y / wd * lim;
-      }
-    }
+    // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
+    // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
+    MobAI.limitSpeed(this, want);
     // —— 2) 底层引擎响应欲望：与主角同一套指数阻尼，渐渐起步、渐渐停住 ——
     const desire = (want.x !== 0 || want.y !== 0);
     const rate = desire ? 9 : 4;        // 9 = 起步(约0.3s到位)，4 = 收尾(约0.5s停住)
     this.vx = damp(this.vx, want.x, rate, dt);
     this.vy = damp(this.vy, want.y, rate, dt);
     // —— 3) 位移 + 墙体碰撞（与主角同一条管线）——
+    // 撞墙判定必须用【移动前】的速度：moveEntity 撞墙后会削掉法向分量，
+    // 用削完的速度去比，会把"确实被挡住"又算成"没走满"，判定变得时灵时不灵。
     const px = this.x, py = this.y;
+    const preVx = this.vx, preVy = this.vy;
     moveEntity(this, dt, map);
+    // —— 3.2) 减速瓦片 = 生物的墙 ——
+    // 玩家能走进去（只是减速 + 花瓣停摆），生物不行：不生成、也进不去。
+    // 撞上时按单轴滑动绕开（只允许一条轴通过），两条都不行就原地停住，
+    // 并给 AI 打一个 blocked 标记让它换方向（见 ai.js），避免顶着墙一直蹭。
+    // 【口径】同样用行走碰撞箱（walkR），不是 r：减速瓦片对生物来说是"墙"，
+    // 墙体判定就必须与走路箱同源，否则大怪会被一丛叶子卡死。
+    if (map && map.mobBlockedAt && map.mobBlockedAt(this.x, this.y, (this.walkR || this.r) * 0.9)) {
+      const blockedR = (this.walkR || this.r) * 0.9;
+      const okX = !map.mobBlockedAt(this.x, py, blockedR);
+      const okY = !map.mobBlockedAt(px, this.y, blockedR);
+      if (okX && !okY) { this.y = py; this.vy = 0; }
+      else if (okY && !okX) { this.x = px; this.vx = 0; }
+      else { this.x = px; this.y = py; this.vx = 0; this.vy = 0; }
+      if (this.ai) this.ai.blockedT = 0.6;
+    }
+    // —— 3.3) 墙体（瓦片碰撞）也算"堵住了" ——
+    // 旧实现只有减速瓦片会给 AI 打 blocked 标记，撞到普通墙体时 AI 完全不知道，
+    // 于是蜈蚣会一直顶着墙按原弧线硬蹭（看起来就是"没有 AI、只会贴着墙走"）。
+    // 【判定口径】用移动前的真实速度算期望位移，且必须持续 ≥0.2s：
+    // 刚起步/刚转向的几帧里阻尼还没把速度拉满，实际位移天然只有 30%，
+    // 拿 AI 的 want 去比会把"正常起步"误判成撞墙 —— 全体生物每走一步就被打断、
+    // 停下、随机换个方向再起步，表现就是"原地不动、疯狂转头"。
+    const moved = dist(px, py, this.x, this.y);
+    const spPre = Math.hypot(preVx, preVy);
+    if (this.ai && spPre > 20) {
+      const expect = spPre * dt;
+      if (expect > 0.4 && moved < expect * 0.25) this.ai.stuckT = (this.ai.stuckT || 0) + dt;
+      else this.ai.stuckT = 0;
+      if ((this.ai.stuckT || 0) >= 0.2) {
+        this.ai.blockedT = Math.max(this.ai.blockedT || 0, 0.5);
+        this.ai.stuckT = 0;
+      }
+    }
     // —— 4) 把实际位移回馈给 AI，它靠这个判断"这趟走完了" ——
-    MobAI.notifyMoved(this.ai, dist(px, py, this.x, this.y));
+    MobAI.notifyMoved(this.ai, moved, this);
     // —— 5) 朝向跟随真实移动方向；停下来就保持当前朝向（下一趟再转）——
     const sp = Math.hypot(this.vx, this.vy);
     if (sp > this.speed * 0.12) {
-      this.facing = lerpAngle(this.facing, Math.atan2(this.vy, this.vx), clamp(dt * 7, 0, 1));
+      // wrapAngle：绕圈追击时朝向会无限累加（AI 的 heading 也是），写回时归一
+      this.facing = wrapAngle(lerpAngle(this.facing, Math.atan2(this.vy, this.vx), clamp(dt * 7, 0, 1)));
     }
   }
 

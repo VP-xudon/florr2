@@ -91,6 +91,17 @@ function lerpAngle(a, b, t) {
   return a + d * t;
 }
 
+// 角度归一化到 (-PI, PI]。
+// lerpAngle 只是 a + d*t，本身不会把 a 拉回区间：一直朝同一方向转（绕圈 / 鼠标绕人转）
+// 时朝向会一路累加到几千度 —— F3 上的 "Facing" 就会显示出天文数字。
+// 所有"朝向"字段写回时都要过这一道。
+function wrapAngle(a) {
+  if (!isFinite(a)) return 0;
+  a = (a + Math.PI) % TAU;
+  if (a < 0) a += TAU;
+  return a - Math.PI;
+}
+
 // 指数平滑（帧率无关）
 function damp(cur, target, rate, dt) {
   return lerp(cur, target, 1 - Math.exp(-rate * dt));

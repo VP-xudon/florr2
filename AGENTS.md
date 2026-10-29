@@ -59,15 +59,16 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `js/ui/minimap.js` | 小地图三档模式与平滑过渡 |
 | `js/ui/touch.js` | 移动端触控层：自缩放浮动摇杆 + `A`(reach)/`B`(detect)，桌面不创建元素（`?touch=1` 可强制） |
 | `js/ui/debug-screen.js` | `F3` 调试屏幕：帧/玩家/引擎/花瓣分栏，碰撞箱与小地图生物点跟着它开关 |
+| `js/ui/bossbar.js` | `BossBar`：屏幕顶部 Boss 血条。只显示 `eternal` / `super`（Eternal 优先），视野 + 外扩 150% 内才出现（矩形口径 `W*0.75`），名称/稀有度居中，显示与隐藏都走 0.1~0.15s 的渐大渐小 |
 | `js/map.js` | 读取 `garden.tmj` + `.tsj`、Tiled 瓦片/翻转/对象层解析、碰撞（瓦片遮罩 + 多边形）、检查点、生成区、瓦片渲染、小地图位图 |
-| `js/ai.js` | `MobAI`：只输出“移动欲望”，不直接改坐标；随机游走 + 仇恨/追击（`step/notifyMoved/facing`） |
-| `js/petal-effects.js` | `PetalFX`：花瓣特殊效果注册引擎，按 `card.type.slug` 匹配（如 `rose`），在花瓣上轨后每帧 `detect`，可 `heal/consumePetal` |
+| `js/ai.js` | **`MobAI`：注册式生物 AI 引擎**。按 `type.slug` 分派，每个物种一套独立 AI（`register/init/create/step/notifyMoved/facing/speedLimit`）；内置 `wander`（瓢虫等）、`bee`（S 型）、`centipede`（连续弧线） |
+| `js/petal-effects.js` | **`PetalFX`：花瓣能力 + 特效注册引擎**。按 `card.type.slug` 匹配，负责主动/被动特效，以及脱轨（`detach`）、飞行（`flightOf`）、硬碰撞（`onHit`）、仇恨吸引（`canAttract`）等物理能力；能力字段仍由 `data.js` 的 `PETAL_TRAITS` 声明，统一走 `trait()` 读取 |
 | `js/sim/constants.js` | 模拟层常量与纯规则（`InvulnFX`、击退份额、花瓣/花朵数值），无 DOM |
 | `js/sim/physics.js` | `physicsPush`、`moveEntity`、击退冲量与衰减，无 DOM |
 | `js/sim/mob-shape.js` | 生物视觉尺寸表与 SVG 轮廓碰撞数学（`mobHitTest` / `mobShapeNearest`） |
 | `js/sim/player.js` | `Player`：移动、装填、花瓣轨道、无敌、死亡与 `resetForSpawn` 唯一重置入口 |
-| `js/sim/mob.js` | `Mob`：AI 驱动、血量、表现计时、绘制 |
-| `js/sim/drops.js` | `DropCard` 与掉落卡面缓存 |
+| `js/sim/mob.js` | `Mob`：实体与引擎管线（问 AI → 限速 → 阻尼 → 位移 → 回馈）、血量、表现计时、绘制；物种差异写在 `ai.js` 的 AI 定义里 |
+| `js/sim/drops.js` | `DropCard`、掉落卡面缓存、**持续粒子时长分级**（`dropFxDuration`：≤5% 3s / <1% 6s / <0.3% 15s / <0.1% 与 Ultra+ 永久） |
 | `js/render/render-util.js` | 通用绘制工具（颜色、圆角、精灵、血条），全项目唯一 `roundRectPath` |
 | `js/render/fx.js` | `DropSpark` / `Particle` / `DamageText` |
 | `js/entities.js` | **空壳**：实体已拆分到 `js/sim/*` 与 `js/render/*` |
@@ -105,7 +106,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 → sim/constants.js → render/render-util.js → sim/physics.js → sim/mob-shape.js
 → sim/player.js → sim/mob.js → sim/drops.js → render/fx.js → entities.js(空壳)
 → net/protocol.js → net/server.js → net/client.js → net.js(空壳)
-→ chat.js → i18n-extra.js → ui/touch.js → ui/debug-screen.js → game.js → main.js
+→ chat.js → i18n-extra.js → ui/touch.js → ui/debug-screen.js → ui/bossbar.js → game.js → main.js
 ```
 
 关键点：
@@ -114,7 +115,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `registry.js` 必须在 `data.js` 之前：`data.js` 用它构建类型表。
 - `entities.js` 依赖 `MobAI`、`PetalFX`；`game.js` 依赖几乎所有模块。
 - `i18n-extra.js` 必须在 `game.js` 之前：`DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 里读取这些键。
-- `ui/touch.js`、`ui/debug-screen.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用（`?selftest=1` 时才由自测驱动）。
+- `ui/touch.js`、`ui/debug-screen.js`、`ui/bossbar.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用（`?selftest=1` 时才由自测驱动）。
 - `main.js` 最后执行 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 后台加载素材。
 - 素材全部加载完才 `UI.hideLoading()`；20 秒未完成显示慢加载提示但继续等。
 - 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`MobAI`、`Chat`、`Settings`。
@@ -123,7 +124,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 ### 5.1 主循环
 
-`Game.start()` 用 `requestAnimationFrame` 驱动；`dt` 上限 0.05s。`Game.update(dt)` 顺序：
+`Game.start()` 用 `requestAnimationFrame` 驱动；`dt` 上限 0.25s，固定步长 `STEP = 1/60`，
+**`MAX_STEPS = 3`**（一帧最多补 3 步，剩下的丢弃）。上限设 8 时，一旦掉到 8fps 就再也回不来：
+每帧补满 8 步 × 12ms = 96ms，帧率锁死在个位数。改大它之前先想清楚这个正反馈。
+真实帧率与每秒模拟步数写在 `perf.fps / perf.sps`（F3 显示用，别在 F3 里另算）。`Game.update(dt)` 顺序：
 
 1. 读输入，推导移动方向与 `mode`（`normal/reach/detect`）。
 2. **本地玩家预测**：`player.update(dt, dir, map, mobs)`，手感零延迟。
@@ -139,6 +143,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `Net` 是接口；`LocalNet` 是进程内实现，内部持有一个 `LocalServer`。
 - **权威状态**（生物生成/移动/碰撞/战斗/击退/聊天路由）在 `LocalServer`；**本地玩家**在客户端预测，服务端跑同一套物理做校验。
 - 快照频率 `SNAP_HZ = 25`（`SNAP_DT = 1/25`），与战斗固定步长 25 tick/s 一致。
+  **`LocalNet.step` 按 `SNAP_DT` 累加后再发快照**（不是每步一发）：主循环一帧最多补 3 步，
+  每步全量发快照 = 每秒几十份 4000+ 对象的数组 + 客户端整套镜像，GC 会把帧率打到个位数。
+  快照里的 `ents` 数组与元素对象由 `LocalServer._fillEnts()` **复用**（同步消费，不会留到下一帧）；
+  客户端 `_applySnap` 的 `seen` 集合也复用（`this._seen`）。改协议时注意：谁都不能长期持有快照对象。
 - 上行：`{t:'input', input:{dx,dy,mode}}`、`{t:'loadout', slots}`、`{t:'respawn'}`、`{t:'chat', ...}`。
 - 下行：`{t:'snap', snap}`、`{t:'evt', ev}`。
 - 快照含：`player`（位置/血量/无敌/死因/受伤红闪等）、`petals`（按 `slot|sub|gen` 定位的血量/碎裂状态）、`ents`（全量生物，含表现层计时）。
@@ -153,11 +161,41 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `Player`：位置/朝向/血量/等级、`slots`（主槽）/`subSlots`（副槽）/`invBar`（临时物品栏）/`backpack`、`reload` 装填状态、花瓣实体 `petals`、`recompute()` 重算属性。
 - `Mob`：按稀有度取 hp/dmg/armor/exp；视觉直径决定碰撞半径；`shape/hull` 是 SVG 轮廓；`weight` 按直径²（障碍型 ×5）；`threat` 仇恨表；`topThreat()` 中 Honey 强制优先。
 - **碰撞轮廓只认 `Mob._ensureShape()`**：键 = `'mob' + (artSvg || svg)`。多节生物（蜈蚣）头节 `12_h` / 身体节 `12_b` 各用本节贴图，**绝不回落到整条 `12.svg`**（整条外形套在单节上又长又大、还会把触角算进判定）；客户端视图与权威副本走同一个方法，`r` 也由同一份轮廓的等面积圆算出。
-- `Card`、`DropCard`：地面/背包卡；`DropCard` 支持堆叠、飞向玩家拾取、Ultra+ 持续冒粒子。
+- `Card`、`DropCard`：地面/背包卡；`DropCard` 支持堆叠、飞向玩家拾取；持续冒粒子的时长按**掉落概率**分级（`chance` 由 `rollMobDrops` 带上，`fxDur` 决定：≤5% 3s、<1% 6s、<0.3% 15s、<0.1% 与 Ultra+ 永久；其余只在落地炸一次）。
 - `DamageText`：Q 弹飘字，颜色区分伤害/治疗（`HEAL_TEXT_COLOR = #ff94c9`）。
 - `InvulnFX`：多来源无敌（绝对到期时间），出生 3 秒；白晕 + 金色血条；无敌期完全免伤。
 - 击退按稀有度分配份额（`KNOCKBACK_SHARE`），总位移 `FLOWER_KNOCKBACK = 0.3 × 主角直径`。
 - 碰撞：生物用 SVG 轮廓多边形（`contourFromGrid`），墙体用瓦片遮罩/多边形；未就绪时退化为圆。
+- **行走碰撞箱（`Mob.walkR / walkSize / walkHull`）只用于与墙体/禁行地形**：`_ensureShape` 里把同一份凸包
+  按 `min(视觉直径, 1 格瓦片 0.9 倍正方形的内接圆)` 缩小（`MOB_WALK_LIMIT_R = 0.45 × GARDEN_TILE ≈ 129.6`），
+  于是任何体型的生物都能挤进 1 格宽通道。**伤害结算、被玩家推挤、花瓣命中仍用 `r / shape / collSize`，两者不许混用**；
+  `moveEntity` 优先取 `walkHull + walkSize`，没有才回落 `hull + drawSize` / 圆。
+- **花瓣与生物有没有实体碰撞由数据决定（`PETAL_TRAITS[slug].solid`，8 种花瓣逐个显式声明）**：
+  · `solid: false`（目前除蜜以外全部）→ 穿过生物，只在重合瞬间传一次冲量（`PETAL_KB_CD` 冷却）；
+  · `solid: true`（蜜）→ 生物被持续推出花瓣轮廓、并沿表面蹭走（揉搓），**花瓣自身不位移**。
+  两种情况都【不位移花瓣】，伤害都由 `LocalServer._combatTick` 在重合期间每 tick 结算。
+  推出时保留 `PETAL_CONTACT_SKIN` 的穿透量：推成"刚好相切"会让下一 tick 命中判定归零，
+  表现就是"卡在轮廓外沿、既打不到也不再受伤"。
+- **玩家/生物之间的推挤与伤害、F3 碰撞箱共用同一套几何**：`physicsPushMob(e, m)` 用生物的 SVG 轮廓
+  （`mobHitTest`），只有轮廓没就绪才退回两圆。用等面积圆 `m.r` 会让玩家走进大型生物身体里（"大怪穿模"）。
+- 花瓣吸附（`Player._syncPetals` 的 pull）**只对 `solid` 花瓣生效** —— 否则无实体碰撞的花瓣会被吸在
+  生物轮廓外沿一动不动。
+- **伤害口径只有一个入口 `LocalServer._dmg(atk, armor)` = `max(atk - armor, 0)`**：生物打花瓣、打花朵本体、
+  花瓣打生物、本体打生物，四个方向全部走它。花瓣与花朵同阵营，**不允许**再出现"本体扣护甲、花瓣吃全额"这类分叉。
+- 客户端花瓣状态按 `(slot, sub, gen)` 匹配快照；`gen` 是两端各自维护的计数器，可能差一拍，
+  所以 `Player._netPetalFor()` 有 `(slot, sub)` 唯一匹配的兜底，并顺手把 `gen` 对齐到服务端。
+  少了这个兜底，一旦错位就会"花瓣永远满血、永远不碎"。
+- **快照的 `petals` 必须覆盖"有卡但此刻没有实体"的槽位**（`LocalServer._snapPetals`）。
+  花瓣被打碎后 `_destroyPetal` 只打 `dead` 标记并把该槽放进 reload，实体在**下一帧**的
+  `_syncPetals` 里才被移出 `p.petals` —— 直接下发 `p.petals` 的话，"这一槽没了"只能靠
+  "打碎那一帧刚好发快照"才传得到客户端（快照 25Hz vs 模拟 60Hz）。漏掉的那次客户端既不碎
+  也不进装填，会一直画一片**幽灵花瓣**：画面里从生物身上飘过去，服务端却根本没有它，
+  一点伤害都结算不到（"花瓣直接飘过去、和瓢虫没有任何交互"的根因）。
+- **实体集合以快照为唯一真相**：`Player._netSlotHasLive()` 让客户端只生成"服务端确实有"的花瓣。
+  本地 reload 计时会早一两帧跑完，那几帧里服务端还没有这片花瓣（生成出来就是上面那种幽灵，
+  还会立刻被快照的 dead 记录打碎）。
+- 回归断言：`fix: 花瓣命中生物并结算`（轨道环上放瓢虫，必须掉血）、
+  `fix: 花瓣碎裂跨端同步`（服务端打碎后客户端必须同步消失并进入装填）。
 
 ### 5.4 数据层（`data.js` + `registry.js`）
 
@@ -166,7 +204,8 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - **当前真正启用的花瓣 8 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf`。其余 registry 数据保留但不加载。
 - **当前真正会生成的生物 3 种**（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, centipede`；地图生成区里的 `garden` 组展开为这几种。其他生物可用 `/summon` 手动召唤调试。
 - 花瓣 key 是 `'p' + id`（如玫瑰 `p5`），`slug` 才是 i18n/特效匹配用的 `rose`。
-- 掉落：按生物稀有度查表，`rollMobDrops()`；初始装备 = 4× common Basic + 1× common Rose，背包只有 1× common Basic。
+- 掉落：按生物稀有度查表，`rollMobDrops()`（返回项带 `chance` = 命中档的有效概率，供掉落粒子分级）；初始装备 = 4× common Basic + 1× common Rose，背包只有 1× common Basic。
+- **超长蜈蚣的隐藏掉落**（`CHAIN_LONG_DROPS`）：每节死亡独立掷骰，与普通掉落并存，全部掉 Basic；**不写进掉落表，因此不显示在生物信息栏**。概率 4% / 2% / 0.8% / 0.35% / 0.12% / 0.05% / 0.02% / 0.0003% / 0.0000001%（common → eternal）。
 - 难度→稀有度用 S 型曲线（`RARITY_DIFF_T`）；生成区来自 `garden.tmj` 的 `spawn_mobs` 对象层。
 
 ### 5.5 地图与渲染（`map.js` / `game.js`）
@@ -175,7 +214,8 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `loadGardenData()` 读 `garden.tmj`，再读引用的 `.tsj`；支持 gzip/zlib 压缩层、Tiled 翻转位（H/V/D）、对象层生成区。
 - 碰撞：tileset 的 `objectgroup` 多边形 → 归一化；烘焙瓦片遮罩在 `garden.json`（运行时主要用 tmj 的 shapes/遮罩逻辑）。
 - 相机锁定玩家并夹紧到地图边界；屏幕抖动 `HURT_SHAKE = 5.98`，按 `dt*30` 衰减。
-- 渲染顺序：草地底色 → 瓦片 → 地面卡/掉落物粒子/掉落卡 → `/tp` 标记 → 尸体 → 生物（按 y 排序）→ 活玩家 → 粒子/飘字 → 碰撞箱调试 → 坐标/边缘指示/小地图。
+- 渲染顺序：草地底色 → 瓦片 → 地面卡/掉落物粒子/掉落卡 → `/tp` 标记 → 尸体 → 生物（按 y 排序）→ **花瓣光环粒子（`game.auraFx`）** → 活玩家（花瓣在它里面画）→ 普通粒子/飘字 → 碰撞箱调试 → 坐标/边缘指示/小地图。
+  光环粒子单独一份数组就是为了这个图层：它必须压在花瓣**之下**，所以不能混进 `game.particles`。
 - 视口裁剪给屏幕外 2 倍余量；大生物按半径判定，避免贴边消失。
 - 小地图 3 档，`M` 切换；位图缓存。**生物点（粉色）只在 F3 调试屏幕打开时绘制**（`game._drawMinimap` 传 `null` 即不画），常规游玩只显示地形与玩家。
 - **复活落点**：`map.checkpointSpawnPoint(cp, r)` 在检查点【整片矩形区域内随机】取一个
@@ -192,24 +232,60 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - 聊天：四频道 `local/squad/guild/whisper`，**只有 Local 可真正发送**；非输入态消息漂浮后渐隐；红色字体一律表示系统消息。所有消息经 `Net` 上行、由服务端路由后下行。
 - 聊天指令：`/local /global /map /guild /squad /whisper(/w) /reply(/r) /help /rot-speed /speed /print-players /unblock /unblock-all /give /tp /sure /init /resphere /summon /kill /kill-mob`。
   **`/show-coord` 与 `/pending crash` 已移除**，调试信息统一走 F3 调试屏幕。
+- `/summon <mob_id> <rarity>[<k=v,...>] <count>`：参数用方括号追加在稀有度后，目前只有多节生物支持 `type=normal|long`，
+  例：`/summon 3 common[type=long] 1` 生成一条超长蜈蚣；不写参数走自然规则（只有 common 有 0.3% 概率超长）。
 
-### 5.7 花瓣特效引擎（`petal-effects.js`）
+### 5.7 花瓣能力 / 特效引擎（`petal-effects.js`）
 
 - 注册：`PetalFX.register(key, { detect(ctx), start(ctx), update(ctx,dt), draw?(ctx2d,ctx) })`，`key === card.type.slug`。
 - 只在该花瓣 **reload 完成、弹出到轨道后** 才跑 `detect`；命中后由 `update` 驱动，激活期间跳过轨道弹簧与普通战斗。
 - **被动形态**：`PetalFX.register(key, { passive: true, tick(ctx,dt) })` —— 每帧都跑，但不接管位置、不跳过战斗。
-- `ctx` 提供 `player/petal/stats/dt`、`onOrbit()`、`heal(n)`、`consumePetal()`、`floatText()`。
-- 现有实现：`rose`（主动：血量不满 → 1.5s 飞向主角回血 → 退场）；`leaf`（被动：按 `heal/s` 连续回血，与碰撞/伤害并存）；`PetalFX.textSink` 把治疗数字接到 `DamageText`。
-- `honey / peas / pollen` 的物理与运动能力**不走 PetalFX**，而是 `data.js` 的 `PETAL_TRAITS` 数据字段（`hardCollide` / `attractMobs` / `holdReloadUntilDeath` / `launch` / `detachAfter`）：行为层只读字段、不判断 slug。新增同类花瓣只需在 `PETAL_TRAITS` 声明。
+- `ctx` 提供 `player/petal/body/type/rarity/stats/dt`、`onOrbit()`、`popped()`、`heal(n)`、`consumePetal()`、`floatText()`。
+- **物理能力也归引擎**（行为层不再按 slug / 字段写分支）：
+  - `PetalFX.trait(type, key)`：能力字段读取（注册项 `traits` > `type` 字段）。
+  - `canDetach` / `detach(body, player)`：脱轨计划（Pollen 惯性滞留、Peas 四向喷射、Honey 等实体死亡再装填）。
+  - `flightOf(body)` / `ttlOf(body)`：滞留期飞行参数与存活上限。
+  - `onHit(body, player, contact)`：与生物接触的结算，按数据里的 `solid` 分派 ——
+    `_softHit`（无实体碰撞：只传一次冲量）/ `_solidHit`（有实体碰撞：把生物推出轮廓 + 沿表面摩擦，花瓣不动）。
+    注册项的 `onHit` 优先级最高，但**新增花瓣不要再写 onHit 分支来区分物理形态**，改 `PETAL_TRAITS.solid`。
+  - `canAttract(body, player, mob)`：仇恨吸引（`attractMobs` + `maxMobRarity` + 半径）。
+- 现有注册：`rose`（主动回血）、`leaf`（被动持续回血）、`honey`（`solid` 实体碰撞 + 仇恨吸引）、
+  `pollen` / `peas`（滞留 / 喷射）、`basic` / `light` / `stinger`（无特效，仅登记）。
+- 能力字段仍声明在 `data.js` 的 `PETAL_TRAITS`（构建到 `type` 上），注册项的 `traits` 只是可选覆盖，两份不会分叉。
 
-### 5.8 调试屏幕（`ui/debug-screen.js`）与移动端触控（`ui/touch.js`）
+### 5.8 生物 AI 引擎（`ai.js`）
+
+- 与 `PetalFX` 同套路：引擎只跑固定管线，**每个物种一个注册项**（`key === type.slug`）。
+- 接口：`register(key, def)`；`def = { init?(mob), create(mob), step(ctx, dt, mob), notifyMoved?(ctx,d), facing?(ctx), speedLimit?(mob), onHurt?(mob,src,applied) }`。
+- `Mob` 构造末尾调用 `MobAI.attach(mob)`：选定义 → `init` 声明该物种的移速/转向/游走节奏 → `create` 建运行时状态。
+- `Mob.update` 的固定管线：`step` 取移动欲望 → `limitSpeed` 钳物种上限 → 阻尼加速 → `moveEntity` → 撞墙/禁行回馈 `blockedT` → `notifyMoved` 回馈位移。
+- 内置：`wander`（默认回落：游走 / 追击 / 逃离）、`bee`（wander + S 型摆头）、`centipede`（**全程弧线**：AI 只改「角速度 curv」，curv 指数阻尼逼近目标曲率，heading 由此积分 —— 换向/追击/逃跑/撞墙都不允许任何角度突变，连掉头也只能绕大弯）。
+- 蜈蚣额外两条硬规则：**追击/避墙的最小转弯半径 = 1 倍单节直径**（`turnRadius = visualD`，曲率上限 = 速度/半径）；**游荡 = 大半径长弧**（`arcRadius = max(540, 10.8×visualD)`，common ≈ 594px；稀有度越高 visualD 越大、弧半径随之等比变大；曲率 = 游荡速度/半径，每段 8~16s 才换弯）；**与墙保持 1 个瓦片**（`wallKeep = GARDEN_TILE`，每 0.25s 用 `map.canStandAt` 探测前/左/右三个方向，需要时只改目标曲率方向，仍是弧）。
+- **追击寻路只看行走碰撞箱**：`MobAI._util.steer(mob, ai, wantA, dt)` 用 `walkR` 在前方 0.9 格处采样
+  `map.canStandAt`，直行不通就按 22.5°/45°/67.5°/90° 左右交替找一个走得通的方向；缓存的是**偏转角**
+  （`ai.pathOff`，0.3s 一次），不是绝对角 —— 否则目标一动就每帧重算，会把 `canStandAt` 打成热点。
+  `wander`/`bee` 的追击与蜈蚣的追击分支都走它；蜈蚣只把它当"期望角"，曲率仍然连续（不破坏弧线规则）。
+- `MobAI._util.walkR(mob)` 是所有"能不能走过去"判断的唯一半径来源；`centipede._wallProbe` 也用它。
+- 新增生物：`MOB_TRAITS` 声明体型/速度倍率，需要行为时在 `ai.js` 里 `MobAI.register('slug', {...})`；不注册就自动用 `wander`。
+- 休眠（`MOB_ACTIVE_R`）由服务端按距离控制，AI 不需要关心。
+
+### 5.9 调试屏幕（`ui/debug-screen.js`）与移动端触控（`ui/touch.js`）
 
 - **F3 调试屏幕**：按 `F3` 开关（`DebugScreen.toggle()`），`C` 单独切碰撞箱（仅屏幕打开时接管）。
-  分栏显示：Frame（fps / 帧耗时 / 逻辑 / 渲染 / JS 堆）、Player（坐标 / 复活区 / 朝向 / 当前与最大移速 / 模式 / 血量 / 无敌）、
+  分栏显示：Frame（**真实 fps / 每秒模拟步数 / 帧耗时 / 逻辑 / 渲染 / JS 堆**）、
+  Player（坐标 / 复活区 / 朝向 / 当前与最大移速 / 模式 / 血量 / 无敌）、
   Engine（生物总数 / 屏幕内 / 休眠 / 掉落卡 / 地面卡 / 粒子 / 飘字 / 快照数 / 快照延迟 / 预测偏差）、
-  Petals（每槽名称 / 血量百分比 / 转速 rad·s⁻¹ 与 rpm）。
+  Petals（每槽名称 / 血量百分比 / 状态）。
   只在可见时更新，且限频 5Hz（`_acc >= 0.2`），DOM 元素建一次、之后只改 `textContent`。
   打开时自动打开碰撞箱，并让小地图画出生物点。
+  **三条硬规矩**（都是踩过的坑）：
+  · `update(dt)` 的 dt 是固定模拟步长，**不能在 F3 里数帧率**（会恒显示 60）。真实 fps / 每秒模拟步数
+    由主循环用 rAF 间隔算好写进 `perf.fps / perf.sps`，F3 只负责显示。
+  · 朝向显示前必须归一到 `[0,360)`（`facing` 是任意实数；写回时统一过 `wrapAngle`）。
+  · 花瓣栏按**装备槽**列（`player.slots`），血量百分比 = 该槽存活实体的 `Σhp / ΣmaxHp` 并 `clamp(0,100)`；
+    已碎裂实体的 `hp` 可能是负数，直接乘 100 会显示 -2900%。
+  · 碰撞箱层里生物画的是**判定用的 SVG 轮廓**（没有轮廓才画橙红圆兜底）；花瓣圆按 `solid` 分色
+    （黄 = 无实体碰撞，橙 = 有实体碰撞），吸附连线只画在真的吸住时。
 - **触控层**：`TouchCtl.init(game)` 只在粗指针设备创建（`pointer: coarse` / `maxTouchPoints>0`；
   桌面调试可用 `?touch=1` 强制）。左下半屏浮动摇杆（`--t-stick` 按屏幕短边 0.28 自缩放，84~160px），
   输出写入 `game.touchDir`（`_readDir` 里优先级最高）；右下 `A`=reach（= 空格）、`B`=detect（= Shift），
@@ -217,6 +293,22 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - 排布相关的尺寸全部走 CSS 变量（`--t-stick / --t-btn / --t-knob`），JS 只在 resize/orientationchange 时算一次。
 - **拖拽卡牌走 Pointer Events**（`ui/drag.js`）：`pointerdown/pointermove/pointerup/pointercancel` 统一处理鼠标、触摸、触控笔，按 `pointerId` 过滤多指；卡面/卡槽声明 `touch-action: none`（否则系统把手势判成滚动会直接发 `pointercancel`，拖拽必挂），窗口内容区 `.win-body` 用 `pan-y` 保留手指滚动。
   触摸后浏览器会补发一次合成 mouse 事件，`_bindCard` 用 800ms 时间窗把这类事件丢掉，避免"一次点击算两次"。`pointercancel` 视同取消：回滚画廊数量、销毁幽灵、重渲染来源区域。
+
+### 5.10 Boss 血条（`ui/bossbar.js`）
+
+- 只显示 `eternal` 与 `super`；**Eternal 永远优先于 Super**（先按稀有度分层，层内才按距离），与距离无关。
+- 1~3 只全部显示，沿屏幕中轴线**上下排布**（`_slotY`，间距 `GAP`）；超过 3 只才择优（排序后取前 3）。
+- 显示范围：屏幕矩形向外扩 150%（半宽 `W*0.75`、半高 `H*0.75`），更远的不显示。
+- 每条：深色胶囊背板 + 内嵌血量条，名称在上、稀有度在下，均带黑描边。
+- **内条与主角血条完全同一套口径**：底色 `#2b2b33`、灰色残影 `#b9bec8`（`ghostHp` 欠阻尼弹簧）、主条 `hpBarColor(dispHp)` 连续渐变、黑色描边；无敌时用 `m.invulnA` 把三者一起插值到「白底 + 金色填充」（生物目前没有无敌来源，恒为 0）。
+- **血条图形整体倍率 `BAR_K = 0.7`**：背板宽高、内缩量、内条高度、圆角、描边一起乘 0.7，**中心仍是 (cx, cy)**。
+  `_size` 的 `bh = 52.8` -> 屏幕上 **36.96px**（33.6 × 1.1）；内条高度 = `bhv × 0.8`，与背板等比。
+- 文字字号统一 **1.8 倍**（名称 16→28.8、稀有度 10→18）。**名称的视觉垂直中心落在条顶边上**
+  （基线 = 条顶边 + `(ascent-descent)/2`，用 `measureText` 的实测值），即半个字高压在条上、半个在条外；
+  稀有度基线 `cy + bhv×0.4`。行距按**实际条高**（`bh × BAR_K`）算：
+  `_slotY = TOP + bhv/2 + i(bhv + GAP)`，`TOP = 30` 是首条顶边，`GAP = 34`。
+- 显示 / 隐藏 / 换位由 `items[].a` 与 `items[].y` 阻尼驱动：缩放 `0.72 → 1`、透明度同步，
+  显示约 0.10s、隐藏约 0.15s；隐藏时保留最后条目让缩小动画画完（否则会硬切消失）。
 
 ## 6. 关键数值
 
@@ -284,7 +376,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 **新增一种生物**
 1. `registry.js` 有该生物数据；补/确认 `MOB_TYPES` 构建结果。
 2. 加入 `SPAWNABLE_MOB_SLUGS`，并在 `MOB_GROUPS` 或地图生成区里配置权重。
-3. 在 `ai.js` / `Mob` 里补行为（追击、S 型、障碍等）；掉落表在 `data.js`。
+3. 行为（追击、S 型、弧线、障碍等）在 `ai.js` 里 `MobAI.register('slug', {...})`；`Mob` 只跑公共管线，不再写物种特判。掉落表在 `data.js`。
 4. 视觉尺寸 `MOB_SIZE_SCALE`、贴图朝向 `MOB_ART_ROT`、碰撞轮廓 `mob-shapes.js`。
 5. i18n `Mobs/<slug>/Name`；bump 版本号。
 

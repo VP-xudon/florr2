@@ -1,32 +1,46 @@
-// petal-effects.js — 花瓣特殊效果引擎（检测与效果自由组合的自定义框架）
+// petal-effects.js — 花瓣特殊效果引擎（检测 / 效果 / 物理能力自由组合的自定义框架）
 // 'use strict';
 //
-// 设计目标：把"花瓣的特殊行为"从 _syncPetals / 战斗结算里彻底剥离。
-// 任何花瓣只要在这里注册同名效果（key === card.type.slug，如 'rose'），引擎就会在它
-// 【reload 完成、弹出至轨道后】每帧运行 detect；命中即激活 start/update，
-// 检测（detect）与效果（update）完全解耦，可自由组合出新花瓣。
+// 设计目标：把「花瓣的特殊行为」从 _syncPetals / 战斗结算里彻底剥离。
+// 任何花瓣只要在这里注册同名效果（key === card.type.slug，如 'rose'），引擎就会接管它：
+//   · 在轨阶段：reload 完成后每帧 detect；命中即激活 start/update（玫瑰回血）；
+//   · 被动阶段：passive 定义每帧 tick（叶子持续回血）；
+//   · 物理侧  ：脱轨/喷射（detach）、飞行存活（flight）、硬碰撞（onHit）、仇恨吸引（canAttract）
+//     —— 行为层（Player / LocalServer）只问引擎，不再按 slug 或字段写分支。
 //
 // —— 注册格式 ——
 //   PetalFX.register(key, {
-//     detect(ctx)          -> bool   每帧检测（未激活时调用）；返回 true 触发
-//     start(ctx)                     触发时初始化（状态挂在 ctx.petal.fx.state）
-//     update(ctx, dt)      -> bool   激活后每帧；返回 true = 效果结束（花瓣解管）
-//     draw?(ctx2d, ctx)              可选：额外绘制（在花瓣本体之后调用）
+//     traits?: {...}                  可选：覆盖数据表里的能力字段（见 trait()）
+//     detect(ctx)          -> bool    每帧检测（未激活时调用）；返回 true 触发
+//     start(ctx)                      触发时初始化（状态挂在 ctx.petal.fx.state）
+//     update(ctx, dt)      -> bool    激活后每帧；返回 true = 效果结束（花瓣解管）
+//     draw?(ctx2d, ctx)               可选：额外绘制（在花瓣本体之后调用）
+//     detach(ctx)          -> plan    可选：脱轨计划，见下方 detach()
+//     flight?(ctx)         -> obj     可选：滞留期飞行参数（默认读 traits.launch）
+//     onHit(ctx, hit)      -> bool    可选：与生物接触时的【动能传递】结算（不返回 = 走默认软碰撞）。
+//                                     硬规则：花瓣与生物【不做任何位置分离】——花瓣穿过生物，
+//                                     只在重合的一瞬间传一次冲量，伤害由战斗循环按重合结算。
+//     canAttract?(body, player, mob)  可选：该实体能否吸引这只生物（默认只判 traits.attractMobs + 稀有度 + 半径）
 //   });
 //
 // —— 被动形态（passive）——
 //   PetalFX.register(key, { passive: true, tick(ctx, dt) });
 //   每帧都会调用 tick，但【不接管位置、不跳过战斗】。用于"持续回血/持续光环"这类
-//   必须与轨道运动和战斗结算并存的能力（如 Leaf）。主动效果会在激活期间跳过战斗，
-//   所以物理属性优先用数据表字段（PETAL_TRAITS.hardCollide / attractMobs / launch）。
+//   必须与轨道运动和战斗结算并存的能力（如 Leaf）。
 //
 // —— ctx API ——
-//   ctx.player / ctx.petal / ctx.stats / ctx.dt
+//   ctx.player / ctx.petal(=ctx.body) / ctx.type / ctx.rarity / ctx.stats / ctx.dt
 //   ctx.onOrbit()       花瓣是否已弹出至轨道（age ≥ ORBIT_T，出场 Q 弹完成）
-//   ctx.heal(n)         给主角回血（自动 clamp 到 maxHp）
+//   ctx.popped()        同上但阈值更早（age ≥ ORBIT_T*0.34）
+//   ctx.heal(n)         给主角回血（自动 clamp 到 maxHp，返回实际回血量）
 //   ctx.consumePetal()  消耗花瓣：转退场幽灵（放大渐隐）+ 该槽重新结算装填
 //   激活期间引擎直接把 b.x/b.y 交给特效驱动（跳过轨道弹簧），战斗结算跳过
-//   该花瓣（b.fxNoCombat），图层抬高到主角之上（玫瑰"飞到脸上吃"的观感）。
+//   该花瓣（b.fxNoCombat），图层抬高到主角之上。
+//
+// —— 能力字段（traits）——
+//   数据声明仍在 data.js 的 PETAL_TRAITS（构建 type 上的字段）；
+//   注册项里的 traits 是可选覆盖，用于「同一个 slug 的某个变体要额外能力」。
+//   trait(type, key) 的取值顺序：注册项 traits > type 字段（数据表）> undefined。
 
 const PetalFX = {
   defs: {},
@@ -37,33 +51,45 @@ const PetalFX = {
   // 特效层不直接持有 Game 实例，只通过这个单一出口弹字，保持「特效只描述意图」的分层。
   textSink: null,
 
-  register(key, def) { this.defs[key] = def; },
+  register(key, def) {
+    if (!key || !def) return null;
+    this.defs[key] = def;
+    return def;
+  },
 
-  // 每帧对每片【在轨】花瓣推进：未激活 -> detect；已激活 -> update
+  // 按 card.type 查定义（slug 才是稳定英文名；key 是 'p'+id，永远对不上注册名）
+  defOf(type) {
+    const k = type && (type.slug || type.key);
+    return (k && this.defs[k]) || null;
+  },
+
+  // ---- 能力查询：所有「这个花瓣能不能……」的判定都从这里走 ----
+  trait(type, key) {
+    if (!type) return undefined;
+    const def = this.defOf(type);
+    if (def && def.traits && (key in def.traits)) return def.traits[key];
+    return type[key];
+  },
+
+  // ---- 每帧推进（在轨花瓣）----
   tick(body, player, dt) {
     if (!body || body.dead || body.fxDone) return;
-    // 查表键用 type.slug（'rose'/'basic' 等，稳定英文名）。
-    // 注意不能用 type.key —— data.js 里 key 是 'p'+id（玫瑰是 'p5'），永远对不上注册名。
     const type = body.card && body.card.type;
-    const key = type && (type.slug || type.key);
-    const def = key ? this.defs[key] : null;
+    const def = this.defOf(type);
     if (!def) return;
 
-    // ---- 被动效果（passive）----
-    // 每帧都跑，但不接管位置、不置 fxNoCombat：花瓣照常参与轨道弹簧、碰撞与伤害结算。
-    // 适合"持续回血 / 持续光环"这类必须与战斗并存的能力（Leaf）。
+    // 被动效果：每帧都跑，但不接管位置、不置 fxNoCombat（照常参与战斗）。
     if (def.passive) {
       if (def.tick) def.tick(this._ctx(body, player, dt), dt);
       return;
     }
 
-    // ---- 主动效果（detect -> start/update）----
-    // 命中后由特效驱动位置、战斗结算跳过（b.fxNoCombat）：玫瑰"飞到脸上吃"。
+    // 主动效果：detect -> start/update，命中后由特效驱动位置、战斗跳过。
     if (!body.fxActive) {
       if (!def.detect) return;
       const c = this._ctx(body, player, dt);
       if (!def.detect(c)) return;
-      body.fx = { key, state: {} };
+      body.fx = { key: def.key || (type && type.slug), state: {} };
       body.fxActive = true;
       body.fxNoCombat = true;
       if (def.start) def.start(c);
@@ -74,18 +100,158 @@ const PetalFX = {
     if (done) { body.fxActive = false; body.fxNoCombat = false; body.fxDone = true; }
   },
 
+  // ---------------- 物理 / 行为钩子（给 Player 与 LocalServer 调用） ----------------
+
+  // 这张卡是否具备「脱离轨道」能力（数据字段 detachAfter > 0）
+  canDetach(body) {
+    const type = body && body.card && body.card.type;
+    return (this.trait(type, 'detachAfter') || 0) > 0;
+  },
+
+  // 脱轨计划：返回 null = 不脱轨，否则 { vx, vy, holdReload }。
+  // 默认实现按能力字段生成：有 launch 的喷射出去（Peas），否则保留一点惯性滑行（Pollen / Honey）。
+  // 具体物种可以覆盖：detach(ctx) 返回自己的初速/参数。
+  detach(body, player) {
+    const type = body && body.card && body.card.type;
+    if (!type) return null;
+    const def = this.defOf(type);
+    if (def && def.detach) return def.detach(this._ctx(body, player, 0)) || null;
+    const launch = this.trait(type, 'launch');
+    if (launch) {
+      // 喷射型：朝 N 个方向直直飞出去，速度 = speedK × 主角默认最高移速。
+      // 基准必须是 PLAYER_BASE_SPEED（不含 SPEED_SCALE 与 /speed 倍率），
+      // 否则豌豆一出膛就飞出屏幕（表现为"炸开一瞬间就没了"）。
+      const dirs = launch.count || 4;
+      const dir = (body.sub || 0) * (TAU / dirs) + (body.selfRot || 0);
+      const sp = (launch.speedK || 1.3) * PLAYER_BASE_SPEED;
+      return { vx: Math.cos(dir) * sp, vy: Math.sin(dir) * sp, holdReload: false };
+    }
+    // 滞留型（Pollen / Honey）：保留脱手瞬间的惯性，其余能量在脱手时损耗
+    return {
+      vx: (body.vx || 0) * PETAL_DETACH_KICK,
+      vy: (body.vy || 0) * PETAL_DETACH_KICK,
+      holdReload: !!this.trait(type, 'holdReloadUntilDeath')
+    };
+  },
+
+  // 滞留实体的飞行参数（Peas 用）：匀速直飞 + 到时移除；返回 null = 普通惯性滑行
+  flightOf(body) {
+    const type = body && body.card && body.card.type;
+    const def = this.defOf(type);
+    if (def && def.flight) return def.flight(this) || null;
+    return this.trait(type, 'launch') || null;
+  },
+
+  // 滞留实体的存活上限（秒）：Infinity = 由血量决定（Honey）
+  ttlOf(body) {
+    const type = body && body.card && body.card.type;
+    return this.trait(type, 'holdReloadUntilDeath') ? Infinity : PETAL_DETACH_TTL;
+  },
+
+  // 花瓣 vs 生物的接触结算（每 tick、每次命中调一次）。
+  // contact = { dt, mob, hit:{nx,ny,depth}, approach, jmass, jshare, wP, wM, shareP, shareM, kbBoost }
+  // 分派顺序：注册项的 onHit > 数据里的 solid（见 data.js PETAL_TRAITS）。
+  //   · solid = true  -> _solidHit：机体被推出花瓣轮廓 + 沿表面摩擦，花瓣自己不动（揉搓）
+  //   · solid = false -> _softHit ：穿过生物，只在撞上去那一下传一次动能
+  // 两种都【不位移花瓣】，伤害由战斗循环按重合结算。
+  onHit(body, player, contact) {
+    const type = body && body.card && body.card.type;
+    const def = this.defOf(type);
+    const c = this._ctx(body, player, (contact && contact.dt) || 0);
+    if (def && def.onHit) return !!def.onHit(c, contact);
+    return this.trait(type, 'solid') ? this._solidHit(c, contact) : this._softHit(c, contact);
+  },
+
+  // 软碰撞（无实体碰撞的花瓣）：只在"撞上去那一下"传一次动能，双方都不位移。
+  _softHit(ctx, c) {
+    if (!c) return false;
+    const b = ctx.petal;
+    // 接触强度取"花瓣撞过来"与"生物撞过来"两者中更大的那个相对法向速度
+    const vN = Math.max(c.approach || 0, c.relN || 0);
+    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
+      applyKnockback(c.mob, -c.hit.nx, -c.hit.ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
+      b.kbT = PETAL_KB_CD;
+    }
+    return true;
+  },
+
+  // 实体碰撞（solid 花瓣）：花瓣是"有质量但钉在轨道上"的实体 ——
+  //   ① 生物被【持续】推出花瓣轮廓，所以它会贴着花瓣表面滑过去（就是"在生物身上揉搓"）；
+  //   ② 花瓣自身绝不位移：位置由轨道 / 吸附决定。以前两边互相推，花瓣被顶出去 ~7px
+  //      （正好等于吸附落点），下一 tick 判不到命中 -> 卡在轮廓外沿、既不受伤也不再结算，
+  //      这就是"看起来被吸住却打不到"的根因；
+  //   ③ 推出时保留 PETAL_CONTACT_SKIN 的接触量：推成"刚好相切"同样会让命中判定归零；
+  //   ④ 沿表面加一份摩擦速度，生物是"蹭走"而不是被钉在原地。
+  _solidHit(ctx, c) {
+    if (!c) return false;
+    const b = ctx.petal, m = c.mob;
+    const nx = c.hit.nx, ny = c.hit.ny;
+    const depth = c.hit.depth || 0;
+    if (depth > PETAL_CONTACT_SKIN) {
+      const push = (depth - PETAL_CONTACT_SKIN) * 0.55;   // 一次推不完，留一点接触
+      // 多节生物【被粘合的节】不在这里位移：它们的位置每帧末由 _solveChains 按轨迹刚性解算，
+      // 推了也会在 1/60s 后被覆盖 —— 表现却是"被推开 -> 被拉回"的高频抖动，
+      // 整条身体还会被径向撕开、错位成一团（用户看到的"撞蜜时缩成一团晃动"）。
+      // 分离力只作用在【自由节点】（段首 / 普通生物）上，身体沿轨迹自然让开。
+      if (!m._chainLocked) { m.x -= nx * push; m.y -= ny * push; }
+    }
+    // 摩擦：把生物往"花瓣相对生物"的切向速度上带（揉搓感）
+    const tx = -ny, ty = nx;
+    const relV = ((b.vx || 0) - (m.vx || 0)) * tx + ((b.vy || 0) - (m.vy || 0)) * ty;
+    if (relV > 1 || relV < -1) {
+      const j = clamp(relV * 0.28, -PETAL_RUB_MAX, PETAL_RUB_MAX);
+      m.vx = (m.vx || 0) + tx * j;
+      m.vy = (m.vy || 0) + ty * j;
+    }
+    // 撞上去那一下的动能传递（与软碰撞同一套系数，保证两种花瓣手感一致）
+    const vN = Math.max(c.approach || 0, c.relN || 0);
+    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
+      applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
+      b.kbT = PETAL_KB_CD;
+    }
+    return true;
+  },
+
+  // 该实体能否把这只生物的仇恨拉过来。
+  // 默认规则：① traits.attractMobs ② 稀有度不超过该卡的 Max Mob Rarity ③ 在 HONEY_PULL_R 内。
+  canAttract(body, player, mob) {
+    const card = body && body.card;
+    const type = card && card.type;
+    if (!type || !this.trait(type, 'attractMobs')) return false;
+    const maxR = this.maxMobRarity(type, card.rarity);
+    // 该稀有度【没登记上限】（如 common 蜜）-> 什么都吸引不了，而不是"什么都不限"。
+    if (!maxR) return false;
+    if (RARITY_ORDER.indexOf(mob.rarity) > RARITY_ORDER.indexOf(maxR)) return false;
+    const def = this.defOf(type);
+    if (def && def.canAttract) return !!def.canAttract(body, player, mob);
+    return dist2(body.x, body.y, mob.x, mob.y) <= HONEY_PULL_R * HONEY_PULL_R;
+  },
+
+  // 某花瓣在某稀有度下的「Max Mob Rarity」：返回稀有度名或 null
+  maxMobRarity(type, rarity) {
+    const t = this.trait(type, 'maxMobRarity');
+    if (t) return t[rarity] || null;
+    return (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(type, rarity) : null;
+  },
+
   _ctx(body, player, dt) {
+    const card = body && body.card;
+    const type = card && card.type;
     return {
       player,
       petal: body,
-      stats: petalStatsFor(body.card.type, body.card.rarity),
+      body,
+      type,
+      rarity: card && card.rarity,
+      stats: petalStatsFor(type, card && card.rarity),
       dt,
       onOrbit: () => body.age >= this.ORBIT_T,
       // 弹出"一点点"（约 1/3 弹道）：用于"加载即结算"类特效——不等飞满整圈固定位，
       // 花瓣往外弹一点就被拉回主角中心（观感更优美）。
       popped: () => body.age >= this.ORBIT_T * 0.34,
       // 回血：返回【实际回血量】（血量有缺口不足时小于 n；满血返回 0）。
-      // 调用方应据此弹反馈，避免"想回 8 点但只回了 3 点却显示 8"。
       heal: (n) => {
         const before = player.hp;
         player.hp = Math.min(player.maxHp, player.hp + (n || 0));
@@ -111,6 +277,14 @@ const PetalFX = {
     player.reload[body.slotIndex] = { card: c, age: 0, dur };
   },
 };
+
+// ============================================================================
+// 基础花瓣（无特效）—— 显式登记，表示「这些花瓣也由引擎统一分派」，
+// 走默认的软碰撞 + 轨道运动；以后要给它们加能力，直接在这里补钩子即可。
+// ============================================================================
+PetalFX.register('basic', {});
+PetalFX.register('light', {});
+PetalFX.register('stinger', {});
 
 // —— 内置特效 1：玫瑰（Rose）——
 // 检测：reload 完成、已弹出至轨道，且主角血量不满（每帧检测，
@@ -166,5 +340,29 @@ PetalFX.register('leaf', {
   tick(ctx, dt) {
     const heal = (ctx.stats.heal || 0) * dt;
     if (heal > 0 && ctx.player.hp < ctx.player.maxHp) ctx.heal(heal);
-  }
+  },
+});
+
+// —— 内置特效 3：花粉（Pollen）——
+// 滞留型：reach / detect 模式下加载 0.5s 后脱轨，留在原地形成一小摊"花粉"。
+// 脱轨参数来自能力字段（detachAfter），物理由引擎默认 detach 处理（惯性滑行）。
+PetalFX.register('pollen', {});
+
+// —— 内置特效 4：豌豆（Peas）——
+// 喷射型：加载后 0.05s 朝 4 个方向直直射出去（launch 参数来自能力字段），
+// 飞行期间照常参与碰撞与伤害结算，2s 后强制移除。
+// 这里不需要覆写钩子：引擎默认 detach 已经能读 launch 生成初速，
+// flightOf 也能读到同一份参数；显式登记只是把"这只花瓣由引擎接管"写明。
+PetalFX.register('peas', {});
+
+// —— 内置特效 5：蜜（Honey）——
+// ① 实体碰撞：这条【不写在这里】，由 data.js 的 `solid: true` 决定 ——
+//    引擎据此走 _solidHit：生物被持续推出蜜的轮廓并沿表面蹭走（揉搓），蜜自身不动。
+//    想改"哪些花瓣有实体碰撞"，只改 PETAL_TRAITS，不要回来加分支。
+// ② 仇恨吸引：把周围生物的仇恨拉到自己身上（不造成伤害，只负责挨打）。
+//    吸引范围与稀有度上限仍由数据字段声明，判定逻辑集中在 canAttract()。
+PetalFX.register('honey', {
+  canAttract(body, player, mob) {
+    return dist2(body.x, body.y, mob.x, mob.y) <= HONEY_PULL_R * HONEY_PULL_R;
+  },
 });

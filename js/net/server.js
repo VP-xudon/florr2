@@ -33,9 +33,11 @@ class LocalServer {
     const p = this.player;
     p.slots = playerTemplate.slots;
     p.name = playerTemplate.name;
-    // 血量相关全部从模板继承（maxHp/hp 与血条平滑值）
-    p.maxHp = playerTemplate.maxHp;
-    p.hp = playerTemplate.hp;
+    // 血量相关全部从模板继承（maxHp/hp 与血条平滑值）。
+    // 非有限数一律拒绝：Infinity/NaN 灌进权威副本后，战斗、平滑血条、快照都会一路 NaN。
+    p.maxHp = (Number.isFinite(playerTemplate.maxHp) && playerTemplate.maxHp > 0)
+      ? playerTemplate.maxHp : FLOWER_BASE_HP;
+    p.hp = Number.isFinite(playerTemplate.hp) ? Math.min(playerTemplate.hp, p.maxHp) : p.maxHp;
     p.recompute();
     // 出生状态统一走 Player.resetForSpawn：出生无敌 + 花瓣实体/世代号/装填 与客户端同源。
     // 少了出生无敌时，服务端副本从第 0 帧起就能被打 -> 客户端被快照置为 dead -> 一碰就死。
@@ -245,9 +247,13 @@ class LocalServer {
         ? this.map.randomPointInZone(zone)
         : null;
       if (!pos) continue;
+      // 减速瓦片是生物的禁区：不在这里生成（玩家能进，生物不能进/不能站）
+      if (this.map.mobBlockedAt && this.map.mobBlockedAt(pos[0], pos[1], 24)) continue;
       if (!first) first = pos;
       if (!p || dist(pos[0], pos[1], p.x, p.y) > 180) return pos;
     }
+    // 退而求其次的那个点也必须是"生物站得住"的
+    if (first && this.map.mobBlockedAt && this.map.mobBlockedAt(first[0], first[1], 24)) return null;
     // 8 次都落在玩家 180px 内（人就站在这个区的中间）：退而求其次也要生成，
     // 否则这个区会白白进入 5s 冷却，越打越空。
     return first;
@@ -278,14 +284,18 @@ class LocalServer {
   }
 
   // 多节生物（蜈蚣）：一次生成【一整条】——
-  //   · 节数 8~15；0.5% 概率出 45~60 节的超长个体
+  //   · 节数 8~15；超长个体 45~60 节（约 50 节）
+  //   · 【自然生成】只有 common 才有 0.3% 概率长成超长个体；其他稀有度一律普通长度
+  //   · /summon 可以显式指定 mode：'long'（强制超长，任意稀有度）/ 'normal'（强制普通）
   //   · 只有【头节】带触角（12_h.svg），其余节是身体（12_b.svg）
   //   · 每一节都是【独立实体】：各自血量、各自结算碰撞与伤害（像多个生物黏在一起）
   //   · 链只决定"谁跟着谁"：_lead 为 null 的那节就是【头】，跑自己的 AI 驱动它后面那整段；
   //     前节一死，后节的 _lead 自动置空 -> 分裂成多段，每段由自己最前一节的 AI 控制
   //     （不管那节有没有触角）。
-  _spawnChain(type, x, y, rarity, zone) {
-    const huge = Math.random() < 0.005;                  // 0.5% 超长个体
+  //   · 超长个体（chainLong）的每一节额外带一套【隐藏掉落】，不写进掉落表、不显示在生物信息栏。
+  _spawnChain(type, x, y, rarity, zone, mode) {
+    const huge = (mode === 'long')
+      || (mode !== 'normal' && rarity === 'common' && Math.random() < 0.003);
     const n = huge ? (45 + Math.floor(Math.random() * 16)) : (8 + Math.floor(Math.random() * 8));
     const a = Math.random() * TAU;                        // 头的朝向（前进方向）
     const rs = type.rarityStats && type.rarityStats[rarity];
@@ -303,6 +313,7 @@ class LocalServer {
       m.netId = this.nextId++;
       m.spawnZone = zone || null;
       m.segIdx = i;
+      m.chainLong = huge;                                // 超长个体：每节都带隐藏掉落
       m.isHeadSeg = (i === 0);                           // 只有头节带触角
       m.artSvg = m.isHeadSeg ? '12_h' : '12_b';
       // 名牌模式【生成时定死】：只有最初那个带触角的头节用经典名牌，其余节一律主角血条模式。
@@ -441,8 +452,10 @@ class LocalServer {
   // 断裂处理：某一节死亡后，_lead 被置空，它后面那一节自动成为新一段的起点，
   // 于是整条被切成多段，每段各自独立解算（配合各自的 AI 驱动）。
   _solveChains() {
-    // 基于【真实图形半径】的系数：0.92 => 两圆几乎相切、略重叠 8%，视觉上无缝。
-    const GLUE = 0.92;
+    // 相邻两节的标称间距系数：1.002 => 两圆【刚好相切】、留 0.2% 的缝。
+    // 旧值是 0.92（故意重叠 8% 假装"软身体"），用户要求体节一律不许重合，故取消。
+    // 代价是整条链变成"刚性相切链"，弯道时内弯侧必须由下面的硬挤压把非相邻节也推开。
+    const GLUE = 1.002;
     // 轨迹采样间距(px)：4px 已经足够平滑，点数只有 1px 时的四分之一。
     // 1px 采样在 45~60 节的超长个体上会产生上千个采样点，再叠加"每节从头查找"
     // 的 O(节数 × 点数) —— 这是帧率被打爆的主因之一。
@@ -454,7 +467,10 @@ class LocalServer {
       ? e.shape.r * e.drawSize
       : (e.drawSize || 24) * 0.35;
 
-    for (const m of this.ents) {
+    // 只遍历【醒着】的个体（this._awake 由 step() 建好）：全图 4000+ 只里绝大多数是休眠的，
+    // 以前每步都要为它们整表扫一遍再 continue，纯属白扫。
+    const src = this._awake || this.ents;
+    for (const m of src) {
       if (m.segIdx == null || m.dead) continue;
       if (m._lead && !m._lead.dead) continue;   // 只从每段的最前一节出发
       // 休眠的链不解算：全图几十条链 × 每链上百点是无谓开销。
@@ -478,6 +494,19 @@ class LocalServer {
           cc = cc._next;
         }
       }
+      // 【被顶回来就回退轨迹】
+      // 段首被蜜 / 墙 / 玩家推回原位时，若还照常记新点，轨迹会多出一段"前进又倒退"的锯齿；
+      // 后面每一节都沿这条锯齿摆放 -> 整条挤成一团并高频抖动（用户看到的"撞蜜时身体错位"）。
+      // 规则：本帧位移与最后一段轨迹方向相反，就弹出该样本，直到方向一致（最多 8 个，防死循环）。
+      if (m._trail.length >= 2) {
+        for (let guard = 0; guard < 8 && m._trail.length >= 2; guard++) {
+          const a = m._trail[0], b = m._trail[1];
+          const ux = a.x - b.x, uy = a.y - b.y;
+          const dd = Math.sqrt(ux * ux + uy * uy) || 1;
+          if ((ux * (m.x - a.x) + uy * (m.y - a.y)) / dd >= 0) break;
+          m._trail.shift();
+        }
+      }
       {
         const s0 = m._trail[0];
         if (!s0 || Math.hypot(m.x - s0.x, m.y - s0.y) >= TRAIL_MIN) {
@@ -487,12 +516,15 @@ class LocalServer {
       }
 
       // ---- 2) 一次遍历建【累积弧长表】（直接存在采样点上），顺带得到总长 ----
+      // Math.hypot 在热点里比 sqrt(dx*dx+dy*dy) 慢一个数量级（它要做溢出保护），
+      // 这里轨迹点数 × 链数 × 60Hz，必须用 sqrt。
       let total = 0;
       {
         let ax = m.x, ay = m.y;
         for (let i = 0; i < m._trail.length; i++) {
           const p = m._trail[i];
-          total += Math.hypot(p.x - ax, p.y - ay);
+          const ddx = p.x - ax, ddy = p.y - ay;
+          total += Math.sqrt(ddx * ddx + ddy * ddy);
           p.s = total;
           ax = p.x; ay = p.y;
         }
@@ -521,7 +553,7 @@ class LocalServer {
         const prev = (m._trail.length >= 2) ? m._trail[m._trail.length - 2]
           : { x: m.x - Math.cos(m.facing), y: m.y - Math.sin(m.facing) };
         let ux = tail.x - prev.x, uy = tail.y - prev.y;
-        const d = Math.hypot(ux, uy) || 1;
+        const d = Math.sqrt(ux * ux + uy * uy) || 1;
         ux /= d; uy /= d;
         let remain = want - total;
         while (remain > 1e-3 && m._trail.length < MAX_PTS) {
@@ -559,7 +591,7 @@ class LocalServer {
           // 理论上已被第 2 步补足；兜底沿最后一段外推，保证间距恒定
           const b = m._trail[m._trail.length - 1];
           let ux = b.x - px, uy = b.y - py;
-          let d = Math.hypot(ux, uy);
+          let d = Math.sqrt(ux * ux + uy * uy);
           if (d < 1e-6) { ux = Math.cos(m.facing); uy = Math.sin(m.facing); d = 1; }
           const extra = Math.max(0, acc - prevS);
           hx = b.x + ux / d * extra;
@@ -585,14 +617,25 @@ class LocalServer {
       // 正常爬行时两节距离远大于阈值，一次都不会触发，等于没有开销。
       const cn = chain.length;
       if (cn > 2) {
-        for (let it = 0; it < 2; it++) {
+        // 半径/间距预算一次：以前每对 (i,j) 都调两次 radOf（读 shape.r、drawSize），
+        // 60 节的链一轮就是 3600 次调用 × 4 轮。
+        const rad = this._chainR || (this._chainR = []);
+        rad.length = cn;
+        for (let i = 0; i < cn; i++) rad[i] = radOf(chain[i]);
+        // 只检查【沿链相隔不超过 12 节】的配对：弧长摆放本来就保证前后节沿路径分开，
+        // 真正会"挤在一起"的只有折返/急转处相邻的那十几节；隔得再远还重叠说明整条盘成
+        // 一团，那种情况松不松弛都看不出来。这一条把 O(n²) 从 3600 对压到 ~600 对。
+        const WINDOW = 12;
+        for (let it = 0; it < 4; it++) {
           let moved = false;
           for (let i = 0; i < cn; i++) {
             const mi = chain[i];
-            const ri = radOf(mi);
-            for (let j = i + 2; j < cn; j++) {
+            const ri = rad[i];
+            const jEnd = Math.min(cn, i + WINDOW + 1);
+            for (let j = i + 2; j < jEnd; j++) {
               const mj = chain[j];
-              const minD = (ri + radOf(mj)) * 0.98;
+              // 严格相切：不允许任何一对非相邻节重叠（旧值 0.98 允许 2% 重叠）
+              const minD = (ri + rad[j]) * 1.002;
               let dx = mj.x - mi.x, dy = mj.y - mi.y;
               const d2 = dx * dx + dy * dy;
               if (d2 >= minD * minD || d2 < 1e-12) continue;
@@ -612,9 +655,9 @@ class LocalServer {
           // 相邻复位：从头往外逐节钉回标称间距，保证不脱节
           for (let i = 1; i < cn; i++) {
             const a = chain[i - 1], b = chain[i];
-            const gap = (radOf(a) + radOf(b)) * GLUE;
+            const gap = (rad[i - 1] + rad[i]) * GLUE;
             let dx = b.x - a.x, dy = b.y - a.y;
-            let d = Math.hypot(dx, dy);
+            let d = Math.sqrt(dx * dx + dy * dy);
             if (d < 1e-6) { dx = Math.cos(a.facing + Math.PI); dy = Math.sin(a.facing + Math.PI); d = 1; }
             b.x = a.x + (dx / d) * gap;
             b.y = a.y + (dy / d) * gap;
@@ -634,6 +677,28 @@ class LocalServer {
         if (m._trail[i].s > maxLen) { keep = i + 1; break; }
       }
       if (keep < m._trail.length) m._trail.length = keep;
+    }
+  }
+
+  // 链体 vs 玩家：_solveChains 是每步最后一步，会把前面推开的节按轨迹重新摆好 ——
+  // 于是玩家站在身体前方时，节会被摆回到玩家身上，看起来就是整条蜈蚣【直接从花朵身上穿过去】。
+  // 这里补一趟"只推玩家、不推节"的分离：节是刚体节点，推它只会脱节（下一帧又被摆回来）；
+  // 玩家是自由实体，被身体扫到就该被顶开，与"头节撞到玩家"是同一观感。
+  _pushPlayerOutOfChains() {
+    const p = this.player;
+    const src = this._awake;
+    if (!p || p.dead || !src) return;
+    const pr = p.r || 0;
+    for (let i = 0; i < src.length; i++) {
+      const m = src[i];
+      if (m.dead || m.sleeping || !m._chainLocked) continue;
+      const dx = m.x - p.x, dy = m.y - p.y;
+      const rr = (m.r || 0) + pr + 4;
+      if (dx * dx + dy * dy > rr * rr) continue;
+      const hit = mobHitTest(m, p.x, p.y, pr);
+      if (!hit || hit.depth <= 0) continue;
+      p.x += hit.nx * hit.depth;
+      p.y += hit.ny * hit.depth;
     }
   }
 
@@ -679,8 +744,18 @@ class LocalServer {
     //    远处生物【休眠】：全图人口按生成表铺开，但只有近距离的才跑 AI/物理，
     //    所以"全图 100+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
     const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
+    // 【醒着的个体收进一个复用数组】：下面"玩家推挤 / 两两推挤 / 战斗"三步直接遍历它，
+    // 不再每步把全图 4000+ 只各扫一遍（每一步 4 次全量扫描是 17ms/步里最大的一块）。
+    // 数组本体复用（length = 0），不产生垃圾。
+    const awake = this._awake || (this._awake = []);
+    awake.length = 0;
+    let needCompact = false;
     for (const m of this.ents) {
-      if (!m.dead && dist2(m.x, m.y, p.x, p.y) > actR2) { m.sleeping = true; continue; }
+      if (m.dead) {
+        if (m.deathTimer > FADE_T) needCompact = true;   // 退场播完：本步末尾才真正移除
+      } else if (dist2(m.x, m.y, p.x, p.y) > actR2) {
+        m.sleeping = true; continue;
+      }
       m.sleeping = false;
       // 多节生物：前节已死 -> 本节升为"头"（重新跑自己的 AI 驱动它后面那整段）
       // —— 这就是【中间被打断分裂成多段】：每段由自己最前一节的 AI 控制，与有没有触角无关。
@@ -692,8 +767,11 @@ class LocalServer {
       // （跟随=被头拽着走，与轨迹法冲突，已彻底移除）。
       m._followPt = null;
       m.update(dt, p, this.map);
+      if (!m.dead) awake.push(m);
     }
-    this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
+    // 只在真有"退场播完"的个体时才重建数组（filter 会分配 4000+ 元素的新数组，
+    // 每步都做就是纯 GC 压力）。
+    if (needCompact) this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
 
     // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
     this.spawnT = (this.spawnT || 0) + dt;
@@ -705,9 +783,13 @@ class LocalServer {
     // 3) 玩家 vs 生物：按重量 + 动能推挤（physicsPush）。重的一方几乎不动、轻的被推飞；
     //    很快的玩家能推动"更大一点"重量的生物；小生物再也推不动大生物。
     if (!p.dead) {
-      for (const m of this.ents) {
-        if (m.dead || m.sleeping) continue;      // 休眠生物离玩家很远，不可能接触
-        physicsPush(p, m);
+      for (let i = 0; i < awake.length; i++) {
+        const m = awake[i];
+        if (m.dead) continue;                    // 休眠生物离玩家很远，不可能接触
+        // 与伤害结算 / F3 碰撞箱同一套几何：生物的 SVG 轮廓（physicsPushMob 内部按轮廓推挤）。
+        // 被粘合的链节【只推玩家】：节的位置每帧末由轨迹刚性解算，推它会被覆盖并撕开整条。
+        if (m._chainLocked) physicsPushPlayerOnly(p, m);
+        else physicsPushMob(p, m);
       }
     }
 
@@ -717,13 +799,13 @@ class LocalServer {
     //    两两配对是 O(k²) ≈ 50 万次/帧，即使每次只是一次距离判断也会打爆帧率。
     //    这里按格子分桶，只比较同格与相邻格（格距按最大半径自动扩）——
     //    实际配对数量降到"每只周围真正贴着的几只"。
-    const ms = this.ents;
+    const ms = awake;
     const CELL = 192;
     const grid = this._pushGrid || (this._pushGrid = new Map());
     grid.clear();
     let maxR = 0, seq = 0;
     for (const m of ms) {
-      if (m.dead || m.sleeping) continue;
+      if (m.dead) continue;
       if (m.r > maxR) maxR = m.r;
       m._pseq = seq++;                       // 本帧唯一序号：保证每对只处理一次
       const gx = Math.floor(m.x / CELL), gy = Math.floor(m.y / CELL);
@@ -735,7 +817,7 @@ class LocalServer {
     // 两个半径之和可能超过一格 -> 按最大半径决定要看几圈相邻格
     const ring = Math.max(1, Math.ceil((maxR * 2) / CELL));
     for (const a of ms) {
-      if (a.dead || a.sleeping) continue;
+      if (a.dead) continue;
       const gx = Math.floor(a.x / CELL), gy = Math.floor(a.y / CELL);
       for (let dx = -ring; dx <= ring; dx++) {
         for (let dy = -ring; dy <= ring; dy++) {
@@ -765,6 +847,8 @@ class LocalServer {
     // 前面所有会改坐标的步骤（AI 移动、玩家推挤、生物两两推挤、战斗击退）都跑完之后
     // 再统一解算，否则链会在同一帧里被后续逻辑推开（这就是"怎么改都没改善"的原因）。
     this._solveChains();
+    // 解算完再补一次链体与玩家的分离（只推玩家）—— 否则身体会从花朵身上穿过去。
+    this._pushPlayerOutOfChains();
   }
 
   // 战斗结算：只负责"谁掉多少血/谁该被弹开"，并把结果写成事件交给客户端表现。
@@ -781,10 +865,12 @@ class LocalServer {
     //   · 它属于"花瓣种类的能力"，不该在战斗循环里按 slug 特判；
     //   · PetalFX.tick 在 Player.update 中逐花瓣推进，天然在命中判定之外；
     //   · 战斗 tick 是 25Hz，回血写在这里会被节流成阶梯状。
-    for (const m of this.ents) {
-      // 休眠生物距玩家 > MOB_ACTIVE_R(2200)，而花瓣射程远小于它，不可能接触：
-      // 跳过它们等于省掉全图 4500+ 只 × 花瓣数 × 25Hz 的轮廓判定。
-      if (m.dead || m.sleeping) continue;
+    // 只见"醒着"的个体（this._awake 由 step() 每步重建）：
+    // 休眠生物距玩家 > MOB_ACTIVE_R(2200)，而花瓣射程远小于它，不可能接触 ——
+    // 跳过它们等于省掉全图 4500+ 只 × 花瓣数 × 25Hz 的轮廓判定。
+    const awake = this._awake || this.ents;
+    for (const m of awake) {
+      if (m.dead) continue;
       // —— 花瓣 vs 昆虫（严格按 SVG 轮廓多边形判定，不再用外接圆）——
       for (const b of p.petals) {
         if (b.dead || b.fxNoCombat) continue;
@@ -796,7 +882,8 @@ class LocalServer {
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
         //（Leaf 的持续回血不在这里 —— 见下方独立循环，它不该依赖"是否命中生物"）
-        // ---- 花瓣 vs 生物的接触性质：按花瓣种类分派（nx/ny = 接触法线，由生物表面指向花瓣）----
+        // ---- 花瓣 vs 生物（nx/ny = 接触法线，由生物表面指向花瓣）----
+        // 这里只算公共量（质量 / 反质量份额 / 接近速度），具体接触规则由 PetalFX.onHit 决定。
         //   · 普通花瓣 =【软碰撞】：本身不构成阻挡，只在接近时传一次动能把生物弹开，
         //     大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数，0.28s 内只传一次。
         //   · Honey    =【硬碰撞】：是有质量的实体【��】，与生物重叠即按穿透深度强制分离（绝不重合），
@@ -805,9 +892,11 @@ class LocalServer {
         //     结果就退化成"只结算伤害、没有实体碰撞"。
         const nx = hit.nx, ny = hit.ny;
         const approach = Math.max(0, -((b.vx || 0) * nx + (b.vy || 0) * ny));
+        // 相对法向速度：生物自己撞上来也算一次接触（花瓣停在原地被撞同样要传动能）。
+        // 只用花瓣自身速度的话，"站着不动让怪撞"永远传不出力，两种花瓣都不弹。
+        const relN = Math.abs(((b.vx || 0) - (m.vx || 0)) * nx + ((b.vy || 0) - (m.vy || 0)) * ny);
         const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
         const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
-        const isHoney = !!(b.card && b.card.type && b.card.type.hardCollide);
         // 花瓣重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight，随稀有度递增）。
         // 花瓣实体长期缺失 weight，正是"连 Eternal 蜜都被 rare 生物随便推着跑"的根因。
         const wP = petalWeight(b), wM = m.weight || 1;
@@ -817,34 +906,20 @@ class LocalServer {
         // 【仅】作用于生物击退时封顶 1.5×（用户要求：最大动能传递 = 同等级实体间击退的 1.5 倍）；
         // 实体之间的推动 / 位移分离不走这里，按反质量自然分配，【不设上限】。
         const kbBoost = clamp(Math.sqrt(wP / wM), 2 / 3, KB_DISPARITY_MAX);
-        if (isHoney) {
-          // 蜜 =【硬碰撞】实体：只要重叠就每 tick 强制分离，且分离量按【反质量分配】
-          // （与 physicsPush 完全同一套模型）—— 重的一方几乎不动：
-          // Eternal 蜜（≈249）面对 rare 生物（≈4）几乎不位移，反而把撞上来的轻生物顶开。
-          const depth = hit.depth || 0;
-          if (depth > 0) {
-            b.x += nx * depth * shareP; b.y += ny * depth * shareP;
-            m.x -= nx * depth * shareM; m.y -= ny * depth * shareM;
-          }
-          // 顺势给一点沿法线向外的惯性滑行（0.28s 节流，避免每 tick 叠加把蜜弹飞）；
-          // 推动量同样按反质量衰减：越重的蜜越推不动。
-          if (!(b.kbT > 0)) {
-            const mobIn = (m.vx || 0) * nx + (m.vy || 0) * ny;   // 生物朝蜜这一侧的接近速度
-            const k = clamp(Math.max(approach, mobIn) / PETAL_KB_REF, 0.35, 2.2);
-            const push = HONEY_PUSH * k * shareP;
-            b.vx = (b.vx || 0) + nx * push;
-            b.vy = (b.vy || 0) + ny * push;
-            b.kbT = PETAL_KB_CD;
-          }
-        } else if (approach >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
-          // 普通花瓣 =【软碰撞】：只在撞上去那一下传一次动能把生物弹开，自身不硬抗。
-          // 传递量含质量悬殊系数 kbBoost，但已封顶 1.5× 一般值（同等级实体间击退）。
-          const impact = clamp(approach / PETAL_KB_REF, 0.35, 2.2);
-          applyKnockback(m, -nx, -ny, PETAL_KB_BASE * jshare * jmass * impact * kbBoost);
-          b.kbT = PETAL_KB_CD;
-        }
-        const toPetal = Math.max((m.dmg || 0) - 0, 0);
-        const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
+        // 接触力 / 分离交给花瓣自己的 PetalFX 定义：
+        //   普通花瓣 =【软碰撞】（只在撞上去那一下传一次动能把生物弹开）；
+        //   Honey    =【硬碰撞】（按穿透深度强制分离，绝不重合，会被生物顶着走）。
+        // 战斗循环只负责伤害与耐久，不再按"是不是蜜"分支。
+        PetalFX.onHit(b, p, {
+          dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
+          wP, wM, shareP, shareM, kbBoost
+        });
+        // 双向伤害走【同一个公式】（花瓣与花朵本体同阵营，口径必须一致）：
+        //   伤害方 dmg - 受击方 armor，钳到 0。
+        // 旧代码是 `m.dmg - 0`（花瓣吃全额、不扣护甲）而本体 `m.dmg - p.armor` ——
+        // 同一个生物打花瓣和打本体是两套算法，这就是"两边表现不一样"的来源之一。
+        const toPetal = this._dmg(m.dmg, b.armor);
+        const toMob = this._dmg(st.dmg, m.armor);
         if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
         if (toMob > 0) {
           this._hitMob(m, toMob);
@@ -859,8 +934,8 @@ class LocalServer {
       // 花朵本体作为实体：把体伤视为本体的 Damage(bodyDmg)、血量视为本体 Health(hp)，与怪一视同仁双向结算。
       const phit = mobHitTest(m, p.x, p.y, p.r + 0.5);
       if (phit) {
-        const toMob = Math.max((p.bodyDmg || 0) - (m.armor || 0), 0);
-        const toFlower = Math.max((m.dmg || 0) - (p.armor || 0), 0);
+        const toMob = this._dmg(p.bodyDmg, m.armor);
+        const toFlower = this._dmg(m.dmg, p.armor);
         if (toMob > 0) this._hitMob(m, toMob);
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
@@ -886,20 +961,22 @@ class LocalServer {
     // 这里把它写进周围生物的仇恨表，让它们转火来啃蜜而不是玩家。
     // 限制条件：只在 HONEY_PULL_R 内、且稀有度不超过该蜜的 Max Mob Rarity。
     const TICK = 1 / 25;
-    for (const m of this.ents) {
+    // 先挑出"可能吸引仇恨的花瓣"（静止摆在地上那种）。绝大多数时候一朵都没有，
+    // 那就整段跳过 —— 旧写法对全图 4000+ 只 × 每片花瓣调一次 canAttract，
+    // 25Hz 下是战斗 tick 的主要开销（实测 7ms/tick 里的大头）。
+    const attr = this._attr || (this._attr = []);
+    attr.length = 0;
+    for (const b of p.petals) {
+      if (b.dead || !b.stationary || !b.card) continue;
+      attr.push(b);
+    }
+    if (attr.length) for (const m of this.ents) {
       if (m.dead || m.honeyImmune || m.sleeping) continue;
-      const mIdx = RARITY_ORDER.indexOf(m.rarity);
-      let hit = null;                       // 本 tick 范围内、够稀有度的一坨蜜
-      for (const b of p.petals) {
-        if (b.dead || !b.stationary || !b.card) continue;
-        const bt = b.card.type;
-        if (!bt || !bt.attractMobs) continue;
-        const maxR = (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(bt, b.card.rarity) : null;
-        // 该稀有度的蜜【没登记上限】（如 common 蜜）-> 什么都吸引不了，而不是"什么都不限"。
-        // 之前写成 `if (maxR && ...)`，缺失时直接放行，导致 common 蜜也能吸引全场 —— 这是错的。
-        if (!maxR) continue;
-        if (mIdx > RARITY_ORDER.indexOf(maxR)) continue;
-        if (dist2(b.x, b.y, m.x, m.y) > HONEY_PULL_R * HONEY_PULL_R) continue;
+      let hit = null;                       // 本 tick 范围内能吸引它的一坨蜜
+      for (const b of attr) {
+        // 能否吸引：能力字段（attractMobs / maxMobRarity）+ 范围，统一由 PetalFX 判定。
+        // 该稀有度【没登记上限】（如 common 蜜）-> 什么都吸引不了，而不是"什么都不限"。
+        if (!PetalFX.canAttract(b, p, m)) continue;
         // 仇恨值取"远高于任何伤害"，且 topThreat() 里蜜强制首位 —— 双重保证优先啃蜜
         if (!m.threat.some((t) => t.ent === b)) m.threat.push({ ent: b, dmg: 1e9 });
         if (!hit) hit = b;
@@ -913,13 +990,26 @@ class LocalServer {
       }
     }
 
-    // 伤害飘字聚合窗口结算：窗口(0.12s)结束后把该怪累计的真实伤害作为一条飘字发出
-    for (const m of this.ents) {
-      if (m.dmgTextT > 0) {
+    // 伤害飘字聚合窗口结算：只遍历"这一窗内有未结算伤害"的那几只（_hitMob 里挂进来），
+    // 不再每 tick 扫全图 4000+ 只。
+    const dl = this._dmgList;
+    if (dl && dl.length) {
+      let w = 0;
+      for (let i = 0; i < dl.length; i++) {
+        const m = dl[i];
+        if (!(m.dmgTextT > 0)) continue;          // 已结算 / 已击杀刷新过
         m.dmgTextT -= 1 / 25;
         if (m.dmgTextT <= 0) this._flushDmg(m);
+        else dl[w++] = m;
       }
+      dl.length = w;
     }
+  }
+
+  // 全服唯一的伤害口径：伤害方 dmg - 受击方 armor（钳到 0）。
+  // 花瓣 / 花朵本体 / 生物 三个方向都必须走它 —— 否则"同阵营的实体挨打却两套算法"。
+  _dmg(fromStat, toArmor) {
+    return Math.max((fromStat || 0) - (toArmor || 0), 0);
   }
 
   _hitMob(m, toMob) {
@@ -927,18 +1017,53 @@ class LocalServer {
     const r = m.hurt(toMob, this.player);
     if (r.applied > 0) {
       m.pendDmg = (m.pendDmg || 0) + r.applied;
-      if (!(m.dmgTextT > 0)) m.dmgTextT = 0.12;
+      if (!(m.dmgTextT > 0)) {
+        m.dmgTextT = 0.12;
+        (this._dmgList || (this._dmgList = [])).push(m);   // 见 _combatTick 末尾
+      }
     }
     if (r.killed) {
       // 击杀：立刻把累计真实伤害作为一条飘字弹出（不等聚合窗口），再发击杀事件
       this._flushDmg(m);
+      // Super 及以上：全服系统公告（伤害榜榜首 + 稀有度配色）
+      this._announceBossKill(m);
       this._events.push({
         kind: 'kill', id: m.netId, mobId: (m.type.id != null ? m.type.id : m.name),
         level: m.level, rarity: m.rarity,
+        chain: !!m.chainLong,                // 超长蜈蚣的节：客户端据此追加【隐藏掉落】
         x: m.x, y: m.y                       // 掉落物出现在生物死亡位置
       });
     }
     return !!(r.killed);
+  }
+
+  // Super / Eternal 生物被击杀 -> 全服系统公告：
+  //   "A(An) <Rarity> <MobName> was destroyed by <PlayerName>"
+  //   · 稀有度、生物名与正文一样取自被击杀生物；
+  //   · 玩家名 = 伤害榜榜首（threat 里累计真实伤害最高者；蜜是拉仇恨的假数据，排除）；
+  //   · 文字颜色 = 被击杀生物的稀有度色（客户端 Chat 用 ev.color）。
+  _announceBossKill(m) {
+    if (!m) return;
+    const ri = RARITY_ORDER.indexOf(m.rarity);
+    if (ri < RARITY_ORDER.indexOf('super')) return;      // 只播报 super / eternal
+    let top = null, best = -1;
+    for (const t of m.threat || []) {
+      if (!t.ent || t.ent.honey) continue;               // 蜜不是伤害来源
+      if (t.dmg > best) { best = t.dmg; top = t.ent; }
+    }
+    const p = this.player;
+    const killer = (top && top.name) ? top.name : ((p && p.name) || 'Guest');
+    const rarName = I18N.t('Rarities/' + m.rarity + '/Name', m.rarity);
+    const mobName = m.name || (m.type && m.type.name) || 'Mob';
+    const art = /^[aeiou]/i.test(rarName) ? 'An' : 'A';
+    const color = (typeof RARITIES !== 'undefined' && RARITIES[m.rarity])
+      ? RARITIES[m.rarity].color : '#fff';
+    this._events.push({
+      kind: 'sys', channel: 'global', color,
+      text: I18N.tf('Chat/Sys/BossDestroyed',
+        { 0: art, 1: rarName, 2: mobName, 3: killer },
+        art + ' ' + rarName + ' ' + mobName + ' was destroyed by ' + killer)
+    });
   }
 
   // 把某个怪在聚合窗口内累计的真实伤害作为一条飘字事件发出（普通命中也要有伤害反馈，
@@ -1033,11 +1158,26 @@ class LocalServer {
           'Initialized ' + ((this.map && this.map.name) || 'map') + ': spawned ' + res.spawned + ' mob(s) (target ' + res.total + ').')
       });
     } else if (cmd === '/summon') {
+      // /summon <mob_id> <rarity>[<k=v,...>] <count>
+      //   参数用方括号追加在稀有度后面，例如：/summon 3 common[type=long] 1
+      //   目前只有多节生物（蜈蚣）支持 type，有效值 normal / long
       const mobId = parseInt(parts[1], 10);
-      const rarity = parts[2];
+      const rareArg = parts[2] || '';
       const count = parseInt(parts[3], 10);
       if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) {
         this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadMobId' }); return;
+      }
+      const rm = /^([A-Za-z_]+)(?:\[([^\]]*)\])?$/.exec(rareArg);
+      const rarity = rm ? rm[1].toLowerCase() : '';
+      const opts = {};
+      if (rm && rm[2]) {
+        for (const seg of rm[2].split(',')) {
+          const kv = seg.split('=');
+          if (kv.length !== 2 || !kv[0].trim()) {
+            this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
+          }
+          opts[kv[0].trim().toLowerCase()] = kv[1].trim().toLowerCase();
+        }
       }
       if (!rarity || RARITY_ORDER.indexOf(rarity) < 0) {
         this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadRarity' }); return;
@@ -1045,12 +1185,26 @@ class LocalServer {
       if (!Number.isFinite(count) || count < 1) {
         this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadCount' }); return;
       }
+      const type = MOB_BY_ID[mobId];
+      const chain = isSegmentMob(type);
+      // 参数校验：只认多节生物的 type；其余组合一律报错，避免"写了参数却没生效"
+      for (const k of Object.keys(opts)) {
+        if (k !== 'type' || !chain || (opts[k] !== 'normal' && opts[k] !== 'long')) {
+          this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
+        }
+      }
       const n = Math.max(1, Math.min(count, 50));   // 上限保护，避免一次刷太多
       const px = p.x, py = p.y;
       for (let i = 0; i < n; i++) {
         const a = Math.random() * TAU;
         const r = n > 1 ? 20 + Math.random() * 25 : 0;
-        this.addEnt('mob', mobId, rarity, 1, px + Math.cos(a) * r, py + Math.sin(a) * r);
+        if (chain) {
+          // 多节生物：一次生成整条。type=long 强制超长、type=normal 强制短版，
+          // 不写参数则走自然规则（只有 common 有 0.3% 概率长成超长个体）。
+          this._spawnChain(type, px + Math.cos(a) * r, py + Math.sin(a) * r, rarity, null, opts.type);
+        } else {
+          this.addEnt('mob', mobId, rarity, 1, px + Math.cos(a) * r, py + Math.sin(a) * r);
+        }
       }
       InvulnFX.add(p, 'summon', 4);
       this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/Done' });
@@ -1160,36 +1314,83 @@ class LocalServer {
       // 滞留实体（放在地上的 Pollen / Honey）的【位置与速度】必须由服务端权威下发：
       // 它们会被生物硬碰撞推挤，客户端若只按自己算的就永远停在原地 ——
       // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
-      petals: p ? p.petals.map((b) => {
-        const o = {
-          slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
-          hurtT: b.hurtT || 0, dead: !!b.dead
-        };
-        if (b.stationary) { o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0; }
-        return o;
-      }) : [],
+      petals: this._snapPetals(p),
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
-      ents: this.ents.map((m) => ({
-        id: m.netId, typeId: m.type.id, rarity: m.rarity, level: m.level,
-        x: m.x, y: m.y, facing: m.facing, hp: m.hp, maxHp: m.maxHp, dead: m.dead,
-        // 速度：客户端 physicsPush 的"接近速度"项需要生物真实速度。
-        // 不下发时客户端把生物冲过来的动能整段丢掉，玩家预测位置会持续偏离权威位置。
-        // 视图实体不积分位置，这两个值只参与本帧推挤计算，下一帧会被新快照覆盖。
-        vx: m.vx || 0, vy: m.vy || 0,
-        // 多节生物：头节(12_h 带触角) / 身体节(12_b) 用不同贴图，必须下发否则客户端画不出区分
-        artSvg: m.artSvg || null,
-        // 多节生物的节序号：客户端据此不做逐节插值（见 game.js），保证整条刚性对齐、顺序不错
-        segIdx: (m.segIdx != null) ? m.segIdx : null,
-        // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 entities.js Mob.draw
-        plateStyle: m.plateStyle || null,
-        // 表现层状态全部由服务端权威置位，必须下发，否则客户端视图实体这些字段恒为 0：
-        //   hurtT  = 受伤红闪（0.3s 渐隐）
-        //   flash  = 白闪（0.14s 白色剪影）
-        //   squash = 受击挤压（Q 弹一下）
-        //   deathTimer / deathRot = 死亡放大渐隐 / 尸体旋转角
-        hurtT: m.hurtT || 0, flash: m.flash || 0, squash: m.squash || 0,
-        deathTimer: m.deathTimer || 0, deathRot: m.deathRot || 0
-      }))
+      ents: this._fillEnts()
     };
+  }
+
+  // 快照里的花瓣状态。
+  // 【必须覆盖"有卡、但此刻没有实体"的槽位】——花瓣被打碎后 _destroyPetal 只打 dead 标记
+  // 并把该槽放进 reload，实体则在【下一帧】的 _syncPetals 里被移出 p.petals。
+  // 旧实现直接下发 p.petals，于是"这一槽已经没有了"这件事只能靠"打碎那一帧刚好发了快照"
+  // 才传得到客户端（快照 25Hz、模拟 60Hz，命中率约 40%）。
+  // 漏掉的那一次：客户端按 (slot, sub, gen) 永远找不到条目 -> 既不碎也不进装填，
+  // 变成一片绕圈飞的【幽灵花瓣】：画面上从生物身上直接飘过去，服务端却没有这片花瓣，
+  // 一点伤害都结算不到（"花瓣飘过去、和瓢虫不发生任何交互"的根因）。
+  // 所以这里为"槽位有卡、却没有对应实体记录"的槽位补一条 dead 记录。
+  _snapPetals(p) {
+    const out = [];
+    if (!p) return out;
+    for (const b of p.petals) {
+      const o = {
+        slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
+        hurtT: b.hurtT || 0, dead: !!b.dead
+      };
+      if (b.stationary) { o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0; }
+      out.push(o);
+    }
+    const slots = p.slots || [];
+    for (let i = 0; i < slots.length; i++) {
+      const c = slots[i];
+      if (!c) continue;
+      let has = false;
+      for (const b of p.petals) { if (b.slotIndex === i) { has = true; break; } }
+      if (has) continue;                       // 该槽已有实体记录（含"已碎但还没被移除"的多体子体）
+      // 一卡多体（Light 等）按实体数补齐，否则客户端只杀得掉 sub 0，其余照旧是幽灵。
+      const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
+        ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
+      const gen = ((p._petalGen && p._petalGen[i]) | 0);
+      for (let sub = 0; sub < Math.max(1, cnt); sub++) {
+        out.push({ slot: i, sub, gen, hp: 0, maxHp: 0, hurtT: 0, dead: true });
+      }
+    }
+    return out;
+  }
+
+  // ---- 快照里的生物数组 ----
+  // 【复用同一批对象】而不是每次 map() 造 4000+ 个新对象（25Hz 下 = 10 万+ 对象/秒，GC 拉满）。
+  // 快照是同步消费的：本地实现由客户端在本次 step 里立刻读走，远端实现会先 JSON 序列化，
+  // 两种情况下都不会有人把这份数组留到下一个快照。
+  _fillEnts() {
+    const src = this.ents;
+    const buf = this._entBuf || (this._entBuf = []);
+    let n = 0;
+    for (let i = 0; i < src.length; i++) {
+      const m = src[i];
+      let o = buf[n];
+      if (!o) o = buf[n] = {};
+      o.id = m.netId; o.typeId = m.type.id; o.rarity = m.rarity; o.level = m.level;
+      o.x = m.x; o.y = m.y; o.facing = m.facing; o.hp = m.hp; o.maxHp = m.maxHp; o.dead = m.dead;
+      // 速度：客户端 physicsPush 的"接近速度"项需要生物真实速度。
+      // 不下发时客户端把生物冲过来的动能整段丢掉，玩家预测位置会持续偏离权威位置。
+      o.vx = m.vx || 0; o.vy = m.vy || 0;
+      // 多节生物：头节(12_h 带触角) / 身体节(12_b) 用不同贴图，必须下发否则客户端画不出区分
+      o.artSvg = m.artSvg || null;
+      // 多节生物的节序号：客户端据此不做逐节插值（见 game.js），保证整条刚性对齐、顺序不错
+      o.segIdx = (m.segIdx != null) ? m.segIdx : null;
+      // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 entities.js Mob.draw
+      o.plateStyle = m.plateStyle || null;
+      // 表现层状态全部由服务端权威置位，必须下发，否则客户端视图实体这些字段恒为 0：
+      //   hurtT  = 受伤红闪（0.3s 渐隐）
+      //   flash  = 白闪（0.14s 白色剪影）
+      //   squash = 受击挤压（Q 弹一下）
+      //   deathTimer / deathRot = 死亡放大渐隐 / 尸体旋转角
+      o.hurtT = m.hurtT || 0; o.flash = m.flash || 0; o.squash = m.squash || 0;
+      o.deathTimer = m.deathTimer || 0; o.deathRot = m.deathRot || 0;
+      n++;
+    }
+    buf.length = n;
+    return buf;
   }
 }

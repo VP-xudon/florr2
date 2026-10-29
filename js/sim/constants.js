@@ -10,6 +10,13 @@ const MOB_CHASE_MULT = 0.90;          // 通用追击速度 = 0.90×（瓢虫及
 const MOB_WANDER_MULT = 0.95;         // 游荡速度的基准倍率（与追击解耦，保持原有游荡手感）
 const MOB_WANDER_RANGE = [0.3, 0.5];  // 游荡速度 = 基准 ×(0.3~0.5) 随机
 const MOB_WANDER_SCALE = 0.75;        // 游荡速度在基础值上再打 0.75 折（全生物统一）
+// ---- 视野 / 脱战 ----
+// 生物的"看见"= 距离 ≤ 视野半径 且 两点之间没有墙。
+// 看不见的目标会被【暂时忽略】（仇恨仍记账，等重新看见才会继续追）——
+// 所以贴着墙、卡住拐角就能甩掉仇恨。
+const MOB_SIGHT_R = 1200;             // 基础视野半径（px）
+// 被"看不见的敌人"偷袭（自己当前也没在追人）时：以追击速度沿反方向逃开的距离（px）
+const MOB_FLEE_DIST = 320;
 // 蜜蜂的追击倍率 / 游荡倍率 / S 型开关已迁到数据表（data.js 的 MOB_TRAITS），
 // 行为层只读 type.chaseMult / type.wanderFactor / type.sPath，不再按 slug 判断。
 const BEE_S_AMP = 0.62;               // 摆头幅度（弧度 ≈ 35°）
@@ -22,9 +29,9 @@ const BEE_S_LEN_MAX_K = 2.0;          // Eternal 单个 S 长度 / Common 长度
 // 花瓣实体的绘制尺寸（与 draw() 里的 size 必须同一套，阵型偏移要用它换算）
 const PETAL_ENT_SIZE = 15 * 0.9;      // 13.5：花瓣视觉缩至原 0.9
 const PEAS_FLIGHT_T = 2.0;            // Peas 喷射后的存活时长（s）：到点强制移除
-// 蜈蚣（多节生物）的移速不在这里定：它按【0.5 × 瓢虫游荡速度】在 Mob 构造函数里
-// 从自己的 wanderSpeed 推算（并记录为 _centSpeedCap 供 update 做硬上限），
-// 所以不依赖任何"倍率常量"，也就不存在倍率没生效的可能。
+// 蜈蚣（多节生物）的移速不在这里定：由它自己的 AI 定义（js/ai.js 的 centipede.init）
+// 从基础 wanderSpeed 推出 0.65×，并记录 _centSpeedCap 供引擎做硬上限。
+// 新增物种的移速口径同理 —— 写在各自 AI 的 init 里，不再往这张常量表里堆特判。
 // 花瓣【自转】：独立于公转（绕主角的轨道运动），从实体加载好那一刻起持续、缓慢地转。
 // 绘制朝向 = 公转朝向(阵型基准) + 自转；普通花瓣则完全用自转（不再由轨道位置反推）。
 const PETAL_SELF_SPIN = 0.9;          // 自转速度（rad/s）
@@ -38,6 +45,17 @@ function rarityWeight(rarity) {
 }
 // 实体推挤的恢复系数（0=不弹，1=完全弹性）：低值主要表现为"推挤/阻力"而非弹飞
 const PUSH_RESTITUTION = 0.2;
+
+// ---- 行走碰撞箱（只用于【与墙体/禁行地形】的碰撞）----
+// 伤害结算、被玩家推动、花瓣命中判定全部继续用 Mob.r（等面积圆）与 Mob.shape（SVG 轮廓），
+// 这里只是一套独立的"走路箱"。上限 = 1 格瓦片 0.9 倍正方形的【内接圆】：
+//   边长 0.9×瓦片 = 259.2px，内接圆半径 = 129.6px。
+// 于是无论生物多大，走路箱都塞得进 1 格瓦片宽的通道（0.9 格宽的箱子 + 两侧各 0.05 格余量）。
+const MOB_WALK_LIMIT_R = 0.45 * ((typeof GARDEN_TILE === 'number') ? GARDEN_TILE : 288);
+// 追击寻路时向前探路的距离（px）：至少一个瓦片，让 AI 能"看见"下一个格口再决定拐弯
+const MOB_WALK_LOOKAHEAD = ((typeof GARDEN_TILE === 'number') ? GARDEN_TILE : 288) * 0.9;
+// 探路的扇形档位（弧度）：直行不通时左右各扫 15°/30°/…/90°
+const MOB_WALK_STEP_A = Math.PI / 12;
 
 // 花朵本体数值（体伤 / 血量 / 受击保护）。集中在此，避免散落的魔法数。
 const FLOWER_BASE_HP     = 100;   // 花朵基础血量（装备花瓣不再额外增加 maxHp）
@@ -171,6 +189,13 @@ const PETAL_NET_SYNC = 1 / 25;
 //   · 大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数
 //   · 停在表面摩擦时接近速度≈0 -> 完全不推（不会像硬碰撞那样被顶着走）
 const PETAL_KB_BASE = 26;          // px：单次接触传递的位移（系数 1.0 时）
+
+// ---- 花瓣与生物的实体碰撞（只有 PETAL_TRAITS 里声明 solid 的花瓣才有）----
+// 接触时必须【保留】的穿透量(px)：把生物推成"刚好相切"的话，下一 tick 的命中判定
+// 就变成 depth<=0 -> 既不再结算伤害也不再有接触力，花瓣看起来就"卡在碰撞箱外沿又打不到"。
+const PETAL_CONTACT_SKIN = 2.2;
+// 揉搓：沿生物表面的切向摩擦上限(px/s)，让生物"蹭着"花瓣滑走，而不是被钉死在一个点上。
+const PETAL_RUB_MAX = 120;
 const PETAL_KB_MIN_APPROACH = 90;  // px/s：低于此速度视为揉搓，不传能量
 const PETAL_KB_REF = 340;          // 接近速度归一化基准
 const PETAL_KB_CD = 0.28;          // 同一片花瓣两次传能的最小间隔（秒）

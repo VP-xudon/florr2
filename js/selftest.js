@@ -144,6 +144,9 @@
     check('sim: 花瓣槽位与实体一致', () =>
       Array.isArray(p.petals) && Array.isArray(p.reload) ? '' : 'petals/reload 非数组');
 
+    // 让花瓣全部装填完（后续断言都假定"花瓣已在轨道上"）
+    game.stepFrames(150, 1 / 60, false);
+
     // 移动：键盘模式按住 D，位置应当右移
     const x0 = p.x;
     game.moveMode = 'keyboard';
@@ -399,6 +402,436 @@
       };
     });
 
+    // 8b) 生物 AI 引擎：按物种分派独立 AI + 蜈蚣的弧线/转向/限速真正生效
+    check('ai: 生物 AI 按物种分派', () => {
+      const typeOf = (slug) => (typeof MOB_TYPES === 'undefined') ? null
+        : MOB_TYPES.find((t) => t && t.slug === slug);
+      const bad = [];
+      let detail = '';
+      // ① 分派：瓢虫走通用游走、蜜蜂走 S 型、蜈蚣走连续弧线
+      for (const [slug, key] of [['ladybug', 'wander'], ['bee', 'bee'], ['centipede', 'centipede']]) {
+        const t = typeOf(slug);
+        if (!t) continue;                                  // 未启用的生物跳过
+        const m = new Mob(t, 0, 0, 1, 'common');
+        if (m.aiKey !== key) bad.push(slug + '=' + m.aiKey + '≠' + key);
+      }
+      // ② 蜈蚣：连续 120 帧必须真的产出移动欲望，且转向不超过 arcRate×dt
+      const ct = typeOf('centipede');
+      if (ct) {
+        const m = new Mob(ct, 0, 0, 1, 'common');
+        const DT = 1 / 25;
+        let moved = 0, maxTurn = 0, prev = m.ai.heading;
+        for (let i = 0; i < 120; i++) {
+          const v = MobAI.step(m.ai, DT, m, null);
+          moved += Math.hypot(v.x, v.y);
+          const d = Math.abs(MobAI._util.angNorm(m.ai.heading - prev));
+          if (d > maxTurn) maxTurn = d;
+          prev = m.ai.heading;
+        }
+        const lim = (m.arcRate || 0.1) * DT * 1.01;
+        // ③ 限速：给一个超大欲望，必须被钳回本物种的硬上限
+        const cap = m._centSpeedCap || 0;
+        const cappedVec = MobAI.limitSpeed(m, { x: 99999, y: 0 });
+        const capped = Math.abs(Math.hypot(cappedVec.x, cappedVec.y) - cap) < 0.01;
+        if (!(moved > 0)) bad.push('蜈蚣没有移动欲望');
+        if (!(maxTurn <= lim)) bad.push('蜈蚣转向超速 ' + maxTurn.toFixed(4) + '>' + lim.toFixed(4));
+        if (!capped) bad.push('蜈蚣限速失效');
+        detail = ' 蜈蚣120帧欲望=' + moved.toFixed(1) + ' 最大转向=' + maxTurn.toFixed(4) +
+          ' 限速=' + cap.toFixed(1);
+      }
+      return { ok: bad.length === 0, detail: (bad.length ? bad.join(' ') : '分派正确') + detail };
+    });
+
+    // 8c) 花瓣能力：8 种启用花瓣全部注册；脱轨/喷射/硬碰撞/吸引由引擎统一分派
+    check('engine: 花瓣能力由 PetalFX 统一接管', () => {
+      const typeOf = (slug) => PETAL_TYPES.find((t) => t && t.slug === slug);
+      const missing = PETAL_TYPES.filter((t) => !PetalFX.defOf(t)).map((t) => t.slug);
+      const bad = missing.length ? ['未注册: ' + missing.join(',')] : [];
+      const p = game.player;
+      const mkBody = (t, x) => ({
+        card: { type: t, rarity: 'rare' }, slotIndex: 0, sub: 0, selfRot: 0,
+        x: x || 0, y: 0, vx: 10, vy: 0, age: 1, hp: 10, maxHp: 10
+      });
+      // ① 喷射型（Peas）：detach 必须给出 launch 速度，而不是"惯性滑行"
+      const peas = typeOf('peas');
+      if (peas) {
+        const plan = PetalFX.detach(mkBody(peas), p);
+        const sp = plan ? Math.hypot(plan.vx, plan.vy) : 0;
+        if (!(sp > 100)) bad.push('peas 未喷射 sp=' + sp.toFixed(1));
+      }
+      // ② solid 花瓣（Honey）：把生物推出轮廓、花瓣自身钉住不动、并保留接触量
+      const honey = typeOf('honey');
+      if (honey) {
+        const b = mkBody(honey);
+        const mob = { x: 1, y: 0, vx: -200, vy: 0, rarity: 'common', kbX: 0, kbY: 0 };
+        const bx = b.x, mx = mob.x;
+        const contact = {
+          dt: 0.04, mob, hit: { nx: 1, ny: 0, depth: 4 }, approach: 200, relN: 200,
+          jmass: 1, jshare: 0.85, wP: 1, wM: 1, shareP: 0.5, shareM: 0.5, kbBoost: 1
+        };
+        PetalFX.onHit(b, p, contact);
+        if (b.x !== bx || b.y !== 0) bad.push('花瓣被推动了（solid 花瓣必须钉住不动）');
+        if (!(mob.x < mx)) bad.push('solid 花瓣没把生物推出轮廓 mob.x=' + mob.x);
+        // 推出去的量必须小于穿透量：留 PETAL_CONTACT_SKIN 的接触，否则下一 tick 判不到，
+        // 就成了"卡在碰撞箱外沿、既不受伤也不再结算"
+        const pushed = mx - mob.x;
+        if (!(pushed < 4)) bad.push('一次推完了整段穿透 pushed=' + pushed.toFixed(2));
+        if (!(mob.kbX < 0)) bad.push('honey 未沿法线传动能 kbX=' + mob.kbX);
+        const once = mob.kbX;
+        PetalFX.onHit(b, p, contact);                      // 冷却内重复接触
+        if (mob.kbX !== once) bad.push('同一次接触传了两次动能');
+        // ③ 无实体碰撞的花瓣：同样不位移任何一方（只传一次动能）
+        const basic = typeOf('basic');
+        if (basic) {
+          const b2 = mkBody(basic);
+          const m2 = { x: 1, y: 0, vx: -300, vy: 0, rarity: 'common', kbX: 0, kbY: 0 };
+          PetalFX.onHit(b2, p, {
+            dt: 0.04, mob: m2, hit: { nx: 1, ny: 0, depth: 4 }, approach: 200,
+            jmass: 1, jshare: 0.85, wP: 1, wM: 1, shareP: 0.5, shareM: 0.5, kbBoost: 1
+          });
+          if (m2.x !== 1) bad.push('非 solid 花瓣位移了生物');
+        }
+        // ④ 稀有度上限：rare 蜜只吸得到 common，吸不到 epic
+        if (PetalFX.canAttract(b, p, { rarity: 'epic', x: 10, y: 0 })) bad.push('honey 稀有度上限失效');
+        if (!PetalFX.canAttract(b, p, { rarity: 'common', x: 10, y: 0 })) bad.push('honey 连 common 都吸不到');
+      }
+      return { ok: bad.length === 0, detail: bad.length ? bad.join(' ') : '注册齐全 + 实体碰撞/喷射/稀有度上限正常' };
+    });
+
+    // 8c1) 实体碰撞必须【逐个花瓣显式声明】（不允许"没写就默认某种行为"）
+    check('data: 花瓣实体碰撞逐个声明', () => {
+      const enabled = Array.from(ENABLED_PETAL_SLUGS || []);
+      const undeclared = enabled.filter((s) => !PETAL_TRAITS[s] || typeof PETAL_TRAITS[s].solid !== 'boolean');
+      const solids = enabled.filter((s) => PETAL_TRAITS[s] && PETAL_TRAITS[s].solid === true);
+      // 类型表里的 solid 必须与声明一致（行为层只读 type.solid）
+      const mismatch = PETAL_TYPES.filter((t) => !!t.solid !== !!(PETAL_TRAITS[t.slug] && PETAL_TRAITS[t.slug].solid))
+        .map((t) => t.slug);
+      const ok = undeclared.length === 0 && mismatch.length === 0;
+      return {
+        ok,
+        detail: ok
+          ? `共 ${enabled.length} 种；有实体碰撞=${solids.join(',') || '无'}`
+          : `未声明=${undeclared.join(',')} 不一致=${mismatch.join(',')}`
+      };
+    });
+
+    // 8c1b) 玩家与生物的推挤必须和伤害结算 / F3 用同一套轮廓（旧实现用等面积圆，大怪穿模）
+    check('sim: 玩家推挤用生物轮廓', () => {
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      const p = game.player;
+      if (!type || !p) return '跳过';
+      const m = new Mob(type, p.x + 80, p.y, 1, 'eternal');   // 大型生物：等面积圆远小于外形
+      m._ensureShape();
+      if (!m.shape) return '轮廓未就绪（跳过）';
+      const saved = { x: p.x, y: p.y, vx: p.vx || 0, vy: p.vy || 0 };
+      let dist = 0, inside = true;
+      try {
+        p.x = m.x; p.y = m.y; p.vx = 0; p.vy = 0;             // 直接塞进生物中心
+        for (let i = 0; i < 24; i++) physicsPushMob(p, m);
+        const hit = mobHitTest(m, p.x, p.y, p.r);
+        inside = !!(hit && hit.depth > 0.01);
+        dist = Math.hypot(p.x - m.x, p.y - m.y);
+      } finally {
+        p.x = saved.x; p.y = saved.y; p.vx = saved.vx; p.vy = saved.vy;
+      }
+      return {
+        ok: !inside,
+        detail: `被推到 ${dist.toFixed(1)}px（等面积 r=${m.r.toFixed(1)}，外形半径更大）`
+      };
+    });
+
+    // 8c2) 花瓣与生物重叠：必须【双向】受伤，且走同一套「伤害 - 护甲」口径
+    check('sim: 花瓣与生物双向受伤', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv || !srv.player) return '无本地服务端（跳过）';
+      const p = srv.player;
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      const b = (p.petals || []).find((x) => !x.dead);
+      if (!type || !b) return '跳过';
+      const m = new Mob(type, b.x, b.y, 1, 'common');
+      m.netId = 1e9 + 1;
+      m._ensureShape();
+      if (!m.shape) return '轮廓未就绪（跳过）';   // 没有 SVG 轮廓就没有命中判定
+      m.hp = m.maxHp = 1e6;                        // 别让它被打死，只看数字
+      // 给一片花瓣一个足够大的血池：真实花瓣只有十几点血，1~2 个 tick 就碎了，
+      // 那样测不出"三个 tick 都在双向扣血"（碎了之后本 tick 之后就不再结算）。
+      const savedEnts = srv.ents, savedAwake = srv._awake, savedEv = srv._events;
+      const savedHp = b.hp, savedMaxHp = b.maxHp, savedNoCmb = b.fxNoCombat;
+      b.maxHp = 10000; b.hp = 10000;
+      b.fxNoCombat = false;          // 玫瑰回血等特效期间该实体不参与战斗，别让断言随机跳过
+      const bHp0 = b.hp, bMax0 = b.maxHp, mHp0 = m.hp;
+      let bAfter = bHp0, mAfter = mHp0;
+      try {
+        srv.ents = [m]; srv._awake = [m]; srv._events = [];
+        for (let i = 0; i < 3; i++) srv._combatTick();
+        bAfter = b.hp; mAfter = m.hp;
+      } finally {
+        srv.ents = savedEnts; srv._awake = savedAwake; srv._events = savedEv;
+        b.hp = savedHp; b.maxHp = savedMaxHp; b.dead = false; b.hurtT = 0;
+        b.fxNoCombat = savedNoCmb;
+      }
+      const st = petalStatsFor(b.card.type, b.card.rarity);
+      const toPetal = Math.max((m.dmg || 0) - (b.armor || 0), 0);
+      const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
+      // 3 个 tick：花瓣掉 3×生物伤害 + 3×攻击磨损；生物掉 3×花瓣伤害
+      const wantPetal = 3 * toPetal + 3 * (bMax0 || 0) * PETAL_ATTACK_DUR;
+      const wantMob = 3 * toMob;
+      const okB = Math.abs((bHp0 - bAfter) - wantPetal) < 0.01;
+      const okM = Math.abs((mHp0 - mAfter) - wantMob) < 0.01;
+      return {
+        ok: bAfter < bHp0 && mAfter < mHp0 && okB && okM,
+        detail: `花瓣 -${(bHp0 - bAfter).toFixed(1)}（应为 ${wantPetal.toFixed(1)}）`
+          + ` 生物 -${(mHp0 - mAfter).toFixed(1)}（应为 ${wantMob.toFixed(1)}）`
+      };
+    });
+
+    // 8c3) 花瓣血量镜像：世代号错位（客户端/服务端脱轨差一 tick）也必须能对上
+    check('net: 花瓣血量镜像容错', () => {
+      const p = game.player;
+      const b = (p.petals || []).find((x) => !x.dead && !x.stationary);
+      if (!b) return '跳过';
+      const oldNet = p.netPetals, oldHp = b.hp, oldMax = b.maxHp, oldGen = b.gen || 0;
+      try {
+        const gen = oldGen + 7;                     // 故意错位
+        p.netPetals = {};
+        p.netPetals[b.slotIndex + '|' + (b.sub || 0) + '|' + gen] =
+          { slot: b.slotIndex, sub: b.sub || 0, gen, hp: 3, maxHp: 10, dead: false, hurtT: 0 };
+        p._applyNetPetalStates();
+        const okHp = b.hp === 3 && b.maxHp === 10;
+        const okGen = b.gen === gen;
+        return { ok: okHp && okGen, detail: `hp=${b.hp}/${b.maxHp} gen=${b.gen}（应为 ${gen}）` };
+      } finally {
+        p.netPetals = oldNet; b.hp = oldHp; b.maxHp = oldMax; b.gen = oldGen;
+      }
+    });
+
+    // 8d) 蜈蚣 AI 真的驱动头节（不是只挂了个 aiKey）
+    check('ai: 蜈蚣头节真的会移动', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv || !srv.ents) return '无本地服务端（跳过）';
+      const head = srv.ents.find((m) => m.segIdx === 0 && !m.dead && !m._lead);
+      if (!head) return '场上没有蜈蚣段首（跳过）';
+      const x0 = head.x, y0 = head.y;
+      for (let i = 0; i < 40; i++) head.update(1 / 25, game.player, srv.map);
+      const moved = Math.hypot(head.x - x0, head.y - y0);
+      return { ok: moved > 4, detail: '1.6s 位移=' + moved.toFixed(1) + 'px' };
+    });
+
+    // 8e) 普通生物也必须真的会移动（旧 bug：撞墙误判让全体生物原地转头）
+    check('sim: 普通生物真的会移动', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv || !srv.ents) return '无本地服务端（跳过）';
+      const m = srv.ents.find((e) => !e.dead && e.segIdx == null && !e.obstacle && e.aiKey === 'wander');
+      if (!m) return '场上没有普通游走生物（跳过）';
+      const x0 = m.x, y0 = m.y;
+      let maxV = 0, blocked = 0;
+      for (let i = 0; i < 75; i++) {
+        m.update(1 / 25, game.player, srv.map);
+        const v = Math.hypot(m.vx, m.vy);
+        if (v > maxV) maxV = v;
+        if (m.ai && m.ai.blockedT > 0) blocked++;
+      }
+      const moved = Math.hypot(m.x - x0, m.y - y0);
+      return {
+        ok: moved > 5,
+        detail: '3s 位移=' + moved.toFixed(1) + 'px 最大速度=' + maxV.toFixed(1) +
+          ' 误判堵住帧=' + blocked
+      };
+    });
+
+    // 8f) 掉落粒子时长按掉落概率分级（3s / 6s / 15s / 永久）
+    check('sim: 掉落粒子时长按概率分级', () => {
+      if (typeof dropFxDuration !== 'function') return { ok: false, detail: 'dropFxDuration 未定义' };
+      const cases = [[0.04, 3], [0.009, 6], [0.002, 15], [0.0005, Infinity], [0.5, 0]];
+      const bad = [];
+      for (const [c, want] of cases) {
+        const got = dropFxDuration('common', c);
+        if (got !== want) bad.push(c + '->' + got + '≠' + want);
+      }
+      if (dropFxDuration('ultra', 0.9) !== Infinity) bad.push('ultra 非永久');
+      return { ok: bad.length === 0, detail: bad.length ? bad.join(' ') : '3s/6s/15s/永久/无 分级正确' };
+    });
+
+    // 8g) 超长蜈蚣：只有 common 能自然生成；/summon 的 type=long 可强制任意稀有度
+    check('sim: 超长蜈蚣生成规则', () => {
+      const srv = game.net && game.net.debugServer;
+      const type = (typeof MOB_TYPES === 'undefined') ? null
+        : MOB_TYPES.find((t) => t && t.slug === 'centipede');
+      if (!srv || !type) return '跳过';
+      const bad = [];
+      const n0 = srv.ents.length;
+      srv._spawnChain(type, 0, 0, 'rare', null);            // 自然生成：非 common 必须短版
+      let added = srv.ents.slice(n0);
+      if (added.some((m) => m.chainLong)) bad.push('rare 自然生成出了超长个体');
+      if (!(added.length >= 8 && added.length <= 15)) bad.push('短版节数=' + added.length);
+      srv.ents.length = n0;
+      const n1 = srv.ents.length;
+      srv._spawnChain(type, 0, 0, 'common', null, 'long');  // /summon type=long
+      added = srv.ents.slice(n1);
+      if (!added.every((m) => m.chainLong)) bad.push('long 标记缺失');
+      if (!(added.length >= 45 && added.length <= 60)) bad.push('long 节数=' + added.length);
+      srv.ents.length = n1;
+      const drops = (typeof CHAIN_LONG_DROPS === 'undefined') ? null : CHAIN_LONG_DROPS;
+      if (!drops || drops.length !== 9) bad.push('隐藏掉落表缺失');
+      else if (!(drops[0].chance === 0.04 && drops[8].rarity === 'eternal')) bad.push('隐藏掉落表内容异常');
+      return { ok: bad.length === 0, detail: bad.length ? bad.join(' ') : 'common 0.3% 自然 / long 强制 ok' };
+    });
+
+    // 8h) Boss 血条：Eternal 优先于 Super；多只纵向排布；真的画出了像素
+    check('ui: Boss 血条排序与绘制', () => {
+      if (typeof BossBar === 'undefined' || !BossBar.game) return '未加载';
+      const g = BossBar.game;
+      const mk = (rarity, dist) => ({
+        x: g.camera.x + dist * 0.1, y: g.camera.y, rarity,
+        dead: false, gone: false, name: rarity, hp: 100, maxHp: 100, dispHp: 100, ghostHp: 100
+      });
+      // super 更近、eternal 更远 -> 先按稀有度分层，Eternal 仍必须排第一
+      const near = mk('super', 1), far = mk('eternal', 9);
+      g.mobs.push(near, far);
+      const picked = BossBar._pick();
+      g.mobs.pop(); g.mobs.pop();
+      const okOrder = picked[0] === far && picked[1] === near;
+      // 绘制：临时塞一条满血条目，比对顶部中轴线区域的像素是否发生变化
+      const cy = BossBar._slotY(g, 0);
+      BossBar.items.push({ id: -1, mob: mk('super', 0), a: 1, slot: 0, y: cy, targetY: cy });
+      const cx = Math.round(g.W / 2 * g.dpr);
+      const py = Math.round(cy * g.dpr);
+      const before = g.ctx.getImageData(cx - 4, py - 4, 8, 8).data;
+      BossBar.draw(g.ctx, g);
+      const after = g.ctx.getImageData(cx - 4, py - 4, 8, 8).data;
+      BossBar.items.pop();
+      let changed = 0;
+      for (let i = 0; i < after.length; i += 4) {
+        if (after[i] !== before[i] || after[i + 1] !== before[i + 1]) changed++;
+      }
+      const okDraw = changed > 0;
+      // 条高：当前规格 = 上一版 33.6px × 1.1 = 36.96px（bh 52.8 × BAR_K 0.7），锁住数值防回归
+      const bhv = BossBar._size(g).bh * BossBar.BAR_K;
+      const okH = Math.abs(bhv - 36.96) < 1e-6;
+      return {
+        ok: okOrder && okDraw && okH,
+        detail: (okOrder ? 'Eternal 优先' : '排序错误') + ' / ' + (okDraw ? '绘制有像素变化' : '绘制无变化')
+          + ' / 条高=' + bhv.toFixed(1) + 'px'
+      };
+    });
+
+    // 8i) 蜈蚣：游击转向半径 = 1 节直径；游荡 = 大半径长弧；与墙保持 1 个瓦片
+    check('ai: 蜈蚣转弯半径与避墙', () => {
+      const type = (typeof MOB_TYPES === 'undefined') ? null
+        : MOB_TYPES.find((t) => t && t.slug === 'centipede');
+      if (!type) return '跳过';
+      const m = new Mob(type, 0, 0, 1, 'common');
+      const bad = [];
+      if (!(m.turnRadius > 0)) bad.push('turnRadius 缺失');
+      if (!(Math.abs(m.chaseTurn - m.chaseSpeed / m.turnRadius) < 1e-6)) bad.push('chaseTurn 口径不对');
+      if (m.wallKeep !== GARDEN_TILE) bad.push('wallKeep=' + m.wallKeep);
+      // 游荡必须是【大半径长弧】：半径 ≥ 540px，对应曲率 = 速度 / 半径 很小
+      if (!(m.arcRadius >= 540)) bad.push('arcRadius=' + m.arcRadius);
+      if (!(m.arcRate > 0 && m.arcRate < 0.12)) bad.push('arcRate=' + m.arcRate);
+      // 稀有度越高，弧半径越大（turnRadius 随 visualD 增长）
+      const mr = new Mob(type, 0, 0, 1, 'rare');
+      if (!(mr.arcRadius > m.arcRadius)) bad.push('高稀有度弧半径没有变大');
+      // 连续 200 帧：航向变化率不得超过「速度 / 半径」对应的曲率上限
+      let maxRate = 0, prev = m.ai.heading;
+      for (let i = 0; i < 200; i++) {
+        MobAI.step(m.ai, 1 / 25, m, null);
+        const d = Math.abs(MobAI._util.angNorm(m.ai.heading - prev)) * 25;
+        if (d > maxRate) maxRate = d;
+        prev = m.ai.heading;
+        if (!Number.isFinite(m.ai.curv)) { bad.push('curv 非有限'); break; }
+      }
+      if (maxRate > m.chaseTurn + 1e-3) bad.push('转向速率 ' + maxRate.toFixed(2) + ' > ' + m.chaseTurn.toFixed(2));
+      // 探测：四周都不可站时必须给出转向方向（不能返回 0）
+      m._map = { canStandAt: () => false };
+      const dir = MobAI.defs.centipede._wallProbe(m, m.ai);
+      if (!dir) bad.push('全堵时未给出避让方向');
+      m._map = null;
+      return {
+        ok: bad.length === 0,
+        detail: bad.length ? bad.join(' ')
+          : `转向半径=${m.turnRadius.toFixed(0)}px 大弧半径=${m.arcRadius.toFixed(0)}px 最大角速度=${maxRate.toFixed(2)}`
+      };
+    });
+
+    // 8j) 高稀有度装备花瓣：Super/Eternal（以及 ultra 的 basic）持续冒同色圆形粒子
+    //     粒子进的是 auraFx（画在花瓣【之下】，不是普通 particles），密度 1.6x（0.09 -> 0.05625s）
+    check('fx: 高稀有度花瓣光环', () => {
+      const p = game.player;
+      if (!p) return '跳过';
+      const basic = PETAL_TYPES.find((t) => t && t.slug === 'basic');
+      const rose = PETAL_TYPES.find((t) => t && t.slug === 'rose');
+      const old = p.petals;
+      const before = game.auraFx.length;
+      const pBefore = game.particles.length;    // 光环粒子【不许】再进普通 particles
+      p.petals = [
+        { dead: false, x: p.x, y: p.y, card: { rarity: 'eternal', type: basic } },
+        { dead: false, x: p.x, y: p.y, card: { rarity: 'ultra', type: basic } },
+        { dead: false, x: p.x, y: p.y, card: { rarity: 'ultra', type: rose } }
+      ];
+      game._auraAcc = 1;                       // 跳过节流
+      game._tickPetalAura(0.1);
+      const added = game.auraFx.length - before;
+      // 密度：1 秒内单片 eternal 的新增数量（0.09s 间隔约 11 颗，1.6x 后约 15 颗）
+      p.petals = [{ dead: false, x: p.x, y: p.y, card: { rarity: 'eternal', type: basic } }];
+      game._auraAcc = 0;
+      const n0 = game.auraFx.length;
+      for (let i = 0; i < 60; i++) game._tickPetalAura(1 / 60);
+      const perSec = game.auraFx.length - n0;
+      game.auraFx.length = before;             // 还原（截到测试前长度）
+      p.petals = old;
+      const ok = added === 2 && perSec >= 14 && game.particles.length === pBefore;
+      return {
+        ok,
+        detail: `新增=${added}（eternal + ultra basic；ultra rose 不算）密度=${perSec}/s（1.6x）`
+      };
+    });
+
+    // 8j2) 行走碰撞箱：墙体口径 = min(自身, 1 格瓦片 0.9 倍正方形的内接圆)
+    //      伤害口径（r / shape / collSize）必须完全不变，且巨型个体一定塞得进 1 格通道。
+    check('sim: 行走碰撞箱（1 格通道可通行）', () => {
+      if (typeof Mob === 'undefined' || typeof MOB_TYPES === 'undefined') return '跳过';
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      if (!type) return '跳过';
+      const cap = 0.45 * GARDEN_TILE;                 // 0.9 格正方形的内接圆半径
+      const big = new Mob(type, 0, 0, 1, 'eternal');
+      const small = new Mob(type, 0, 0, 1, 'common');
+      big._ensureShape(); small._ensureShape();
+      const bad = [];
+      if (!big.walkHull) bad.push('walkHull 缺失');
+      if (big.walkSize > 0.9 * GARDEN_TILE + 0.01) bad.push('巨型 walkSize=' + big.walkSize.toFixed(1));
+      if (big.walkR > cap + 0.01) bad.push('巨型 walkR=' + big.walkR.toFixed(1));
+      if (!(big.r > cap)) bad.push('伤害半径被误改=' + big.r.toFixed(1));
+      if (Math.abs(small.walkR - small.r) > 0.01) bad.push('普通个体 walkR 被误改');
+      if (Math.abs(small.walkSize - small.drawSize) > 0.01) bad.push('普通个体 walkSize 被误改');
+      // 凸包外接圆 = 走路箱真正的最大半径：超限就等于"过不去 1 格口"
+      const hullR = (m) => Math.max(...m.walkHull.map(([x, y]) => Math.hypot(x, y))) * m.walkSize;
+      if (big.walkHull && hullR(big) > cap + 0.5) bad.push('凸包外接半径 ' + hullR(big).toFixed(1) + ' 超限');
+      return {
+        ok: bad.length === 0,
+        detail: bad.length ? bad.join(' ') :
+          `Eternal: r=${big.r.toFixed(0)} -> walkR=${big.walkR.toFixed(0)} / walkSize=${big.walkSize.toFixed(0)}` +
+          `（上限 ${(0.9 * GARDEN_TILE).toFixed(0)}）；Common 不受影响`
+      };
+    });
+
+    // 8k) Super/Eternal 击杀公告：全服系统消息、稀有度配色、伤害榜榜首
+    check('chat: Boss 击杀全服公告', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv) return '跳过';
+      const before = srv._events.length;
+      srv._announceBossKill({
+        name: 'Centipede', rarity: 'eternal',
+        threat: [{ ent: { name: 'Guest 1234' }, dmg: 50 }],
+        type: { name: 'Centipede' }
+      });
+      const ev = srv._events[before];
+      srv._events.length = before;
+      const ok = !!ev && ev.kind === 'sys' && ev.channel === 'global'
+        && ev.color === RARITIES.eternal.color
+        && ev.text.indexOf('Guest 1234') >= 0 && ev.text.indexOf('Centipede') >= 0;
+      return { ok, detail: ev ? ev.text : '无事件' };
+    });
+
     // 9) F3 调试屏幕：能开关、有内容、关掉后碰撞箱一起关
     check('ui: F3 调试屏幕', () => {
       if (typeof DebugScreen === 'undefined' || !DebugScreen.refs) return '未初始化（跳过）';
@@ -411,6 +844,44 @@
       return {
         ok: onShown && hitOn && offHidden,
         detail: 'show=' + onShown + ' hitbox=' + hitOn + ' hide=' + offHidden
+      };
+    });
+
+    // 9b) F3 面板的三处历史 bug：花瓣血量百分比 / 朝向 / 帧率来源
+    check('ui: F3 花瓣血量与朝向归一', () => {
+      if (typeof DebugScreen === 'undefined' || !DebugScreen.refs) return '未初始化（跳过）';
+      const p = game.player;
+      const oldPetals = p.petals, oldSlots = p.slots, oldF = p.facing;
+      const card = p.slots.find(Boolean);
+      let text = '', facingTxt = '';
+      try {
+        if (!card) return '跳过';
+        // 一个"已碎裂且 hp 为负"的实体 + 一个满血实体：旧写法会显示 -2900%
+        p.slots = [card];
+        p.petals = [
+          { dead: false, slotIndex: 0, card, hp: -29, maxHp: 1 },
+          { dead: true, slotIndex: 0, card, hp: -5, maxHp: 1 },
+        ];
+        p.facing = 3 * Math.PI * 2 + 0.5;          // 连续绕圈后的"超范围"朝向
+        DebugScreen.toggle();                       // 打开 -> 强制刷新 DOM
+        DebugScreen._acc = 1;
+        DebugScreen.update(0.2);
+        text = (DebugScreen.refs.petals || {}).textContent || '';
+        // 字段元素挂在 DebugScreen.v 上（refs 只有 root / petals）
+        facingTxt = (DebugScreen.v.facing || {}).textContent || '';
+        DebugScreen.toggle();
+      } finally {
+        p.petals = oldPetals; p.slots = oldSlots; p.facing = wrapAngle(oldF);
+      }
+      const hpOk = text.indexOf('-') < 0 && /(0|—)\s*%?/.test(text);
+      const faceOk = /^\d{1,3}°$/.test(facingTxt) && parseInt(facingTxt, 10) <= 360;
+      // 帧率必须来自主循环（真实 rAF 间隔），不能再由 F3 自己按固定步长数出来
+      const fpsOk = (typeof game.perf.fps === 'number')
+        && game.perf.fps >= 0 && game.perf.fps <= 1000
+        && (typeof DebugScreen._fps === 'undefined');
+      return {
+        ok: hpOk && faceOk && fpsOk,
+        detail: `花瓣="${text.trim()}" 朝向=${facingTxt} 帧率来源=${typeof game.perf.fps}`
       };
     });
 
@@ -477,6 +948,73 @@
     check('runtime: 无未捕获异常', () => {
       const errs = window.__selftestErrors || [];
       return errs.length === 0 ? '' : errs.slice(0, 5).join(' | ');
+    });
+
+    // 花瓣命中生物：瓢虫压在花瓣身上，跑 1.5s，生物必须掉血。
+    // 这条守的是【命中管线】本身：轮廓判定 + 服务端权威位置的战斗 tick + 伤害口径。
+    // 用"钉在花瓣当前位置"而不是"钉在轨道环某点"：后者要等花瓣公转到那个角度，
+    // 存活花瓣少的时候会整轮都碰不上（变成随机失败）。
+    check('fix: 花瓣命中生物并结算', () => {
+      const srv = game.net && game.net.debugServer;
+      const ps = srv && srv.player;
+      if (!ps) return '无本地服务端（跳过）';
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      // 等花瓣装填完（前面的断言可能把它们全打碎了）
+      for (let i = 0; i < 600 && !ps.petals.some((b) => !b.dead && !b.stationary); i++) {
+        game.stepFrames(1, 1 / 60, false);
+      }
+      const b0 = ps.petals.find((b) => !b.dead && !b.stationary);
+      if (!type || !b0) return '场上没有可用花瓣（跳过）';
+      const ring = Math.hypot(b0.x - ps.x, b0.y - ps.y);
+      const m = new Mob(type, b0.x, b0.y, 1, 'common');
+      m.netId = 1e9 + 41;
+      m._ensureShape();
+      if (!m.shape) return '瓢虫轮廓未就绪（跳过）';
+      m.hp = m.maxHp = 1e6;   // 别打死，只看有没有结算
+      m.dmg = 0;              // 别让花瓣被一口咬碎（那样只测到"第一击"）
+      srv.ents.push(m);
+      const hp0 = m.hp;
+      try {
+        for (let i = 0; i < 90; i++) {
+          const b = ps.petals.find((x) => !x.dead && !x.stationary);
+          if (b) { m.x = b.x; m.y = b.y; m.vx = 0; m.vy = 0; }
+          game.stepFrames(1, 1 / 60, false);
+        }
+      } finally {
+        srv.ents = srv.ents.filter((e) => e !== m);
+      }
+      const dm = hp0 - m.hp;
+      return { ok: dm > 0, detail: 'Δhp=' + dm.toFixed(1) + ' ring=' + ring.toFixed(1) + ' armor=' + m.armor };
+    });
+
+    // 花瓣被打碎后，客户端必须【同步碎裂 + 重新装填】。
+    // 快照曾经只下发 p.petals 的映射，而实体在装填期间已经从这个数组里移除 ——
+    // 客户端按 (slot,sub,gen) 找不到条目就既不碎也不进冷却，会一直画一片
+    // 打不到任何东西的幽灵花瓣（"花瓣从生物身上飘过去、一点交互都没有"的根因）。
+    check('fix: 花瓣碎裂跨端同步', () => {
+      const srv = game.net && game.net.debugServer;
+      const ps = srv && srv.player, pc = game.player;
+      if (!ps) return '无本地服务端（跳过）';
+      for (let i = 0; i < 600; i++) {
+        if (pc.petals.some((b) => !b.dead) && ps.petals.some((b) => !b.dead)) break;
+        game.stepFrames(1, 1 / 60, false);
+      }
+      // 挑一张有正经冷却的卡：冷却太短会在断言前就装满，测不出"是否同步进入装填"
+      const sb = ps.petals.find((b) => !b.dead && !b.stationary
+        && ((b.card.type.reload || 0) > 0.5));
+      if (!sb) return '服务端没有可用花瓣（跳过）';
+      const slot = sb.slotIndex;
+      srv._destroyPetal(sb);
+      game.stepFrames(20, 1 / 60, false);          // 0.33s：25Hz 快照足够下发多次
+      const cAlive = pc.petals.filter((b) => !b.dead).length;
+      const sAlive = ps.petals.filter((b) => !b.dead).length;
+      const cr = pc.reload[slot];
+      const okReload = !cr || cr.age < (cr.dur || 0);
+      return {
+        ok: cAlive === sAlive && okReload,
+        detail: 'client=' + cAlive + ' server=' + sAlive +
+          ' reload=' + (cr ? cr.age.toFixed(2) + '/' + (cr.dur || 0).toFixed(2) : '-')
+      };
     });
 
     emit();

@@ -22,14 +22,14 @@
   <canvas id="game"></canvas>
 
   <!-- 所有 HUD/面板均由 js/ui.js 动态生成，不在此写死固定元素 -->
-  <script src="js/util.js?v=20"></script>
+  <script src="js/util.js?v=21"></script>
   <script src="js/assets.js?v=25"></script>
   <script src="assets/i18n/en_US/en_US.js?v=24"></script>
   <script src="assets/i18n/zh_CN/zh_CN.js?v=20"></script>
   <script src="js/lang.js?v=12"></script>
   <script src="assets/mob-shapes.js?v=11"></script>
   <script src="assets/registry.js?v=15"></script>
-  <script src="js/data.js?v=44"></script>
+  <script src="js/data.js?v=47"></script>
   <script src="assets/petal-metrics.js?v=5"></script>
   <script src="js/cards.js?v=57"></script>
   <script src="js/ui.js?v=95"></script>
@@ -37,31 +37,33 @@
   <script src="js/ui/drag.js?v=2"></script>
   <script src="js/ui/minimap.js?v=1"></script>
   <script src="js/map.js?v=25"></script>
-  <script src="js/ai.js?v=16"></script>
-  <script src="js/petal-effects.js?v=8"></script>
+  <script src="js/ai.js?v=23"></script>
+  <script src="js/petal-effects.js?v=13"></script>
   <!-- 实体层已按"纯模拟 / 渲染"分层：sim/* 无 DOM 依赖，可在 Node 中 require -->
-  <script src="js/sim/constants.js?v=2"></script>
+  <script src="js/sim/constants.js?v=5"></script>
   <script src="js/render/render-util.js?v=2"></script>
-  <script src="js/sim/physics.js?v=1"></script>
+  <script src="js/sim/physics.js?v=4"></script>
   <script src="js/sim/mob-shape.js?v=3"></script>
-  <script src="js/sim/player.js?v=3"></script>
-  <script src="js/sim/mob.js?v=3"></script>
-  <script src="js/sim/drops.js?v=1"></script>
+  <script src="js/sim/player.js?v=8"></script>
+  <script src="js/sim/mob.js?v=7"></script>
+  <script src="js/sim/drops.js?v=2"></script>
   <script src="js/render/fx.js?v=1"></script>
   <script src="js/entities.js?v=156"></script>
   <!-- 网络层：协议 / 权威服务端 / 客户端传输 三层分离 -->
-  <script src="js/net/protocol.js?v=2"></script>
-  <script src="js/net/server.js?v=6"></script>
-  <script src="js/net/client.js?v=3"></script>
+  <script src="js/net/protocol.js?v=4"></script>
+  <script src="js/net/server.js?v=17"></script>
+  <script src="js/net/client.js?v=4"></script>
   <script src="js/net.js?v=76"></script>
-  <script src="js/chat.js?v=18"></script>
+  <script src="js/chat.js?v=19"></script>
   <!-- 项目自建文案（F3 调试屏幕 / 触控按钮），不改抓取生成的官方语言包 -->
-  <script src="js/i18n-extra.js?v=1"></script>
+  <script src="js/i18n-extra.js?v=4"></script>
   <!-- 移动端触控：自缩放摇杆 + A(reach)/B(detect) -->
   <script src="js/ui/touch.js?v=2"></script>
   <!-- F3 调试屏幕：取代原 /pending crash、/show-coord 指令 -->
-  <script src="js/ui/debug-screen.js?v=2"></script>
-  <script src="js/game.js?v=94"></script>
-  <script src="js/main.js?v=23"></script>
+  <script src="js/ui/debug-screen.js?v=3"></script>
+  <!-- 屏幕顶部 Boss 血条（Super 生物） -->
+  <script src="js/ui/bossbar.js?v=11"></script>
+  <script src="js/game.js?v=103"></script>
+  <script src="js/main.js?v=40"></script>
 </body>
 </html>

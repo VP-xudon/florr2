@@ -12,6 +12,9 @@ const HURT_SHAKE = 5.98;
 const RECONCILE_RATE = 14;    // ≈70ms 时间常数，几乎不可感知
 const RECONCILE_SNAP = 120;   // 传送/长时间卡顿等极端偏差才直接吸附
 
+// 高稀有度花瓣光环的冒粒子间隔。基准 0.09s，密度倍率 1.6 -> 0.05625s（每片热花瓣）。
+const AURA_INTERVAL = 0.09 / 1.6;
+
 // 物理键位 -> 逻辑动作。用 e.code 而非 e.key：e.key 会被输入法吞成 'Process'、
 // 且受键盘布局影响；这里每个物理键各占一个标记，方向键之间互不干扰，
 // 按住空格/Shift 时四个方向（含右方向）依然能任意组合。
@@ -77,6 +80,9 @@ class Game {
 
     this.dropFx = [];        // 掉落物粒子（正方形小块）
     this.particles = [];
+    // 高稀有度花瓣光环粒子：独立一份，因为它的【图层在花瓣之下】，
+    // 不能和普通粒子一起压在玩家/花瓣上面（见 render 里 player.draw 之前那一行）。
+    this.auraFx = [];
     this.dmgTexts = [];
     this.dex = {};   // 图鉴：mobId -> Set(已击败的稀有度)
 
@@ -192,6 +198,8 @@ class Game {
     if (typeof TouchCtl !== 'undefined') TouchCtl.init(this);
     // F3 调试屏幕：坐标 / 移速 / 花瓣转速 / 碰撞箱 / 引擎计数
     if (typeof DebugScreen !== 'undefined') DebugScreen.init(this);
+    // 屏幕顶部 Boss 血条（Super 生物，视野内或外扩 150% 内才显示）
+    if (typeof BossBar !== 'undefined') BossBar.init(this);
 
     // 花瓣特效（如玫瑰回血）的文字输出口：统一走 spawnText，样式与攻击飘字一致
     PetalFX.textSink = (x, y, text, color) => this.spawnText(x, y, text, color);
@@ -229,12 +237,16 @@ class Game {
     // 调试参数 ?hp=N（可与 mode/lang 逗号混搭）：直接设定人物血量上限与当前血量。
     // 【必须在 attach 之前应用】服务端副本要从这里继承 maxHp/hp，
     // 否则服务端停留在默认 100 血，而客户端每帧被快照的 hp 覆盖 -> "?hp 无效、一碰就死"。
-    // 非法值（非正数）忽略。
+    // 非法值（非有限数 / ≤0）忽略，并钳到 1e7 上限。
+    // 旧实现 `?hp=Infinity` 会把 Infinity 灌进 maxHp：血条比例 hp/maxHp 变成 NaN，
+    // 平滑血条 Infinity-Infinity=NaN，飘字/快照里出现 Infinity —— 这就是"开挂 bug 多"的源头之一。
+    // （`?hp=inf` 因为 parseFloat 得到 NaN，本来是被忽略的；这里连 Infinity 一起挡。）
     const hpParam = parseFloat(window.__queryParams && window.__queryParams.hp);
-    if (hpParam > 0) {
-      this.player.maxHp = hpParam;
-      this.player.hp = hpParam;
-      this.player.dispHp = hpParam; this.player.ghostHp = hpParam; this.player.ghostV = 0;
+    if (Number.isFinite(hpParam) && hpParam > 0) {
+      const hpVal = Math.min(hpParam, 1e7);
+      this.player.maxHp = hpVal;
+      this.player.hp = hpVal;
+      this.player.dispHp = hpVal; this.player.ghostHp = hpVal; this.player.ghostV = 0;
     }
     // 游客名：本地实现没有账号系统，按官方游客样式给一个随机编号（聊天里显示）
     this.player.name = 'Guest #' + (1000 + Math.floor(Math.random() * 9000));
@@ -344,7 +356,11 @@ class Game {
     if (snap.player) {
       const sp = snap.player;
       const wasDead = p.dead;
-      p.hp = sp.hp; p.maxHp = sp.maxHp; p.dead = sp.dead; p.killedBy = sp.killedBy;
+      // 防御非有限数：快照可能是远端 JSON（Infinity/NaN 会被序列化成 null），
+      // 灌进 hp/maxHp 会让血条与平滑管线一路 NaN 到画面。
+      const sHp = Number.isFinite(sp.hp) ? sp.hp : p.hp;
+      const sMax = Number.isFinite(sp.maxHp) && sp.maxHp > 0 ? sp.maxHp : p.maxHp;
+      p.hp = Math.min(sHp, sMax); p.maxHp = sMax; p.dead = sp.dead; p.killedBy = sp.killedBy;
       // 客户端不跑 hurt()/die()，死亡这一刻要在这里补一次：花瓣转退场幽灵 + 尸体旋转。
       // 少了它花瓣会"啪一下消失"，且 _petalGen 只有在 die() 里才会与实体一起清空。
       if (p.dead && !wasDead) p.die();
@@ -377,7 +393,9 @@ class Game {
     }
 
     // ---- 生物差分镜像 ----
-    const seen = new Set();
+    // 复用同一个 Set：每次快照 new 一个 4000+ 项的 Set 是纯 GC 压力。
+    const seen = this._seen || (this._seen = new Set());
+    seen.clear();
     for (const e of snap.ents) {
       seen.add(e.id);
       let v = this.mobViews.get(e.id);
@@ -415,7 +433,7 @@ class Game {
     }
     // 消失：服务端已回收的个体 -> 播放完退场渐隐再移除
     for (const v of this.mobs) {
-      if (!v.gone && !seen.has(v.netId)) v.gone = true;
+      if (!v.gone && !seen.has(v.netId)) { v.gone = true; this._goneDirty = true; }
     }
   }
 
@@ -427,7 +445,9 @@ class Game {
     } else if (ev.kind === 'kill') {
       this.recordDefeat(ev.mobId, ev.rarity);
       // 掉落：在生物死亡位置按【该生物稀有度】的掉落表逐种掷骰（可能与不掉落）
-      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y, !!(this.player && this.player.magician));
+      // ev.chain = 该节属于超长蜈蚣 -> 额外掷一套【隐藏掉落】（不进掉落表、不显示在信息栏）
+      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y,
+        !!(this.player && this.player.magician), !!ev.chain);
   
     } else if (ev.kind === 'hurt') {
       // 玩家份额的反弹：以【速度冲量】施加到预测实体上（随后指数衰减 -> 平滑滑出去），
@@ -464,11 +484,14 @@ class Game {
     // 远处生物（不在屏幕附近）只贴位置、不做插值与动画计时：
     // 全图 4600+ 只，每帧给它们算插值/血条/轮廓纯属白做（本帧根本不会画）。
     const cx = this.camera.x, cy = this.camera.y;
-    const farR = Math.max(this.W, this.H) * 0.85 + 260;
-    const far2 = farR * farR;
+    // 判定用【屏幕矩形 + 200 余量】(渲染本身也是这么裁的)：
+    // 旧写法用半径 max(W,H)*0.85+260 ≈ 1350px 的圆，差不多覆盖半张地图 ——
+    // 4000+ 只里绝大多数都在"近处"，每只都跑一遍插值/血条平滑/动画计时，白烧 1.4ms/步。
+    // 屏幕外的个体这一帧根本不会被画，贴位置就够；进屏后 blend 从 1 开始，不会跳。
+    const hw = this.W * 0.5 + 200, hh = this.H * 0.5 + 200;
     for (const m of this.mobs) {
       const dxc = m.tx - cx, dyc = m.ty - cy;
-      if (dxc * dxc + dyc * dyc > far2) {
+      if (dxc > hw || dxc < -hw || dyc > hh || dyc < -hh) {
         m.blend = 1;
         m.x = m.tx; m.y = m.ty;
         continue;
@@ -497,8 +520,17 @@ class Game {
       // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
       if (!m.shape && !m.gone) m._ensureShape();
     }
-    // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）
-    this.mobs = this.mobs.filter((m) => !(m.gone && m.deathTimer > FADE_T));
+    // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
+    // 【不要每步都 filter】：它会分配一个 4000+ 元素的新数组，每步一次就是纯 GC 压力。
+    // 只在确实标记过 gone 时、且最多 0.25s 清一次。
+    if (this._goneDirty) {
+      this._cleanAcc = (this._cleanAcc || 0) + dt;
+      if (this._cleanAcc >= 0.25) {
+        this._cleanAcc = 0;
+        this.mobs = this.mobs.filter((m) => !(m.gone && m.deathTimer > FADE_T));
+        this._goneDirty = this.mobs.some((m) => m.gone);
+      }
+    }
   }
 
   buildBackground() {
@@ -531,7 +563,11 @@ class Game {
   start() {
     // 固定步长累加器：真实经过多少时间就模拟多少（低帧率不再"减速"）。
     // 单帧最多补 MAX_STEPS 步并丢弃剩余，避免卡顿后"螺旋补偿"越积越多。
-    const STEP = 1 / 60, MAX_STEPS = 8;
+    // 【MAX_STEPS 从 8 降到 3】：补 8 步意味着一帧要干 8 份模拟，本来 12ms 的步长
+    // 会膨胀成 96ms 一帧 —— 一旦掉到 8fps 就永远回不来（每帧都补满 8 步）。
+    // 上限 3 时一帧 36ms 左右，模拟时间（50ms）≈ 真实时间，帧率明显回升；
+    // 真的跟不上时表现为轻微慢放，而不是整帧卡死。
+    const STEP = 1 / 60, MAX_STEPS = 3;
     this._running = true;
     const loop = (ts) => {
       if (!this._running) return;               // stop() 之后不再自调度（自测/回放会接管推进）
@@ -552,6 +588,19 @@ class Game {
       pf.updateMs = (t1 - t0) / Math.max(1, n);
       pf.renderMs = t2 - t1;
       pf.frameMs = dt * 1000;
+      pf.steps = n;
+      // 【真实帧率】必须用 rAF 的间隔算，不能数"模拟步"：
+      // 旧写法在 0.5s 窗口里数 update() 被调用的次数，而 update 是按固定步长补的，
+      // 于是无论卡到几帧都恒显示 60（甚至更高）。这里另算"实际模拟步/秒"——
+      // 它低于 60 就说明游戏在慢放（补步被 MAX_STEPS 截断了）。
+      this._fpsT = (this._fpsT || 0) + dt;
+      this._fpsF = (this._fpsF || 0) + 1;
+      this._stepN = (this._stepN || 0) + n;
+      if (this._fpsT >= 0.5) {
+        pf.fps = this._fpsF / this._fpsT;
+        pf.sps = this._stepN / this._fpsT;
+        this._fpsT = 0; this._fpsF = 0; this._stepN = 0;
+      }
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -578,7 +627,7 @@ class Game {
     if (this.moveMode === 'mouse' && this.mouse && !this.touchDir) {
       const mx = this.mouse.x + this.camera.x - this.W / 2;
       const my = this.mouse.y + this.camera.y - this.H / 2;
-      p.facing = lerpAngle(p.facing, Math.atan2(my - p.y, mx - p.x), clamp(dt * 12, 0, 1));
+      p.facing = wrapAngle(lerpAngle(p.facing, Math.atan2(my - p.y, mx - p.x), clamp(dt * 12, 0, 1)));
     }
 
     // —— 本地玩家：客户端预测（沿用原有 damp + moveEntity，手感与视觉零变化）——
@@ -598,14 +647,19 @@ class Game {
     // 因此"生物冲过来"的动能与服务端同源；视图实体不积分位置，冲量写入后下一帧即被覆盖，
     // 不会像旧实现那样在视图对象上留下永不衰减的幽灵速度。
     if (!p.dead) {
-      // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个调用 physicsPush 是纯浪费，
-      // 这个距离预筛用平方距（无开方），比函数调用本身还便宜。
+      // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个做轮廓判定是纯浪费，
+      // 预筛半径必须按【外接尺寸】算（collSize×0.75 ≈ 轮廓最远点），
+      // 用等面积圆 r 会漏掉"外形比 r 大得多"的大型生物 —— 那正是玩家钻进怪身体里的原因。
       for (const m of this.mobs) {
         if (m.dead) continue;
         const dx = m.x - p.x, dy = m.y - p.y;
-        const rr = (m.r || 0) + p.r + 24;
+        const rr = (m.collSize || (m.r || 0) * 2) * 0.78 + p.r + 24;
         if (dx * dx + dy * dy > rr * rr) continue;
-        physicsPush(p, m);
+        // 与伤害/F3 同一套轮廓。多节生物的节【只推玩家】：
+        // 视图节的位置来自快照插值，推它会在链上留下 1 帧的缺口（错位/抖动），
+        // 服务端那边同样只把玩家推出链体（见 _pushPlayerOutOfChains）。
+        if (m.segIdx != null) physicsPushPlayerOnly(p, m);
+        else physicsPushMob(p, m);
       }
     }
     // 残余偏差（快照滞后 / 插值位置不同）按速率收敛，避免攒到阈值再瞬移
@@ -649,7 +703,8 @@ class Game {
     this.cards = this.cards.filter(c => !c.done);
 
     // 掉落物：拾取范围 = 2 × 玩家直径；进入范围后缩小并飞向玩家中心，飞完才真正入包。
-    // Ultra 及以上在停留期间持续冒正方形粒子（Mythic 及以下只在落地时炸一次）。
+    // 停留期间持续冒正方形粒子的时长由掉落概率决定（≤5% 3s / <1% 6s / <0.3% 15s /
+    // <0.1% 与 Ultra+ 永久），普通掉落只在落地时炸一次。
     const pickR = (p.r * 2) * DROP_PICK_R;
     for (const d of this.drops) {
       d.update(dt, p);
@@ -663,16 +718,23 @@ class Game {
         }
         continue;
       }
-      if (!d.fly && DROP_FX_CONT.has(d.rarity)) {
+      // 持续粒子：时长由掉落概率分级（DropCard.fxDur），不再是"Ultra+ 才有"。
+      // 0 = 只有落地那一次 burst；Infinity = 永久迸溅（Ultra+ 或 <0.1%）。
+      if (!d.fly && d.fxDur > 0 && d.age < d.fxDur) {
         d.sparkT -= dt;
         if (d.sparkT <= 0) { d.sparkT = 0.07; this.dropSpark(d.x, d.y, d.rarity, 'rise', d.size * 0.5); }
       }
     }
     this.drops = this.drops.filter((d) => !d.done);
 
-    // 掉落物粒子 / 普通粒子 / 伤害数字
+    // 高稀有度装备花瓣：持续迸发同稀有度颜色的圆形粒子
+    this._tickPetalAura(dt);
+
+    // 掉落物粒子 / 光环粒子 / 普通粒子 / 伤害数字
     for (const s of this.dropFx) s.update(dt);
     this.dropFx = this.dropFx.filter((s) => s.life > 0);
+    for (const pt of this.auraFx) pt.update(dt);
+    this.auraFx = this.auraFx.filter(pt => pt.life > 0);
     for (const pt of this.particles) pt.update(dt);
     this.particles = this.particles.filter(pt => pt.life > 0);
     for (const d of this.dmgTexts) d.update(dt);
@@ -689,6 +751,8 @@ class Game {
     this.shake = Math.max(0, this.shake - dt * 30);
     // F3 调试屏幕：只在打开时更新（内部再限频 5Hz）
     if (typeof DebugScreen !== 'undefined' && DebugScreen.on) DebugScreen.update(dt);
+    // Boss 血条：选目标 + 渐大渐小动画（目标消失后继续收缩到 0）
+    if (typeof BossBar !== 'undefined') BossBar.update(dt);
 
 
   }
@@ -762,11 +826,24 @@ class Game {
   // 生物死亡：按 (生物 id, 稀有度) 的掉落表逐种掷骰 -> 在死亡位置生成掉落卡。
   //   · 1 件：正中央；2 件：水平并排；3~6 件：环形（比 Light 排布更松散）
   //   · 与附近已有的【完全相同卡牌】堆叠到同一张卡上（数量角标 +1）
-  //   · 每张新卡落地时炸一次正方形粒子；Ultra+ 之后持续冒（见 update）
-  spawnMobDrops(mobId, rarity, x, y, magician) {
+  //   · 每张新卡落地时炸一次正方形粒子；持续冒粒子的时长按【掉落概率】分级（见 DropCard.fxDur）
+  spawnMobDrops(mobId, rarity, x, y, magician, hidden) {
     if (typeof rollMobDrops !== 'function') return;
     if (x == null || y == null) return;
     const got = rollMobDrops(mobId, rarity) || [];
+    // 超长蜈蚣（每节）的隐藏掉落：与普通掉落并存，独立掷骰。
+    // 这张表只在代码里，不写进 registry/掉落表 -> 生物信息栏看不到任何痕迹。
+    if (hidden && typeof CHAIN_LONG_DROPS !== 'undefined') {
+      const art = petalArtOf('basic');
+      for (const hd of CHAIN_LONG_DROPS) {
+        if (Math.random() < hd.chance) {
+          got.push({
+            slug: 'basic', svg: art ? art.svg : null, name: art ? art.name : 'Basic',
+            rarity: hd.rarity, chance: hd.chance
+          });
+        }
+      }
+    }
     if (!got.length) return;
     const fresh = [];
     for (const it of got) {
@@ -775,6 +852,9 @@ class Game {
         if (d.fly || d.done) continue;
         if (d.slug === it.slug && d.rarity === it.rarity && dist(d.x, d.y, x, y) < 120) {
           d.count++;
+          // 堆叠后按「更稀有的那一件」决定粒子时长（chance 越小喷得越久）
+          const fx = dropFxDuration(it.rarity, it.chance);
+          if (fx > d.fxDur) d.fxDur = fx;
           merged = true;
           break;
         }
@@ -787,9 +867,31 @@ class Game {
       const off = dropLayoutOffset(i, n, gap);
       // 出生在死亡点，由 DropCard 自己"弹"到目标位置（见 DROP_POP_T）
       const d = new DropCard(fresh[i].slug, fresh[i].svg, fresh[i].rarity, fresh[i].name,
-        x, y, off);
+        x, y, off, fresh[i].chance);
       this.drops.push(d);
       this.dropSpark(x, y, d.rarity, 'burst', d.size * 0.5);   // 落地烟花在死亡点炸开
+    }
+  }
+
+  // 高稀有度装备花瓣的光环：在花瓣实体位置持续冒【同稀有度颜色】的圆形粒子（Particle）。
+  //   规则：任意花瓣只要稀有度是 super / eternal；外加 ultra 的 Basic（目前 ultra 只有它）。
+  //   节流到 AURA_INTERVAL（基准 0.09s，密度倍率 1.6 => 0.05625s）一颗，
+  //   避免 8 个 eternal 花瓣一起把粒子数量拉满。
+  //   粒子进的是 auraFx（画在花瓣【之下】），不是普通 particles。
+  _tickPetalAura(dt) {
+    const p = this.player;
+    if (!p || !p.petals || !p.petals.length) return;
+    this._auraAcc = (this._auraAcc || 0) + dt;
+    if (this._auraAcc < AURA_INTERVAL) return;
+    this._auraAcc = 0;
+    for (const b of p.petals) {
+      if (b.dead || !b.card) continue;
+      const t = b.card.type, r = b.card.rarity;
+      if (!t) continue;
+      const hot = (r === 'super' || r === 'eternal') || (r === 'ultra' && t.slug === 'basic');
+      if (!hot) continue;
+      const col = (typeof RARITIES !== 'undefined' && RARITIES[r]) ? RARITIES[r].color : '#fff';
+      this.auraFx.push(new Particle(b.x, b.y, col));
     }
   }
 
@@ -883,6 +985,9 @@ class Game {
     for (const m of visible) {
       try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
     }
+    // 花瓣光环粒子：必须在玩家（花瓣就在它里面画）【之前】绘制，
+    // 这样高等级卡的粒子永远在花瓣图层之下，不会盖住花瓣本体。
+    for (const pt of this.auraFx) pt.draw(ctx);
     if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
 
     for (const pt of this.particles) pt.draw(ctx);
@@ -895,6 +1000,8 @@ class Game {
 
     // /tp 目标在屏幕外时，在屏幕边缘画一个红点指向它（保证"一定看得见"）
     this._drawTpEdge(ctx, camX, camY);
+    // Boss 血条：屏幕顶部固定（不随相机滚动），画在小地图之前
+    if (typeof BossBar !== 'undefined') BossBar.draw(ctx, this);
     this._drawMinimap();
   }
 
@@ -951,15 +1058,21 @@ class Game {
       ctx.arc(p.x, p.y, p.r, 0, TAU);
       ctx.stroke();
 
-      ctx.strokeStyle = '#ffe14d';
-      ctx.beginPath();
-      for (const b of p.petals || []) {
-        if (b.dead) continue;
-        const r = PETAL_R;
-        ctx.moveTo(b.x + r, b.y);
-        ctx.arc(b.x, b.y, r, 0, TAU);
+      // 花瓣：颜色直接对应 data.js 里的 solid —— 黄 = 无实体碰撞（穿过生物、只传动能），
+      // 橙 = 有实体碰撞（把生物推开、在生物身上揉搓）。一眼就能看出是哪一类。
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass ? '#ff9a1a' : '#ffe14d';
+        ctx.beginPath();
+        for (const b of p.petals || []) {
+          if (b.dead) continue;
+          const isSolid = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'solid'));
+          if (isSolid !== !!pass) continue;
+          const r = PETAL_R;
+          ctx.moveTo(b.x + r, b.y);
+          ctx.arc(b.x, b.y, r, 0, TAU);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
 
       // 吸附连线：当前贴住哪只生物（便于确认吸附/松手是否符合预期）
       ctx.strokeStyle = 'rgba(255,225,77,.45)';

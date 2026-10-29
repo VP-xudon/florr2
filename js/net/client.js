@@ -73,15 +73,23 @@ class LocalNet extends Net {
   // 调试 / 自测专用：读取权威世界内部状态。业务代码请走 request / 快照。
   get debugServer() { return this._server; }
 
-  // 由客户端主循环驱动：本地实现零延迟，因此每帧都推进并投递一份快照
-  // （生物移动仍是帧率级，手感与现在完全一致；战斗在服务端内部按 25Hz 固定步长结算）。
-  // 若换成低频真服务器，客户端侧的插值缓冲会自动生效（见 Game._applySnap）。
+  // 由客户端主循环驱动：本地实现零延迟，因此每帧都推进服务端。
+  // 【快照按 SNAP_HZ 下发，不是每个模拟步都发】：一帧固定步长循环最多补 8 步，
+  // 以前每一步都 snapshot() 一份全量（4000+ 个生物对象）+ 客户端再整套镜像一次，
+  // 60 步/秒 ≈ 26 万个对象/秒，GC 直接把帧率拖到个位数。
+  // 客户端本来就有插值缓冲（_snapDt / _applySnap 的 px->tx blend），25Hz 快照不会卡顿。
   step(dt) {
     if (!this._connected) return;
     this._server.step(dt);
-    this._deliver({ t: 'snap', snap: this._server.snapshot(dt) });
-    // 服务端在 step 中产生的事件（聊天/系统私信）此时才投递，保证顺序在快照之后
-    for (const ev of this._server.drainEvents()) this._deliver({ t: 'evt', ev });
+    this._snapAcc = (this._snapAcc || 0) + dt;
+    if (this._snapAcc + 1e-9 >= SNAP_DT) {
+      const span = this._snapAcc;             // 本快照覆盖的模拟时长（可能跨多个步长）
+      this._snapAcc = 0;
+      this._deliver({ t: 'snap', snap: this._server.snapshot(span) });
+    }
+    // 服务端在 step 中产生的事件（聊天/伤害飘字/击杀）每步都投递，不受快照节流影响
+    const evs = this._server.drainEvents();
+    for (let i = 0; i < evs.length; i++) this._deliver({ t: 'evt', ev: evs[i] });
   }
 }
 

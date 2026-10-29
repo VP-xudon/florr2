@@ -12,9 +12,8 @@ const DebugScreen = {
   refs: null,
   v: {},              // 字段名 -> 值元素
   _acc: 0,
-  _fpsAcc: 0,
-  _fpsN: 0,
-  _fps: 0,
+  // 注意：这里【不再】自己统计帧率。update(dt) 的 dt 是固定模拟步长，
+  // 数出来的永远是 60（卡到 3fps 也显示 60）。真实帧率由主循环写进 game.perf.fps/sps。
 
   init(game) {
     this.game = game;
@@ -25,6 +24,7 @@ const DebugScreen = {
       <div class="f3-col">
         <div class="f3-head">${I18N.t('F3/Frame', 'Frame')}</div>
         ${row('fps', I18N.t('F3/Fps', 'FPS'))}
+        ${row('sps', I18N.t('F3/Steps', 'Sim steps'))}
         ${row('frameMs', I18N.t('F3/FrameMs', 'Frame'))}
         ${row('updateMs', I18N.t('F3/UpdateMs', 'Update'))}
         ${row('renderMs', I18N.t('F3/RenderMs', 'Render'))}
@@ -76,14 +76,12 @@ const DebugScreen = {
   },
 
   // 每帧调用；但只有可见且攒够 0.2s 才真正更新 DOM
+  // 【帧率不在这里统计】：update(dt) 拿到的是【固定模拟步长】(1/60)，不是真实帧间隔，
+  // 所以在这里数调用次数永远得到 ~60（卡到 3fps 也显示 60）。真实帧率由主循环
+  // 用 rAF 间隔算好写进 perf.fps / perf.sps（见 game.js start()），这里只负责显示。
   update(dt) {
     if (!this.on || !this.refs) return;
     this._acc += dt;
-    this._fpsAcc += dt; this._fpsN++;
-    if (this._fpsAcc >= 0.5) {
-      this._fps = Math.round(this._fpsN / this._fpsAcc);
-      this._fpsAcc = 0; this._fpsN = 0;
-    }
     if (this._acc < 0.2) return;
     this._acc = 0;
     try { this._refresh(); } catch (e) { console.error('[F3]', e); }
@@ -93,7 +91,11 @@ const DebugScreen = {
 
   _refresh() {
     const g = this.game, p = g.player, perf = g.perf || {};
-    this._set('fps', String(this._fps || 0));
+    // 真实帧率 / 每秒实际模拟步数（<60 表示在慢放：补步被 MAX_STEPS 截断）
+    const fps = (perf.fps != null) ? perf.fps
+      : (perf.frameMs > 0 ? 1000 / perf.frameMs : 0);
+    this._set('fps', fps >= 10 ? fps.toFixed(0) : fps.toFixed(1));
+    this._set('sps', (perf.sps != null ? perf.sps : 0).toFixed(0) + ' /s');
     this._set('frameMs', fmtMs(perf.frameMs));
     this._set('updateMs', fmtMs(perf.updateMs));
     this._set('renderMs', fmtMs(perf.renderMs));
@@ -106,7 +108,10 @@ const DebugScreen = {
       const cps = (g.map && g.map.checkpoints) || [];
       const cp = cps[g.cpIdx] || cps[0];
       this._set('cp', cp ? ('#' + (g.cpIdx || 0) + ' (' + Math.round(cp.cx) + ', ' + Math.round(cp.cy) + ')') : '—');
-      this._set('facing', (p.facing * 180 / Math.PI).toFixed(0) + '°');
+      // 朝向：先归一到 [0,360) 再显示。facing 本身可能被写成 -3.7rad 之类的任意值，
+      // 直接乘 180/PI 会得到负角/上千度的数字（曾经的 "Facing 无穷大" 就是这个）。
+      const deg = (((p.facing || 0) * 180 / Math.PI) % 360 + 360) % 360;
+      this._set('facing', deg.toFixed(0) + '°');
       const spd = Math.hypot(p.vx || 0, p.vy || 0);
       this._set('speed', spd.toFixed(0) + ' px/s');
       const maxSpd = (typeof PLAYER_BASE_SPEED !== 'undefined')
@@ -129,25 +134,48 @@ const DebugScreen = {
     this._set('asleep', String(asleep));
     this._set('drops', String((g.drops || []).length));
     this._set('cards', String((g.cards || []).length));
-    this._set('parts', String((g.particles || []).length + (g.dropFx || []).length));
+    this._set('parts', String((g.particles || []).length + (g.dropFx || []).length
+      + (g.auraFx || []).length));
     this._set('texts', String((g.dmgTexts || []).length));
     this._set('tick', String(perf.snapCount != null ? perf.snapCount : '—'));
     this._set('snap', perf.snapAge != null ? (perf.snapAge * 1000).toFixed(0) + ' ms' : '—');
     this._set('pred', perf.predErr != null ? perf.predErr.toFixed(1) + ' px' : '—');
 
-    // 花瓣栏：槽位 / 稀有度 / 血量 / 转速 / 装填
+    // 花瓣栏：按【装备槽】列（不是按存活实体）——装填中/已碎的槽也要看得见。
+    //   · 血量百分比 = 本槽所有存活实体的 hp 总和 / maxHp 总和，并钳到 0~100。
+    //     以前直接拿单个实体的 b.hp 算：实体碎裂后 hp 可能是 -29 这种负值，
+    //     于是显示成 -2900%，除此之外只有满血的 100%（中间值永远看不到，因为
+    //     客户端花瓣血量是整体替换的，掉血那一下就已经碎了）。
+    //   · 状态：装填中 / 已碎 / 转速，三者只显示一个。
     const spin = (typeof PETAL_SPIN !== 'undefined')
       ? PETAL_SPIN * (typeof ROT_SCALE !== 'undefined' ? ROT_SCALE : 1) : 0;
     const rpm = spin * 60 / (Math.PI * 2);
     const rotTxt = spin.toFixed(2) + ' rad/s (' + rpm.toFixed(0) + ' rpm)';
     const bits = [];
-    const petals = (p && p.petals) || [];
-    for (let i = 0; i < petals.length; i++) {
-      const b = petals[i];
-      const name = (b.card && b.card.type && b.card.type.name) ? b.card.type.name : '?';
-      const hp = (b.maxHp > 0) ? Math.round(100 * b.hp / b.maxHp) + '%' : '—';
-      bits.push('<div class="f3-petal"><b>' + (b.slot != null ? b.slot : i) + '</b> ' +
-        esc(name) + ' <i>' + hp + '</i> <em>' + (b.dead ? 'dead' : rotTxt) + '</em></div>');
+    const slots = (p && p.slots) || [];
+    const bodies = (p && p.petals) || [];
+    for (let i = 0; i < slots.length; i++) {
+      const card = slots[i];
+      if (!card) continue;
+      const name = (card.type && card.type.name) ? card.type.name : '?';
+      const rar = (typeof RARITIES !== 'undefined' && RARITIES[card.rarity]) ? RARITIES[card.rarity] : null;
+      let hp = 0, maxHp = 0, live = 0;
+      for (let j = 0; j < bodies.length; j++) {
+        const b = bodies[j];
+        if (b.dead || b.slotIndex !== i || b.card !== card) continue;
+        live++;
+        hp += Math.max(0, b.hp || 0);
+        maxHp += Math.max(0, b.maxHp || 0);
+      }
+      const pct = (maxHp > 0) ? Math.round(clamp(100 * hp / maxHp, 0, 100)) + '%' : '—';
+      const reloading = (typeof p.reloadDone === 'function') ? !p.reloadDone(i) : false;
+      let state;
+      if (reloading) state = I18N.t('F3/Reload', 'Reload');
+      else if (!live) state = I18N.t('F3/Dead', 'dead');
+      else state = rotTxt;
+      const color = rar ? ' style="color:' + rar.color + '"' : '';
+      bits.push('<div class="f3-petal"><b>' + i + '</b> <span' + color + '>' +
+        esc(name) + '</span> <i>' + pct + '</i> <em>' + esc(state) + '</em></div>');
     }
     const html = bits.length ? bits.join('') : '<div class="f3-petal">' + I18N.t('F3/None', 'none') + '</div>';
     if (this.refs.petals._html !== html) {

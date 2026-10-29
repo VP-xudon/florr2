@@ -171,7 +171,8 @@ class Player {
     this.moving = len > 0;
     if (this.moving) {
       const ta = Math.atan2(this.vy, this.vx);
-      this.facing = lerpAngle(this.facing, ta, clamp(dt * 12, 0, 1));
+      // wrapAngle：持续同向转圈时朝向会无限累加，必须每帧归一到 (-PI, PI]
+      this.facing = wrapAngle(lerpAngle(this.facing, ta, clamp(dt * 12, 0, 1)));
     }
     this.breath += dt;
     this.age += dt;                  // 出场 Q 弹推进
@@ -226,16 +227,53 @@ class Player {
   // 把服务端下发的花瓣战斗状态（hp / 受伤红闪 / 是否已碎）应用到当前花瓣实体上。
   // 由 _syncPetals 每帧调用；快照到达时也由 Game._applySnap 立即调一次，
   // 保证同帧就能看到掉血/碎裂，不用等下一帧。
+  // 找到某片花瓣对应的服务端状态。
+  // 主键 = (槽位, 子序号, 世代号)：一张卡可能对应多个独立实体（Light 的每个光点），
+  // 滞留型花瓣（Pollen/Honey）还会同时存在多批（地上旧的一批 + 轨道上新的一批）。
+  // 【兜底】世代号是客户端/服务端各自维护的计数器（脱轨那一刻 +1），两者差一个 tick 就会永久错位；
+  // 错位后按 key 永远匹配不到 -> hp/dead 全都不下发 -> 表现成"花瓣永远不受伤、也不会碎"。
+  // 所以按 key 找不到时，退化成 (槽位, 子序号) 唯一匹配，并把世代号对齐到服务端。
+  _netPetalFor(b) {
+    const np = this.netPetals;
+    if (!np) return null;
+    const sub = b.sub || 0, gen = b.gen || 0;
+    const key = b.slotIndex + '|' + sub + '|' + gen;
+    const hit = np[key] || (typeof np.find === 'function'
+      ? np.find((x) => x.slot === b.slotIndex && (x.sub || 0) === sub && (x.gen || 0) === gen)
+      : null);
+    if (hit) return hit;
+    let one = null, n = 0;
+    for (const k in np) {
+      const x = np[k];
+      if (!x || x.slot !== b.slotIndex || (x.sub || 0) !== sub) continue;
+      n++; one = x;
+      if (n > 1) return null;      // 同槽同子号有多代 -> 不敢猜，宁可不更新
+    }
+    if (one && one.gen != null) b.gen = one.gen;   // 对齐世代号，下一帧就能命中
+    return one;
+  }
+
+  // 服务端此刻这一槽有没有活着的实体（按 slot 判断，不参与世代号匹配：gen 可能差一拍）。
+  // 没有快照（首帧 / 远端模式还没连上）时一律放行，退回纯本地计时。
+  // 【为什么需要它】：本地 reload 计时与服务端不是同一个钟，客户端会早一两帧跑完，
+  // 于是画出一片服务端还不存在的花瓣 —— 它从生物身上飘过去却什么都不结算。
+  _netSlotHasLive(slot) {
+    const np = this.netPetals;
+    if (!np) return true;
+    let any = false, live = false;
+    for (const k in np) {
+      const o = np[k];
+      if (!o || o.slot !== slot) continue;
+      any = true;
+      if (!o.dead) live = true;
+    }
+    return any ? live : true;
+  }
+
   _applyNetPetalStates() {
     if (!this.netPetals) return;
     for (const b of this.petals) {
-      // 按 (槽位, 子序号, 世代号) 匹配：一张卡可能对应多个独立实体（Light 的每个光点），
-      // 滞留型花瓣（Pollen/Honey）还会同时存在多批 -> 必须带世代号，否则会串血。
-      const ns = this.netPetals[b.slotIndex + '|' + (b.sub || 0) + '|' + (b.gen || 0)]
-        || (typeof this.netPetals.find === 'function'
-          ? this.netPetals.find((x) => x.slot === b.slotIndex && (x.sub || 0) === (b.sub || 0)
-            && (x.gen || 0) === (b.gen || 0))
-          : null);
+      const ns = this._netPetalFor(b);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
       // 滞留实体（Pollen / Honey）位置与速度取服务端权威值：它们会被生物硬碰撞推挤，
@@ -367,9 +405,9 @@ class Player {
       b.age += dt;
       b.hurtT = Math.max(0, (b.hurtT || 0) - dt);
       b.life = (b.life || 0) + dt;
-      // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）
-      const lim = (b.card && b.card.type && b.card.type.holdReloadUntilDeath)
-        ? Infinity : PETAL_DETACH_TTL;
+      // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）。
+      // 口径由 PetalFX.ttlOf 统一给出（能力字段 holdReloadUntilDeath 决定）。
+      const lim = PetalFX.ttlOf(b);
       if (b.life >= lim) {
         b.dead = true;
         this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
@@ -402,6 +440,11 @@ class Player {
             && b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
         }
         if (!body) {
+          // 【新实体只在服务端确实有它时才生成】。本地 reload 计时会早一两帧跑完，
+          // 那几帧里服务端还没有这片花瓣：客户端照样画出来、从生物身上飘过去，
+          // 却什么都结算不到（命中在服务端算），紧接着又会被快照的 dead 记录打碎。
+          // 实体集合以快照为唯一真相：服务端这一槽没有活着的实体 -> 先不生成。
+          if (!this._netSlotHasLive(slotIndex)) continue;
           // 花瓣实体重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight 模型，
           // 随稀有度递增：common=1 …… rare≈4 …… eternal≈249）。
           // 注释原话就是"花瓣 = 对应稀有度重量"，但此前实体对象上根本没有这个字段，
@@ -447,35 +490,27 @@ class Player {
           }
         }
         // 标记"会吸引仇恨的花瓣"：AI 据此判断"被吸引"的生物连被动型也会主动过来啃
-        body.honey = !!card.type.attractMobs;
-        // ---- 滞留型花瓣（Pollen / Honey）：reach / detect 模式加载完成后 0.5s 脱轨 ----
+        body.honey = !!PetalFX.trait(card.type, 'attractMobs');
+        // ---- 滞留型花瓣（Pollen / Honey / Peas）：reach / detect 模式加载完成后脱轨 ----
         // 只有这两种模式才会"甩出去留在原地"（normal 模式永远跟着轨道）。
-        const detachAt = card.type.detachAfter || 0;
+        // 脱轨时机、初速、装填策略全部由 PetalFX 的注册定义决定（能力字段 + detach 钩子），
+        // 这里只负责把计划套到实体与卡片状态上，不再判断"是不是哪种花瓣"。
+        const detachAt = PetalFX.trait(card.type, 'detachAfter') || 0;
         if (detachAt > 0 && !body.dead && body.age >= detachAt && this._detachReady()) {
+          const plan = PetalFX.detach(body, this);
           body.stationary = true;                   // 脱离轨道：不再跟随
           body.life = 0;
-          const launch = card.type.launch;
-          if (launch) {
-            // 喷射型花瓣（Peas）：朝 N 个方向直直飞出去，速度 = speedK × 主角默认最高移速
-            //（其它滞留花瓣是"原地惯性滑行"，喷射型是"射出去"，所以这里单独给速度）
-            const dirs = launch.count || 4;
-            const dir = (sub || 0) * (TAU / dirs) + (body.selfRot || 0);   // 基于【自身绝对朝向】
-            // 速度基准必须是 PLAYER_BASE_SPEED（默认最高移速）。
-            // 绝不能用 this.speed —— 它含 SPEED_SCALE(5×) 与 /speed 倍率，
-            // 会让豌豆一出膛就飞出屏幕（表现为"炸开一瞬间就没了、看不见在飞"）。
-            const sp = (launch.speedK || 1.3) * PLAYER_BASE_SPEED;
-            body.vx = Math.cos(dir) * sp;
-            body.vy = Math.sin(dir) * sp;
-          } else {
-            body.vx = (body.vx || 0) * PETAL_DETACH_KICK;
-            body.vy = (body.vy || 0) * PETAL_DETACH_KICK;
+          if (plan) {
+            body.vx = plan.vx || 0;
+            body.vy = plan.vy || 0;
           }
           bodies.push(body);                        // 仍然是实体，只是换了运动规则
           this._petalGen[slotIndex] = gen + 1;      // 本槽换代：下一批实体用新世代号
-          // 卡面进入冷却：Pollen 立刻重新装填；Honey 等实体死亡（r.hold，见 _tickReload）
+          // 卡面进入冷却：Pollen / Peas 立刻重新装填；Honey 等实体死亡（r.hold，见 _tickReload）
           const dur = (card.type.reload != null) ? card.type.reload : 0;
           const r = { card, age: 0, dur };
-          if (card.type.holdReloadUntilDeath) r.hold = true;
+          const hold = plan ? plan.holdReload : PetalFX.trait(card.type, 'holdReloadUntilDeath');
+          if (hold) r.hold = true;
           this.reload[slotIndex] = r;
           continue;
         }
@@ -547,7 +582,7 @@ class Player {
         // Peas 喷射中：保持【匀速直飞】，不做阻尼衰减、也不采信服务端位置插值
         //（服务端不跑这套飞行，采信插值会被拉回原地 = "一按空格就消失"）。
         // 飞行期间实体照常存在，因此碰撞/受伤/结算伤害都走正常链路，2s 后强制移除。
-        const flight = b.card && b.card.type.launch;
+        const flight = PetalFX.flightOf(b);
         if (flight) {
           // 注意：b.life 已在上面的"滞留实体"循环（_syncPetals 开头）每帧 +dt，
           // 这里再加一次会让存活时长减半 —— 绝不重复累加。
@@ -601,11 +636,15 @@ class Player {
       }
 
       // ---- 花瓣吸附（果冻感）----
-      // 生物边缘离花瓣 ≤ 1 倍花瓣直径时被强力吸过去；一旦吸住就贴在生物表面
-      //（目标点 = 生物表面沿当前方向的接触点），于是被轨道拖着在生物身上"揉搓"。
+      // 【只有 solid 花瓣会被吸到生物表面"揉搓"】（数据见 data.js PETAL_TRAITS）。
+      // 没有实体碰撞的花瓣必须直接穿过生物：旧实现里它们也会被吸住，停在轮廓外沿
+      // 一动不动 —— 看起来就是"被吸附 + 卡在碰撞箱边缘"，而且那一瞬间什么都结算不到。
+      // 吸附的目标点 = 生物轮廓上的最近点沿外法线略微嵌入，于是被轨道拖着在生物身上揉搓。
       // 只有轨道应在位置相对吸住时被拉开 2.5 倍直径（人跑远了）才松手回轨道。
+      const solid = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'solid'));
       let gx = tx, gy = ty, K = PETAL_SPRING_K;
-      let mob = b.pullMob;
+      let mob = solid ? b.pullMob : null;
+      if (!solid && b.pullMob) b.pullMob = null;
       if (mob && mob.dead) mob = null;
       const orbitGap = dist(tx, ty, b.x, b.y);
       if (b.pullCd > 0) b.pullCd = Math.max(0, b.pullCd - dtc);   // 再吸附冷却
@@ -621,7 +660,7 @@ class Player {
           b.pullCd = PETAL_PULL_CD;      // 冷却期内不再黏同一片区域
         }
       }
-      if (!mob && !(b.pullCd > 0) && nearMobs && nearMobs.length) {
+      if (solid && !mob && !(b.pullCd > 0) && nearMobs && nearMobs.length) {
         // 找"到轮廓的距离"最近、且在触发范围内的生物（按真实外形，不按外接圆）
         let best = null, bestEdge = PETAL_D * PETAL_PULL_RANGE;
         for (const m of nearMobs) {

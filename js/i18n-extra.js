@@ -39,6 +39,8 @@
     'F3/PredErr': 'Prediction error',
     'F3/RotSpeed': 'Spin',
     'F3/Reload': 'Reload',
+    'F3/Steps': 'Sim steps',
+    'F3/Dead': 'dead',
     'F3/Heap': 'JS heap',
     'F3/None': 'none',
     'F3/Hint': 'F3: toggle this screen    C: collision boxes',
@@ -46,7 +48,14 @@
     // ---- 移动端触控 ----
     'Touch/Reach': 'Reach',
     'Touch/Detect': 'Detect',
-    'Touch/Stick': 'Move'
+    'Touch/Stick': 'Move',
+
+    // ---- /summon 参数 ----
+    'Chat/Command/summon/BadParam':
+      'Invalid parameter. Segmented mobs accept [type=normal] or [type=long], e.g. /summon 3 common[type=long] 1',
+
+    // ---- 全服击杀公告 ----
+    'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}'
   };
 
   const ZH = {
@@ -81,13 +90,20 @@
     'F3/PredErr': '预测偏差',
     'F3/RotSpeed': '转速',
     'F3/Reload': '装填',
+    'F3/Steps': '模拟步/秒',
+    'F3/Dead': '已碎',
     'F3/Heap': 'JS 堆',
     'F3/None': '无',
     'F3/Hint': 'F3：开关本屏幕    C：碰撞箱',
 
     'Touch/Reach': '远距',
     'Touch/Detect': '侦测',
-    'Touch/Stick': '移动'
+    'Touch/Stick': '移动',
+
+    'Chat/Command/summon/BadParam':
+      '参数无效。多节生物支持 [type=normal] 或 [type=long]，例如 /summon 3 common[type=long] 1',
+
+    'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}'
   };
 
   I18N.addPack('en_US', EN);

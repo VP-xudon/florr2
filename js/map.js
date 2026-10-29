@@ -71,7 +71,9 @@ function createMap(R) {
     checkpoints: [], checkpointAt: () => -1,
     checkpointSpawnPoint: () => ({ x: 0, y: 0 }),
     spawnCheckpointPoint: () => null,
-    canStandAt: (x, y, r) => Math.hypot(x, y) < R - (r || 0)
+    canStandAt: (x, y, r) => Math.hypot(x, y) < R - (r || 0),
+    mobBlockedAt: () => false,
+    lineBlocked: () => false
   };
 }
 
@@ -825,6 +827,59 @@ function createGardenMap(data) {
     return false;
   }
 
+  // ---- 减速瓦片对【生物】是实心地形（对玩家仍然可通行，只是减速）----
+  // 逐格预筛表：只要这一格上叠了任何减速瓦片就置 1。绝大多数格子是 0，
+  // 于是 movBlocked 的常规成本 = 一次数组查表（不触碰 16×16 遮罩）。
+  const slowTileMask = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    for (let li = 0; li < data.layers.length; li++) {
+      const raw = data.layers[li].tiles && data.layers[li].tiles[i];
+      if (!raw || raw === -1) continue;
+      const name = (typeof raw === 'string' && raw.indexOf('#') >= 0) ? raw.slice(0, raw.indexOf('#')) : String(raw);
+      let slow = false;
+      for (let p = 0; p < SLOW_TILE_PREFIXES.length; p++) {
+        if (name.indexOf(SLOW_TILE_PREFIXES[p]) === 0) { slow = true; break; }
+      }
+      if (slow) { slowTileMask[i] = 1; break; }
+    }
+  }
+
+  // 生物能不能站在这儿：中心或半径 0.7 处落在减速瓦片里 => 挡住。
+  // （半径留 0.7 而不是 1.0：让生物的贴图可以稍微压进叶子边缘，但身体不会进去。）
+  function mobBlockedAt(x, y, r) {
+    const rad = r || 0;
+    const gx0 = Math.floor((x - rad + half) / tile), gx1 = Math.floor((x + rad + half) / tile);
+    const gy0 = Math.floor((y - rad + half) / tile), gy1 = Math.floor((y + rad + half) / tile);
+    let near = false;
+    for (let gy = gy0; gy <= gy1 && !near; gy++) {
+      if (gy < 0 || gy >= H) continue;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (gx < 0 || gx >= W) continue;
+        if (slowTileMask[gy * W + gx]) { near = true; break; }
+      }
+    }
+    if (!near) return false;
+    if (slowAt(x, y)) return true;
+    if (rad > 0) {
+      const d = rad * 0.7;
+      if (slowAt(x + d, y) || slowAt(x - d, y) || slowAt(x, y + d) || slowAt(x, y - d)) return true;
+    }
+    return false;
+  }
+
+  // 视线：两点之间是否被墙挡住（只看实心瓦片，减速瓦片不挡视线 ——
+  // 但玩家站在减速瓦片里时，生物本来就"看不见"他，那条规则在 Mob.canSee 里）。
+  function lineBlocked(x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return false;
+    const n = Math.max(2, Math.ceil(len / 10));
+    for (let i = 1; i < n; i++) {
+      if (solidAtPoint(x1 + dx * (i / n), y1 + dy * (i / n))) return true;
+    }
+    return false;
+  }
+
   const poly = [[-half, -half], [half, -half], [half, half], [-half, half]];
   return {
     R: half, half, tile, width: W, height: H, size: data.size, solid, solidQuad, FW, FH, poly,
@@ -832,7 +887,7 @@ function createGardenMap(data) {
     clampTo: (x, y, r) => collide(x, y, r || 22),
     minimapCanvas, drawCollisionRegion,
     name: data.name || 'map',
-    slowAt,
+    slowAt, mobBlockedAt, lineBlocked,
     spawnZones, zoneAt, randomPointInZone,
     checkpoints, checkpointAt, checkpointSpawnPoint, spawnCheckpointPoint, canStandAt,
     buildCollision

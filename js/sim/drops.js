@@ -19,6 +19,26 @@ const DROP_BREATH_AMP = 0.024;   // 幅度 2.4%（原 1.2% 的 2 倍）
 const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal', 'unique']);   // 持续冒粒子的稀有度
 const _dropFaceCache = {};       // slug|rarity -> 已渲染好的卡面 canvas
 
+// 地面卡片的「持续粒子」时长（秒）—— 按【掉落概率】分级，而不是只看稀有度：
+//   ≤ 5%   -> 3s
+//   < 1%   -> 6s
+//   < 0.3% -> 15s
+//   < 0.1% -> Infinity（同 Ultra+：永久迸溅）
+//   Ultra 及以上无论概率一律永久（保底表现）
+// chance 缺失（旧调用 / 手工生成）视为 1 -> 只有落地那一次 burst。
+const DROP_FX_T_5PCT = 3;
+const DROP_FX_T_1PCT = 6;
+const DROP_FX_T_03PCT = 15;
+function dropFxDuration(rarity, chance) {
+  if (DROP_FX_CONT.has(rarity)) return Infinity;
+  const c = (chance == null) ? 1 : chance;
+  if (c < 0.001) return Infinity;        // < 0.1%
+  if (c < 0.003) return DROP_FX_T_03PCT; // < 0.3%
+  if (c < 0.01) return DROP_FX_T_1PCT;   // < 1%
+  if (c <= 0.05) return DROP_FX_T_5PCT;  // ≤ 5%
+  return 0;
+}
+
 function dropFaceCanvas(slug, rarity, name, svg) {
   const k = slug + '|' + rarity;
   const hit = _dropFaceCache[k];
@@ -47,7 +67,7 @@ function dropLayoutOffset(i, n, gap) {
 }
 
 class DropCard {
-  constructor(slug, svg, rarity, name, x, y, off) {
+  constructor(slug, svg, rarity, name, x, y, off, chance) {
     this.slug = slug;
     this.svg = svg;
     this.rarity = rarity;
@@ -67,7 +87,11 @@ class DropCard {
     this.sx = 0; this.sy = 0;
     this.done = false;
     this.picked = false;     // 是否已被玩家捡走（到期自然消失 = false）
-    this.sparkT = 0;         // Ultra+ 持续粒子的发射计时
+    // 掉落概率（0~1）：由 rollMobDrops 带上，用来决定持续粒子喷多久。
+    this.chance = (chance == null) ? null : chance;
+    this.sparkT = 0;         // 持续粒子的发射计时
+    // 持续冒粒子的总时长：0 = 只有落地那一次 burst；Infinity = 永久（Ultra+ 或 <0.1%）
+    this.fxDur = dropFxDuration(this.rarity, this.chance);
     // 随机偏转：-15° ~ +15°（左右各 15 度），让掉在地上的卡看起来是"散落"而非整齐排列。
     // 生成时定死，飞行拾取过程中不再变化。
     this.rot = rand(-Math.PI / 12, Math.PI / 12);

@@ -228,7 +228,9 @@ def run_cdp(browser: str, url: str, budget_ms: int) -> tuple[dict | None, str]:
     """用 CDP 驱动真实时间运行，轮询页面写回的结果。返回 (report, 诊断信息)。"""
     port = free_port()
     budget = max(1.0, budget_ms / 1000.0)
-    with tempfile.TemporaryDirectory(prefix="florr2-selftest-") as profile:
+    # ignore_cleanup_errors：Windows 上 Chrome 退出后 Crashpad 还会短暂占着 profile 里的文件，
+    # 清不掉会抛 PermissionError 把【已经跑完的】结果一起吞掉（表现为"自测卡在清理阶段"）。
+    with tempfile.TemporaryDirectory(prefix="florr2-selftest-", ignore_cleanup_errors=True) as profile:
         proc = subprocess.Popen(
             [
                 browser, "--headless=new", "--disable-gpu", "--no-sandbox",

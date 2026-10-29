@@ -157,21 +157,30 @@ const MAX_MOB_RARITY_COLOR = '#d2eb34';
 // 字段含义：
 //   detachAfter            脱轨延时（>0 = 滞留型：脱离轨道后留在原地）
 //   launch                 脱轨瞬间喷射 { count 方向数, speedK 速度倍率, life 存活秒数 }
-//   hardCollide            与生物重叠即按穿透深度强制分离（有质量的实体）
+//   solid                  【与生物有没有实体碰撞】。true = 有质量的实体：重叠时机体被持续推出花瓣轮廓，
+//                          花瓣自己不动（钉在轨道/吸附点上），于是生物贴着花瓣表面滑动 = 揉搓；
+//                          false = 穿过生物，只在重合瞬间传一次动能。两种都照常在重合期间结算伤害。
+//                          这一项必须在下面【逐个花瓣显式声明】，不允许靠"没写就默认某种行为"。
 //   attractMobs            把周围生物的仇恨拉到自己身上
 //   holdReloadUntilDeath   实体未死亡前卡片不重新装填
 //   noDamage               不造成伤害（只挨打）
 //   healOverTime           持续回血，数值单位为「每秒」（展示为 x/s）
 //   maxMobRarity           可吸引的最高生物稀有度表
 const PETAL_TRAITS = {
+  // —— 8 种启用花瓣的实体碰撞属性（唯一来源，行为层只读它）——
+  basic: { solid: false },
+  light: { solid: false },
+  rose: { solid: false },
+  stinger: { solid: false },
+  leaf: { reload: 1.8, healOverTime: true, solid: false },
+  pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5, solid: false },
+  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 }, solid: false },
+  // 蜜是唯一"有质量"的花瓣：生物会被它从身上推开（因此会沿着它滑走），它自己不动。
   honey: {
     reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5,
-    hardCollide: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
+    solid: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
     maxMobRarity: HONEY_MAX_MOB_RARITY
-  },
-  pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5 },
-  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 } },
-  leaf: { reload: 1.8, healOverTime: true }
+  }
 };
 
 function buildPetalTypes() {
@@ -219,7 +228,7 @@ function buildPetalTypes() {
       // ---- 能力字段：全部来自 PETAL_TRAITS，行为层只读字段、不判断 slug ----
       detachAfter: tr.detachAfter || 0,            // 滞留型：脱轨延时（>0 生效）
       launch: tr.launch || null,                    // 喷射参数（Peas）
-      hardCollide: !!tr.hardCollide,                // 硬碰撞实体（Honey）
+      solid: !!tr.solid,                            // 与生物有实体碰撞（唯一来源，见 PETAL_TRAITS 注释）
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
       noDamage: !!tr.noDamage,
@@ -597,9 +606,27 @@ function mobDropRows(mobId, rarity, magician) {
   return out;
 }
 
+// 超长蜈蚣（chainLong）每一节的【隐藏掉落】：
+//   · 不进入 MOB_DROP_TABLE / MOB_DROP_ITEMS，所以【不会显示在生物信息栏】；
+//   · 每节死亡独立掷骰一次，且与普通掉落【并存】（不是替换）；
+//   · 全部是 Basic 花瓣，靠稀有度体现价值。
+const CHAIN_LONG_DROPS = [
+  { rarity: 'common',    chance: 0.04 },        // 4%
+  { rarity: 'unusual',   chance: 0.02 },        // 2%
+  { rarity: 'rare',      chance: 0.008 },       // 0.8%
+  { rarity: 'epic',      chance: 0.0035 },      // 0.35%
+  { rarity: 'legendary', chance: 0.0012 },      // 0.12%
+  { rarity: 'mythic',    chance: 0.0005 },      // 0.05%
+  { rarity: 'ultra',     chance: 0.0002 },      // 0.02%
+  { rarity: 'super',     chance: 0.000003 },    // 0.0003%
+  { rarity: 'eternal',   chance: 0.000000001 }, // 0.0000001%
+];
+
 // 掷骰掉落（生物死亡时调用）：**每种掉落物各自掷一次**——
 // 按该生物【当前稀有度】那一行的分布决定这一件掉落的稀有度，落在"不掉落"区间就没有这一件。
-// 返回 [{ slug, svg, name, rarity }, ...]（可能为空 = 这次什么都不掉）。
+// 返回 [{ slug, svg, name, rarity, chance }, ...]（可能为空 = 这次什么都不掉）。
+//   chance = 命中那一档的【有效概率】（0~1，口径与 dropChances 完全一致）：
+//            地面卡片的粒子特效时长按它分级（越稀有喷得越久，见 sim/drops.js）。
 function rollMobDrops(mobId, rarity, magician) {
   const list = mobDropList(mobId);
   if (!list || !list.length) return [];
@@ -611,15 +638,20 @@ function rollMobDrops(mobId, rarity, magician) {
     if (DROP_HIDDEN_SLUGS.has(slug)) continue;     // 只入库、不实际掉落
     const dist = dropDistFor(slug, rarity);        // 每件掉落物各自的稀有度分布
     if (!dist || !dist.length) continue;           // 这一档不掉这件
+    const chances = dropChances(dist);             // 与掷骰同口径的有效概率
     let r = Math.random();
-    let hit = null;
-    for (const [pr, ch] of dist) {
-      if (r < ch) { hit = pr; break; }
+    let hit = null, hitChance = 0;
+    for (let i = 0; i < dist.length; i++) {
+      const ch = dist[i][1];
+      if (r < ch) { hit = dist[i][0]; hitChance = chances[i] ? chances[i].chance : ch; break; }
       r -= ch;
     }
     if (!hit) continue;                            // 落在剩余区间：本次这件不掉
     const art = petalArtOf(slug);
-    out.push({ slug, svg: art ? art.svg : null, name: art ? art.name : slug, rarity: hit });
+    out.push({
+      slug, svg: art ? art.svg : null, name: art ? art.name : slug,
+      rarity: hit, chance: hitChance
+    });
   }
   return out;
 }
