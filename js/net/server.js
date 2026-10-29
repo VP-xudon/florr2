@@ -864,6 +864,9 @@ class LocalServer {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
       if (b.hitCd > 0) b.hitCd = Math.max(0, b.hitCd - TICK_DT);
     }
+    // 花朵【本体攻击】的接触冷却：与花瓣同一节奏，否则贴脸站桩是 20×25 = 500 dps，
+    // 任何生物都在一两帧里被"体伤"烧死（受击方有受伤无敌帧，出手方却一直没有冷却）。
+    if (p.bodyHitCd > 0) p.bodyHitCd = Math.max(0, p.bodyHitCd - TICK_DT);
     // ---- 持续回血（Leaf）已迁入 PetalFX 的 passive 效果 ----
     // 规则：只要实体加载好且未死亡就每帧回 heal×dt（封顶 maxHp、不弹字）。
     // 放在 PetalFX.tick 里而不是这里，理由：
@@ -947,7 +950,11 @@ class LocalServer {
       if (phit) {
         const toMob = this._dmg(p.bodyDmg, m.armor);
         const toFlower = this._dmg(m.dmg, p.armor);
-        if (toMob > 0) this._hitMob(m, toMob);
+        // 体伤同样是【接触事件】：冷却期内不重复结算（与花瓣同一条规则）。
+        if (!(p.bodyHitCd > 0)) {
+          p.bodyHitCd = PETAL_HIT_CD;
+          if (toMob > 0) this._hitMob(m, toMob);
+        }
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
           if (hurt && !p.dead) {

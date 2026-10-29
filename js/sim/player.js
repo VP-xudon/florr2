@@ -25,6 +25,7 @@ class Player {
     this.hurtInvuln = 0;        // 受伤无敌帧计时（只免伤、不出任何无敌特效）
     this.armor = 0;             // 花朵护甲：受击结算 = max(攻-甲, 0)
     this.bodyDmg = FLOWER_BODY_DMG;  // 花朵本体攻击（体伤）；recompute() 会再次同步
+    this.bodyHitCd = 0;         // 本体攻击的接触冷却（服务端推进，见 _combatTick）
     this.hurtT = 0;             // 受伤红色滤镜剩余时间（0.1s）
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     this.hpBarA = 0;            // 血条显示透明度（非满血渐显 0.3s / 满血渐隐 0.3s）
@@ -107,7 +108,7 @@ class Player {
     this.hp = this.maxHp;
     this.dead = false; this.deathTimer = 0; this.deathRot = 0;
     this.hurtT = 0; this.flash = 0; this.killedBy = null;
-    this.hurtInvuln = 0;
+    this.hurtInvuln = 0; this.bodyHitCd = 0;
     this.invuln = 0; this.invulnSrc = {}; this.invulnTotal = 0; this.invulnA = 0;
     this.age = 0;
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
