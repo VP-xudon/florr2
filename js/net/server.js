@@ -856,9 +856,14 @@ class LocalServer {
   _combatTick() {
     const p = this.player;
     if (!p) return;
-    // 花瓣"传能冷却"：同一次接触只传一次动能（接触是离散事件，不是持续推力）
+    // 花瓣的两个"接触冷却"（接触是离散事件，不是持续推力）：
+    //   kbT   = 传能冷却：同一次接触只传一次动能
+    //   hitCd = 伤害冷却：一次接触双方各结算一次，冷却期内即使仍然重叠也不再结算
     const TICK_DT = 1 / 25;
-    for (const b of p.petals) if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
+    for (const b of p.petals) {
+      if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
+      if (b.hitCd > 0) b.hitCd = Math.max(0, b.hitCd - TICK_DT);
+    }
     // ---- 持续回血（Leaf）已迁入 PetalFX 的 passive 效果 ----
     // 规则：只要实体加载好且未死亡就每帧回 heal×dt（封顶 maxHp、不弹字）。
     // 放在 PetalFX.tick 里而不是这里，理由：
@@ -883,13 +888,10 @@ class LocalServer {
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
         //（Leaf 的持续回血不在这里 —— 见下方独立循环，它不该依赖"是否命中生物"）
         // ---- 花瓣 vs 生物（nx/ny = 接触法线，由生物表面指向花瓣）----
-        // 这里只算公共量（质量 / 反质量份额 / 接近速度），具体接触规则由 PetalFX.onHit 决定。
-        //   · 普通花瓣 =【软碰撞】：本身不构成阻挡，只在接近时传一次动能把生物弹开，
-        //     大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数，0.28s 内只传一次。
-        //   · Honey    =【硬碰撞】：是有质量的实体【��】，与生物重叠即按穿透深度强制分离（绝不重合），
-        //     因此会被持续推进的生物顶着往前走。注意：这里的分离判定【不看接近速度】，
-        //     放在地上的蜜自身速度≈0，若挂在"接近速度够大"之后会永远不执行，
-        //     结果就退化成"只结算伤害、没有实体碰撞"。
+        // 这里只算公共量（质量 / 反质量份额 / 接近速度），传能规则由 PetalFX.onHit 决定。
+        // 实体分离由本方法 + Player._separatePetalFromMobs 共同完成（两边各推一半）。
+        // 【所有花瓣一视同仁】：不再有"有的花瓣穿过生物、有的会被挡住"的分叉，
+        // 那套 solid 分派正是"花瓣和生物根本不结算碰撞"的来源。
         const nx = hit.nx, ny = hit.ny;
         const approach = Math.max(0, -((b.vx || 0) * nx + (b.vy || 0) * ny));
         // 相对法向速度：生物自己撞上来也算一次接触（花瓣停在原地被撞同样要传动能）。
@@ -906,25 +908,34 @@ class LocalServer {
         // 【仅】作用于生物击退时封顶 1.5×（用户要求：最大动能传递 = 同等级实体间击退的 1.5 倍）；
         // 实体之间的推动 / 位移分离不走这里，按反质量自然分配，【不设上限】。
         const kbBoost = clamp(Math.sqrt(wP / wM), 2 / 3, KB_DISPARITY_MAX);
-        // 接触力 / 分离交给花瓣自己的 PetalFX 定义：
-        //   普通花瓣 =【软碰撞】（只在撞上去那一下传一次动能把生物弹开）；
-        //   Honey    =【硬碰撞】（按穿透深度强制分离，绝不重合，会被生物顶着走）。
-        // 战斗循环只负责伤害与耐久，不再按"是不是蜜"分支。
+        // ---- ① 物理分离（"生物一侧"）：生物被推出花瓣轮廓 ----
+        // 花瓣一侧的分离在 Player._separatePetalFromMobs 里做（两端同源），
+        // 这里只动生物（生物只有服务端能动）。两边加起来 = 完整的一对多体碰撞。
+        this._separateMobFromPetal(m, b, hit);
+        // ---- ② 接触传能（撞上去那一下的击退 / 揉搓），所有花瓣同一套 ----
         PetalFX.onHit(b, p, {
           dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
           wP, wM, shareP, shareM, kbBoost
         });
+        // ---- ③ 伤害：接触是【离散事件】，一次接触双方各结算一次 ----
+        // 冷却期内不再结算 —— 这是"双方同时掉血"的结构性保证：下面两行永远成对出现，
+        // 只有"这一侧没有攻击力"（数值为 0）才是 0，不存在"只有一边掉血"的分支。
+        if (b.hitCd > 0) continue;
+        b.hitCd = PETAL_HIT_CD;
         // 双向伤害走【同一个公式】（花瓣与花朵本体同阵营，口径必须一致）：
         //   伤害方 dmg - 受击方 armor，钳到 0。
-        // 旧代码是 `m.dmg - 0`（花瓣吃全额、不扣护甲）而本体 `m.dmg - p.armor` ——
-        // 同一个生物打花瓣和打本体是两套算法，这就是"两边表现不一样"的来源之一。
-        const toPetal = this._dmg(m.dmg, b.armor);
         const toMob = this._dmg(st.dmg, m.armor);
-        if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
-        if (toMob > 0) {
-          this._hitMob(m, toMob);
-          b.hp -= b.maxHp * PETAL_ATTACK_DUR;   // 攻击也磨损耐久，与其它花瓣一视同仁
+        const toPetal = this._dmg(m.dmg, b.armor);
+        if (toPetal > 0) {
+          // 单次接触的伤害上限：一片花瓣至少能挨两下。
+          // 没有它，任意 rare 生物都能把任何花瓣打成负血 —— 耐久条与受伤红闪根本来不及显示，
+          // 玩家只能看到花瓣"凭空消失"，也就是"花瓣不受伤、生物却在掉血"的观感。
+          const dmgP = Math.min(toPetal, (b.maxHp || 30) * PETAL_HIT_HP_CAP);
+          b.hp -= dmgP; b.hurtT = 0.3;
         }
+        if (toMob > 0) this._hitMob(m, toMob);
+        // 攻击磨损：每【次接触】按最大耐久比例磨损（不再是每个 tick）
+        b.hp -= b.maxHp * PETAL_ATTACK_DUR;
         if (b.hp <= 0) this._destroyPetal(b);
         if (m.dead) break;
       }
@@ -1010,6 +1021,23 @@ class LocalServer {
   // 花瓣 / 花朵本体 / 生物 三个方向都必须走它 —— 否则"同阵营的实体挨打却两套算法"。
   _dmg(fromStat, toArmor) {
     return Math.max((fromStat || 0) - (toArmor || 0), 0);
+  }
+
+  // 花瓣 vs 生物【实体分离】的"生物一侧"：生物被推出花瓣轮廓。
+  //   · 反质量份额：花瓣越重，生物让得越多（与实体推挤 physicsPush 同一套权重）；
+  //   · 保留 PETAL_CONTACT_SKIN 的穿透量：推成"刚好相切"下一 tick 判不到接触，
+  //     表现就是"卡在轮廓外沿、既打不到也不再受伤"；
+  //   · 单帧位移封顶 16px：一发把巨型生物"弹开半张屏"是错的，其余的下一帧继续；
+  //   · 被刚性粘合的链节不动：它们的位置每步末尾由 _solveChains 按轨迹重摆，
+  //     推了会被立刻覆盖，只会产生"被推开又拉回"的高频抖动。
+  _separateMobFromPetal(m, b, hit) {
+    if (!m || !hit || hit.depth <= PETAL_CONTACT_SKIN) return;
+    if (m._chainLocked) return;
+    const invP = 1 / (b.weight || 1);
+    const invM = 1 / (m.weight || 1);
+    const shareM = invM / ((invP + invM) || 1);
+    const push = Math.min((hit.depth - PETAL_CONTACT_SKIN) * PETAL_SEP_K * shareM, 16);
+    if (push > 0) { m.x -= hit.nx * push; m.y -= hit.ny * push; }
   }
 
   _hitMob(m, toMob) {

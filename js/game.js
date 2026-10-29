@@ -1058,15 +1058,15 @@ class Game {
       ctx.arc(p.x, p.y, p.r, 0, TAU);
       ctx.stroke();
 
-      // 花瓣：颜色直接对应 data.js 里的 solid —— 黄 = 无实体碰撞（穿过生物、只传动能），
-      // 橙 = 有实体碰撞（把生物推开、在生物身上揉搓）。一眼就能看出是哪一类。
+      // 花瓣：颜色直接对应 data.js 里的 sticky —— 黄 = 普通花瓣（只走轨道 + 实体碰撞），
+      // 橙 = 会被生物吸住揉搓（蜜）。碰撞对所有花瓣一视同仁，这里只区分吸附行为。
       for (let pass = 0; pass < 2; pass++) {
         ctx.strokeStyle = pass ? '#ff9a1a' : '#ffe14d';
         ctx.beginPath();
         for (const b of p.petals || []) {
           if (b.dead) continue;
-          const isSolid = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'solid'));
-          if (isSolid !== !!pass) continue;
+          const isSticky = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'sticky'));
+          if (isSticky !== !!pass) continue;
           const r = PETAL_R;
           ctx.moveTo(b.x + r, b.y);
           ctx.arc(b.x, b.y, r, 0, TAU);

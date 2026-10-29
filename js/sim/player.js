@@ -352,10 +352,38 @@ class Player {
     return !!r && r.age >= r.dur;
   }
 
-  // 花瓣运动：自由跟随主角。与生物【没有物理碰撞】——花瓣穿过生物本体，
-  // 敌对接触只走战斗结算（25 tick/s 双向扣血，见 game.js _combatTick）。
+  // 花瓣运动：自由跟随主角（位移积分），实体碰撞由 _separatePetalFromMobs 负责。
   _resolvePetal(b, mx, my) {
     b.x += mx; b.y += my;
+  }
+
+  // 花瓣 vs 生物【实体分离】（碰撞的"花瓣一侧"）：重叠时把花瓣推出生物轮廓。
+  //   · 反质量份额：花瓣越重，生物让得越多；被刚性粘合的链节永不让位（份额 0）；
+  //   · 保留 PETAL_CONTACT_SKIN 的穿透量 —— 推成"刚好相切"会让下一 tick 判不到接触，
+  //     表现就是"卡在轮廓外沿、既打不到也不再受伤"；
+  //   · 法线方向的速度按 PETAL_BOUNCE 反弹：撞上去弹开再绕回来，不会被弹簧一直顶在
+  //     生物表面白嫖伤害；切向速度保留，于是沿表面"蹭"过去（揉搓感）。
+  // 客户端与服务端跑同一段代码（服务端 mobs 权威、客户端是视图，位置差 1~2px），
+  // 位移只有几像素且随即被弹簧拉回，两端不会累积偏差。
+  // 生物一侧的分离在 LocalServer._separateMobFromPetal 里做（生物只有服务端能动）。
+  _separatePetalFromMobs(b, mobs) {
+    if (!mobs || !mobs.length) return;
+    for (const m of mobs) {
+      if (!m || m.dead) continue;
+      const hit = mobHitTest(m, b.x, b.y, PETAL_R);
+      if (!hit || hit.depth <= PETAL_CONTACT_SKIN) continue;
+      const invP = 1 / (b.weight || 1);
+      const invM = m._chainLocked ? 0 : 1 / (m.weight || 1);
+      const shareP = invP / ((invP + invM) || 1);
+      const push = (hit.depth - PETAL_CONTACT_SKIN) * PETAL_SEP_K * shareP;
+      if (push > 0) { b.x += hit.nx * push; b.y += hit.ny * push; }
+      if (b.vx == null) { b.vx = 0; b.vy = 0; }
+      const vn = b.vx * hit.nx + b.vy * hit.ny;
+      if (vn < 0) {
+        b.vx -= hit.nx * vn * (1 + PETAL_BOUNCE);
+        b.vy -= hit.ny * vn * (1 + PETAL_BOUNCE);
+      }
+    }
   }
 
   // 花瓣 = 实体：每片都有"此刻应在的位置"(target) 与 "实际位置"，平滑吸附过去。
@@ -450,7 +478,11 @@ class Player {
           // 注释原话就是"花瓣 = 对应稀有度重量"，但此前实体对象上根本没有这个字段，
           // 导致所有花瓣在推挤/击退中一律视为"没有重量"——连 Eternal 蜜都被 rare 生物推着跑。
           body = { slotIndex, sub, gen, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0,
-            weight: rarityWeight(card.rarity) };
+            weight: rarityWeight(card.rarity),
+            // 护甲走同一张数据表（花瓣与生物同一套伤害口径：dmg - armor）
+            armor: st.armor || 0,
+            hitCd: 0,        // 伤害接触冷却（服务端推进，见 LocalServer._combatTick）
+            kbT: 0 };        // 传能冷却
         }
         body.age += dt;
         body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
@@ -636,15 +668,13 @@ class Player {
       }
 
       // ---- 花瓣吸附（果冻感）----
-      // 【只有 solid 花瓣会被吸到生物表面"揉搓"】（数据见 data.js PETAL_TRAITS）。
-      // 没有实体碰撞的花瓣必须直接穿过生物：旧实现里它们也会被吸住，停在轮廓外沿
-      // 一动不动 —— 看起来就是"被吸附 + 卡在碰撞箱边缘"，而且那一瞬间什么都结算不到。
-      // 吸附的目标点 = 生物轮廓上的最近点沿外法线略微嵌入，于是被轨道拖着在生物身上揉搓。
-      // 只有轨道应在位置相对吸住时被拉开 2.5 倍直径（人跑远了）才松手回轨道。
-      const solid = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'solid'));
+      // 【sticky 花瓣才会被吸到生物表面】（数据见 data.js PETAL_TRAITS）。
+      // 注意：吸附只管"往哪儿飞"，和碰撞无关 —— 所有花瓣都是实体、都会和生物分离并结算伤害，
+      // 吸附只是让 sticky 花瓣主动贴上去揉搓（蜜的用法）。
+      const sticky = !!(b.card && b.card.type && PetalFX.trait(b.card.type, 'sticky'));
       let gx = tx, gy = ty, K = PETAL_SPRING_K;
-      let mob = solid ? b.pullMob : null;
-      if (!solid && b.pullMob) b.pullMob = null;
+      let mob = sticky ? b.pullMob : null;
+      if (!sticky && b.pullMob) b.pullMob = null;
       if (mob && mob.dead) mob = null;
       const orbitGap = dist(tx, ty, b.x, b.y);
       if (b.pullCd > 0) b.pullCd = Math.max(0, b.pullCd - dtc);   // 再吸附冷却
@@ -660,7 +690,7 @@ class Player {
           b.pullCd = PETAL_PULL_CD;      // 冷却期内不再黏同一片区域
         }
       }
-      if (solid && !mob && !(b.pullCd > 0) && nearMobs && nearMobs.length) {
+      if (sticky && !mob && !(b.pullCd > 0) && nearMobs && nearMobs.length) {
         // 找"到轮廓的距离"最近、且在触发范围内的生物（按真实外形，不按外接圆）
         let best = null, bestEdge = PETAL_D * PETAL_PULL_RANGE;
         for (const m of nearMobs) {
@@ -687,8 +717,10 @@ class Player {
       b.vy += (K * (gy - b.y) - PETAL_SPRING_D * b.vy) * dtc;
       const sp = Math.hypot(b.vx, b.vy);
       if (sp > PETAL_MAX_SPEED) { const s = PETAL_MAX_SPEED / sp; b.vx *= s; b.vy *= s; }
-      // 自由运动（花瓣不是硬碰撞体；对生物的"果冻碰撞"由战斗 tick 结算击退）
+      // 自由运动（花瓣是【实体】，与生物的分离见 _separatePetalFromMobs）
       this._resolvePetal(b, b.vx * dtc, b.vy * dtc);
+      // 与生物做实体分离：花瓣不许和生物重合（碰撞的"花瓣一侧"）
+      this._separatePetalFromMobs(b, nearMobs);
     }
 
     // 供绘制与碰撞使用（hurtT：花瓣受伤红滤镜；fxActive：特效驱动中，图层在主角之上；

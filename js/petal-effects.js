@@ -148,68 +148,41 @@ const PetalFX = {
     return this.trait(type, 'holdReloadUntilDeath') ? Infinity : PETAL_DETACH_TTL;
   },
 
-  // 花瓣 vs 生物的接触结算（每 tick、每次命中调一次）。
-  // contact = { dt, mob, hit:{nx,ny,depth}, approach, jmass, jshare, wP, wM, shareP, shareM, kbBoost }
-  // 分派顺序：注册项的 onHit > 数据里的 solid（见 data.js PETAL_TRAITS）。
-  //   · solid = true  -> _solidHit：机体被推出花瓣轮廓 + 沿表面摩擦，花瓣自己不动（揉搓）
-  //   · solid = false -> _softHit ：穿过生物，只在撞上去那一下传一次动能
-  // 两种都【不位移花瓣】，伤害由战斗循环按重合结算。
+  // 花瓣 vs 生物的【接触传能】（每 tick、每次接触调一次；伤害不在这里）。
+  // contact = { dt, mob, hit:{nx,ny,depth}, approach, relN, jmass, jshare, wP, wM, shareP, shareM, kbBoost }
+  // 【所有花瓣同一套】：实体分离由 Player._separatePetalFromMobs（花瓣侧）与
+  // LocalServer._separateMobFromPetal（生物侧）完成，这里只负责手感：
+  //   ① 撞上去那一下传一次动能（kbT 冷却，同一次接触只传一次）；
+  //   ② 沿生物表面加一份切向摩擦，生物是"蹭走"而不是被钉在原地（揉搓）。
+  // 不再按 PETAL_TRAITS.solid 分叉 —— 那套"有的花瓣穿过生物、有的被挡住"正是
+  // "花瓣和生物根本不结算碰撞"的来源。注册项的 onHit 仍拥有最高优先级。
   onHit(body, player, contact) {
     const type = body && body.card && body.card.type;
     const def = this.defOf(type);
     const c = this._ctx(body, player, (contact && contact.dt) || 0);
     if (def && def.onHit) return !!def.onHit(c, contact);
-    return this.trait(type, 'solid') ? this._solidHit(c, contact) : this._softHit(c, contact);
+    return this._contactHit(c, contact);
   },
 
-  // 软碰撞（无实体碰撞的花瓣）：只在"撞上去那一下"传一次动能，双方都不位移。
-  _softHit(ctx, c) {
-    if (!c) return false;
-    const b = ctx.petal;
-    // 接触强度取"花瓣撞过来"与"生物撞过来"两者中更大的那个相对法向速度
-    const vN = Math.max(c.approach || 0, c.relN || 0);
-    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
-      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
-      applyKnockback(c.mob, -c.hit.nx, -c.hit.ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
-      b.kbT = PETAL_KB_CD;
-    }
-    return true;
-  },
-
-  // 实体碰撞（solid 花瓣）：花瓣是"有质量但钉在轨道上"的实体 ——
-  //   ① 生物被【持续】推出花瓣轮廓，所以它会贴着花瓣表面滑过去（就是"在生物身上揉搓"）；
-  //   ② 花瓣自身绝不位移：位置由轨道 / 吸附决定。以前两边互相推，花瓣被顶出去 ~7px
-  //      （正好等于吸附落点），下一 tick 判不到命中 -> 卡在轮廓外沿、既不受伤也不再结算，
-  //      这就是"看起来被吸住却打不到"的根因；
-  //   ③ 推出时保留 PETAL_CONTACT_SKIN 的接触量：推成"刚好相切"同样会让命中判定归零；
-  //   ④ 沿表面加一份摩擦速度，生物是"蹭走"而不是被钉在原地。
-  _solidHit(ctx, c) {
+  _contactHit(ctx, c) {
     if (!c) return false;
     const b = ctx.petal, m = c.mob;
     const nx = c.hit.nx, ny = c.hit.ny;
-    const depth = c.hit.depth || 0;
-    if (depth > PETAL_CONTACT_SKIN) {
-      const push = (depth - PETAL_CONTACT_SKIN) * 0.55;   // 一次推不完，留一点接触
-      // 多节生物【被粘合的节】不在这里位移：它们的位置每帧末由 _solveChains 按轨迹刚性解算，
-      // 推了也会在 1/60s 后被覆盖 —— 表现却是"被推开 -> 被拉回"的高频抖动，
-      // 整条身体还会被径向撕开、错位成一团（用户看到的"撞蜜时缩成一团晃动"）。
-      // 分离力只作用在【自由节点】（段首 / 普通生物）上，身体沿轨迹自然让开。
-      if (!m._chainLocked) { m.x -= nx * push; m.y -= ny * push; }
+    // ① 一次接触只传一次动能。接触强度取"花瓣撞过来"与"生物撞过来"两者中更大的那个，
+    //    否则"站着不动让怪撞"永远传不出力。
+    const vN = Math.max(c.approach || 0, c.relN || 0);
+    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
+      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
+      applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
+      b.kbT = PETAL_KB_CD;
     }
-    // 摩擦：把生物往"花瓣相对生物"的切向速度上带（揉搓感）
+    // ② 切向摩擦（揉搓）：把生物往"花瓣相对生物"的切向速度上带
     const tx = -ny, ty = nx;
     const relV = ((b.vx || 0) - (m.vx || 0)) * tx + ((b.vy || 0) - (m.vy || 0)) * ty;
     if (relV > 1 || relV < -1) {
       const j = clamp(relV * 0.28, -PETAL_RUB_MAX, PETAL_RUB_MAX);
       m.vx = (m.vx || 0) + tx * j;
       m.vy = (m.vy || 0) + ty * j;
-    }
-    // 撞上去那一下的动能传递（与软碰撞同一套系数，保证两种花瓣手感一致）
-    const vN = Math.max(c.approach || 0, c.relN || 0);
-    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
-      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
-      applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
-      b.kbT = PETAL_KB_CD;
     }
     return true;
   },
@@ -356,9 +329,8 @@ PetalFX.register('pollen', {});
 PetalFX.register('peas', {});
 
 // —— 内置特效 5：蜜（Honey）——
-// ① 实体碰撞：这条【不写在这里】，由 data.js 的 `solid: true` 决定 ——
-//    引擎据此走 _solidHit：生物被持续推出蜜的轮廓并沿表面蹭走（揉搓），蜜自身不动。
-//    想改"哪些花瓣有实体碰撞"，只改 PETAL_TRAITS，不要回来加分支。
+// ① 实体碰撞：这条【不写在这里】。所有花瓣都是实体（分离 + 双向伤害由战斗循环统一处理），
+//    蜜的区别只有 `sticky: true` —— 会被生物吸到表面"揉搓"（见 data.js PETAL_TRAITS）。
 // ② 仇恨吸引：把周围生物的仇恨拉到自己身上（不造成伤害，只负责挨打）。
 //    吸引范围与稀有度上限仍由数据字段声明，判定逻辑集中在 canAttract()。
 PetalFX.register('honey', {

@@ -1,0 +1,332 @@
+{
+  "rows": [
+    {
+      "slug": "ladybug",
+      "rar": "common",
+      "hasTable": true,
+      "hpInTable": 60,
+      "dmgInTable": 10,
+      "mobHp": 60,
+      "mobDmg": 10,
+      "mobArmor": 1
+    },
+    {
+      "slug": "ladybug",
+      "rar": "unusual",
+      "hasTable": true,
+      "hpInTable": 225,
+      "dmgInTable": 30,
+      "mobHp": 225,
+      "mobDmg": 30,
+      "mobArmor": 2
+    },
+    {
+      "slug": "ladybug",
+      "rar": "rare",
+      "hasTable": true,
+      "hpInTable": 810,
+      "dmgInTable": 90,
+      "mobHp": 810,
+      "mobDmg": 90,
+      "mobArmor": 7
+    },
+    {
+      "slug": "ladybug",
+      "rar": "epic",
+      "hasTable": true,
+      "hpInTable": 3240,
+      "dmgInTable": 270,
+      "mobHp": 3240,
+      "mobDmg": 270,
+      "mobArmor": 22
+    },
+    {
+      "slug": "ladybug",
+      "rar": "legendary",
+      "hasTable": true,
+      "hpInTable": 19440,
+      "dmgInTable": 810,
+      "mobHp": 19440,
+      "mobDmg": 810,
+      "mobArmor": 65
+    },
+    {
+      "slug": "ladybug",
+      "rar": "mythic",
+      "hasTable": true,
+      "hpInTable": 189540,
+      "dmgInTable": 2430,
+      "mobHp": 189540,
+      "mobDmg": 2430,
+      "mobArmor": 194
+    },
+    {
+      "slug": "ladybug",
+      "rar": "ultra",
+      "hasTable": true,
+      "hpInTable": 8748000,
+      "dmgInTable": 7290,
+      "mobHp": 8748000,
+      "mobDmg": 7290,
+      "mobArmor": 583
+    },
+    {
+      "slug": "ladybug",
+      "rar": "super",
+      "hasTable": true,
+      "hpInTable": 262440000,
+      "dmgInTable": 21870,
+      "mobHp": 262440000,
+      "mobDmg": 21870,
+      "mobArmor": 583
+    },
+    {
+      "slug": "ladybug",
+      "rar": "eternal",
+      "hasTable": true,
+      "hpInTable": 1574640000,
+      "dmgInTable": 65610,
+      "mobHp": 1574640000,
+      "mobDmg": 65610,
+      "mobArmor": 583
+    },
+    {
+      "slug": "bee",
+      "rar": "common",
+      "hasTable": true,
+      "hpInTable": 35,
+      "dmgInTable": 50,
+      "mobHp": 35,
+      "mobDmg": 50,
+      "mobArmor": 1
+    },
+    {
+      "slug": "bee",
+      "rar": "unusual",
+      "hasTable": true,
+      "hpInTable": 131.3,
+      "dmgInTable": 150,
+      "mobHp": 131.3,
+      "mobDmg": 150,
+      "mobArmor": 2
+    },
+    {
+      "slug": "bee",
+      "rar": "rare",
+      "hasTable": true,
+      "hpInTable": 472.5,
+      "dmgInTable": 450,
+      "mobHp": 472.5,
+      "mobDmg": 450,
+      "mobArmor": 7
+    },
+    {
+      "slug": "bee",
+      "rar": "epic",
+      "hasTable": true,
+      "hpInTable": 1890,
+      "dmgInTable": 1350,
+      "mobHp": 1890,
+      "mobDmg": 1350,
+      "mobArmor": 22
+    },
+    {
+      "slug": "bee",
+      "rar": "legendary",
+      "hasTable": true,
+      "hpInTable": 11340,
+      "dmgInTable": 4050,
+      "mobHp": 11340,
+      "mobDmg": 4050,
+      "mobArmor": 65
+    },
+    {
+      "slug": "bee",
+      "rar": "mythic",
+      "hasTable": true,
+      "hpInTable": 110565,
+      "dmgInTable": 12150,
+      "mobHp": 110565,
+      "mobDmg": 12150,
+      "mobArmor": 194
+    },
+    {
+      "slug": "bee",
+      "rar": "ultra",
+      "hasTable": true,
+      "hpInTable": 5103000,
+      "dmgInTable": 36450,
+      "mobHp": 5103000,
+      "mobDmg": 36450,
+      "mobArmor": 583
+    },
+    {
+      "slug": "bee",
+      "rar": "super",
+      "hasTable": true,
+      "hpInTable": 153090000,
+      "dmgInTable": 109350,
+      "mobHp": 153090000,
+      "mobDmg": 109350,
+      "mobArmor": 583
+    },
+    {
+      "slug": "bee",
+      "rar": "eternal",
+      "hasTable": true,
+      "hpInTable": 918540000,
+      "dmgInTable": 328050,
+      "mobHp": 918540000,
+      "mobDmg": 328050,
+      "mobArmor": 583
+    },
+    {
+      "slug": "centipede",
+      "rar": "common",
+      "hasTable": true,
+      "hpInTable": 25,
+      "dmgInTable": 10,
+      "mobHp": 25,
+      "mobDmg": 10,
+      "mobArmor": 1
+    },
+    {
+      "slug": "centipede",
+      "rar": "unusual",
+      "hasTable": true,
+      "hpInTable": 93.8,
+      "dmgInTable": 30,
+      "mobHp": 93.8,
+      "mobDmg": 30,
+      "mobArmor": 2
+    },
+    {
+      "slug": "centipede",
+      "rar": "rare",
+      "hasTable": true,
+      "hpInTable": 337.5,
+      "dmgInTable": 90,
+      "mobHp": 337.5,
+      "mobDmg": 90,
+      "mobArmor": 7
+    },
+    {
+      "slug": "centipede",
+      "rar": "epic",
+      "hasTable": true,
+      "hpInTable": 1350,
+      "dmgInTable": 270,
+      "mobHp": 1350,
+      "mobDmg": 270,
+      "mobArmor": 22
+    },
+    {
+      "slug": "centipede",
+      "rar": "legendary",
+      "hasTable": true,
+      "hpInTable": 8100,
+      "dmgInTable": 810,
+      "mobHp": 8100,
+      "mobDmg": 810,
+      "mobArmor": 65
+    },
+    {
+      "slug": "centipede",
+      "rar": "mythic",
+      "hasTable": true,
+      "hpInTable": 78975,
+      "dmgInTable": 2430,
+      "mobHp": 78975,
+      "mobDmg": 2430,
+      "mobArmor": 194
+    },
+    {
+      "slug": "centipede",
+      "rar": "ultra",
+      "hasTable": true,
+      "hpInTable": 3645000,
+      "dmgInTable": 7290,
+      "mobHp": 3645000,
+      "mobDmg": 7290,
+      "mobArmor": 583
+    },
+    {
+      "slug": "centipede",
+      "rar": "super",
+      "hasTable": true,
+      "hpInTable": 109350000,
+      "dmgInTable": 21870,
+      "mobHp": 109350000,
+      "mobDmg": 21870,
+      "mobArmor": 583
+    },
+    {
+      "slug": "centipede",
+      "rar": "eternal",
+      "hasTable": true,
+      "hpInTable": 656100000,
+      "dmgInTable": 65610,
+      "mobHp": 656100000,
+      "mobDmg": 65610,
+      "mobArmor": 583
+    }
+  ],
+  "petals": [
+    {
+      "slug": "basic",
+      "hp": 10,
+      "dmg": 10,
+      "solid": false
+    },
+    {
+      "slug": "light",
+      "hp": 5,
+      "dmg": 13,
+      "solid": false
+    },
+    {
+      "slug": "rose",
+      "hp": 5,
+      "dmg": 5,
+      "solid": false
+    },
+    {
+      "slug": "stinger",
+      "hp": 1,
+      "dmg": 100,
+      "solid": false
+    },
+    {
+      "slug": "pollen",
+      "hp": 5,
+      "dmg": 38,
+      "solid": false
+    },
+    {
+      "slug": "honey",
+      "hp": 50,
+      "dmg": 0,
+      "solid": true
+    },
+    {
+      "slug": "leaf",
+      "hp": 12,
+      "dmg": 16,
+      "solid": false
+    },
+    {
+      "slug": "peas",
+      "hp": 5,
+      "dmg": 15,
+      "solid": false
+    }
+  ],
+  "combat": {
+    "ticks": 400,
+    "contactTicks": 0,
+    "oneWayTicks": 0,
+    "zeroDmgMobs": [],
+    "oneWayByMob": {},
+    "bothByMob": {}
+  }
+}

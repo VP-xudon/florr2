@@ -459,59 +459,63 @@
         const sp = plan ? Math.hypot(plan.vx, plan.vy) : 0;
         if (!(sp > 100)) bad.push('peas 未喷射 sp=' + sp.toFixed(1));
       }
-      // ② solid 花瓣（Honey）：把生物推出轮廓、花瓣自身钉住不动、并保留接触量
+      // ② 接触传能（PetalFX.onHit）：只传一次动能，【谁都不位移】——
+      //    位移是实体分离的职责（生物侧 LocalServer._separateMobFromPetal / 花瓣侧
+      //    Player._separatePetalFromMobs），两件事必须彻底分开，否则又会出现
+      //    "推完就判不到命中 -> 卡在轮廓外沿、既不受伤也不再结算"。
       const honey = typeOf('honey');
       if (honey) {
         const b = mkBody(honey);
-        const mob = { x: 1, y: 0, vx: -200, vy: 0, rarity: 'common', kbX: 0, kbY: 0 };
-        const bx = b.x, mx = mob.x;
+        const mob = { x: 1, y: 0, vx: -200, vy: 0, rarity: 'common', weight: 1, kbX: 0, kbY: 0 };
+        const bx = b.x, by = b.y, mx = mob.x;
         const contact = {
           dt: 0.04, mob, hit: { nx: 1, ny: 0, depth: 4 }, approach: 200, relN: 200,
           jmass: 1, jshare: 0.85, wP: 1, wM: 1, shareP: 0.5, shareM: 0.5, kbBoost: 1
         };
         PetalFX.onHit(b, p, contact);
-        if (b.x !== bx || b.y !== 0) bad.push('花瓣被推动了（solid 花瓣必须钉住不动）');
-        if (!(mob.x < mx)) bad.push('solid 花瓣没把生物推出轮廓 mob.x=' + mob.x);
-        // 推出去的量必须小于穿透量：留 PETAL_CONTACT_SKIN 的接触，否则下一 tick 判不到，
-        // 就成了"卡在碰撞箱外沿、既不受伤也不再结算"
-        const pushed = mx - mob.x;
-        if (!(pushed < 4)) bad.push('一次推完了整段穿透 pushed=' + pushed.toFixed(2));
+        if (b.x !== bx || b.y !== by) bad.push('传能阶段位移了花瓣');
+        if (mob.x !== mx) bad.push('传能阶段位移了生物');
         if (!(mob.kbX < 0)) bad.push('honey 未沿法线传动能 kbX=' + mob.kbX);
         const once = mob.kbX;
         PetalFX.onHit(b, p, contact);                      // 冷却内重复接触
         if (mob.kbX !== once) bad.push('同一次接触传了两次动能');
-        // ③ 无实体碰撞的花瓣：同样不位移任何一方（只传一次动能）
-        const basic = typeOf('basic');
-        if (basic) {
-          const b2 = mkBody(basic);
-          const m2 = { x: 1, y: 0, vx: -300, vy: 0, rarity: 'common', kbX: 0, kbY: 0 };
-          PetalFX.onHit(b2, p, {
-            dt: 0.04, mob: m2, hit: { nx: 1, ny: 0, depth: 4 }, approach: 200,
-            jmass: 1, jshare: 0.85, wP: 1, wM: 1, shareP: 0.5, shareM: 0.5, kbBoost: 1
-          });
-          if (m2.x !== 1) bad.push('非 solid 花瓣位移了生物');
+        // ③ 实体分离的"生物一侧"：推开但必须保留 PETAL_CONTACT_SKIN 的接触量
+        const srv = game.net && game.net.debugServer;
+        if (srv) {
+          const m2 = { x: 1, y: 0, weight: 1, _chainLocked: false };
+          srv._separateMobFromPetal(m2, b, { nx: 1, ny: 0, depth: 8 });
+          const pushed = 1 - m2.x;
+          if (!(pushed > 0)) bad.push('生物没被推出花瓣');
+          if (!(pushed < 8)) bad.push('一次推完了整段穿透 pushed=' + pushed.toFixed(2));
+          // 被刚性粘合的链节不让位（推了会被 _solveChains 覆盖成抖动）
+          const m3 = { x: 1, y: 0, weight: 1, _chainLocked: true };
+          srv._separateMobFromPetal(m3, b, { nx: 1, ny: 0, depth: 8 });
+          if (m3.x !== 1) bad.push('被粘合的链节被推动了');
         }
         // ④ 稀有度上限：rare 蜜只吸得到 common，吸不到 epic
         if (PetalFX.canAttract(b, p, { rarity: 'epic', x: 10, y: 0 })) bad.push('honey 稀有度上限失效');
         if (!PetalFX.canAttract(b, p, { rarity: 'common', x: 10, y: 0 })) bad.push('honey 连 common 都吸不到');
       }
-      return { ok: bad.length === 0, detail: bad.length ? bad.join(' ') : '注册齐全 + 实体碰撞/喷射/稀有度上限正常' };
+      return { ok: bad.length === 0, detail: bad.length ? bad.join(' ') : '注册齐全 + 传能/分离/吸附属性能正常' };
     });
 
-    // 8c1) 实体碰撞必须【逐个花瓣显式声明】（不允许"没写就默认某种行为"）
-    check('data: 花瓣实体碰撞逐个声明', () => {
+    // 8c1) 吸附属性必须【逐个花瓣显式声明】（不允许"没写就默认某种行为"）
+    check('data: 花瓣吸附属性逐个声明', () => {
       const enabled = Array.from(ENABLED_PETAL_SLUGS || []);
-      const undeclared = enabled.filter((s) => !PETAL_TRAITS[s] || typeof PETAL_TRAITS[s].solid !== 'boolean');
-      const solids = enabled.filter((s) => PETAL_TRAITS[s] && PETAL_TRAITS[s].solid === true);
-      // 类型表里的 solid 必须与声明一致（行为层只读 type.solid）
-      const mismatch = PETAL_TYPES.filter((t) => !!t.solid !== !!(PETAL_TRAITS[t.slug] && PETAL_TRAITS[t.slug].solid))
+      const undeclared = enabled.filter((s) => !PETAL_TRAITS[s] || typeof PETAL_TRAITS[s].sticky !== 'boolean');
+      const sticky = enabled.filter((s) => PETAL_TRAITS[s] && PETAL_TRAITS[s].sticky === true);
+      // 类型表里的 sticky 必须与声明一致（行为层只读 type.sticky）
+      const mismatch = PETAL_TYPES.filter((t) => !!t.sticky !== !!(PETAL_TRAITS[t.slug] && PETAL_TRAITS[t.slug].sticky))
         .map((t) => t.slug);
-      const ok = undeclared.length === 0 && mismatch.length === 0;
+      // 旧的 solid 字段必须彻底消失：它曾经决定"花瓣能不能穿过生物"，
+      // 现在所有花瓣都是实体，留着会让人以为还有两套碰撞。
+      const legacy = PETAL_TYPES.filter((t) => t.solid !== undefined).map((t) => t.slug);
+      const ok = undeclared.length === 0 && mismatch.length === 0 && legacy.length === 0;
       return {
         ok,
         detail: ok
-          ? `共 ${enabled.length} 种；有实体碰撞=${solids.join(',') || '无'}`
-          : `未声明=${undeclared.join(',')} 不一致=${mismatch.join(',')}`
+          ? `共 ${enabled.length} 种；会被吸附=${sticky.join(',') || '无'}`
+          : `未声明=${undeclared.join(',')} 不一致=${mismatch.join(',')} 残留solid=${legacy.join(',')}`
       };
     });
 
@@ -573,9 +577,11 @@
       const st = petalStatsFor(b.card.type, b.card.rarity);
       const toPetal = Math.max((m.dmg || 0) - (b.armor || 0), 0);
       const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
-      // 3 个 tick：花瓣掉 3×生物伤害 + 3×攻击磨损；生物掉 3×花瓣伤害
-      const wantPetal = 3 * toPetal + 3 * (bMax0 || 0) * PETAL_ATTACK_DUR;
-      const wantMob = 3 * toMob;
+      // 接触是【离散事件】：3 个 tick 里只有第 1 个结算（后面两个在 PETAL_HIT_CD 冷却里）。
+      // 花瓣单次受伤有上限（× PETAL_HIT_HP_CAP，保证能挨两下），另有每次接触的攻击磨损。
+      const wantPetal = Math.min(toPetal, (bMax0 || 0) * PETAL_HIT_HP_CAP)
+        + (bMax0 || 0) * PETAL_ATTACK_DUR;
+      const wantMob = toMob;
       const okB = Math.abs((bHp0 - bAfter) - wantPetal) < 0.01;
       const okM = Math.abs((mHp0 - mAfter) - wantMob) < 0.01;
       return {
@@ -583,6 +589,43 @@
         detail: `花瓣 -${(bHp0 - bAfter).toFixed(1)}（应为 ${wantPetal.toFixed(1)}）`
           + ` 生物 -${(mHp0 - mAfter).toFixed(1)}（应为 ${wantMob.toFixed(1)}）`
       };
+    });
+
+    // 8c2b) 花瓣与生物【实体碰撞】：重叠时双方各让一半，重叠必须真的被消掉。
+    //       这条守的是"花瓣和生物不能正常结算碰撞"——只结算伤害、两者照样重合是错的。
+    check('sim: 花瓣与生物实体碰撞（互相让位）', () => {
+      const srv = game.net && game.net.debugServer;
+      const pl = srv && srv.player;
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      const b = pl && (pl.petals || []).find((x) => !x.dead && !x.stationary);
+      if (!type || !b) return '没有可用花瓣（跳过）';
+      const m = new Mob(type, b.x, b.y, 1, 'common');
+      m.netId = 1e9 + 2;
+      m._ensureShape();
+      if (!m.shape) return '轮廓未就绪（跳过）';
+      const saved = { bx: b.x, by: b.y, bvx: b.vx, bvy: b.vy, mx: m.x, my: m.y };
+      try {
+        m.x = b.x; m.y = b.y;                     // 完全重合：最深的重叠
+        const hit0 = mobHitTest(m, b.x, b.y, PETAL_R);
+        if (!hit0) return '重合却判不到命中（跳过）';
+        const d0 = hit0.depth;
+        // 生物一侧（战斗循环里做的）
+        srv._separateMobFromPetal(m, b, hit0);
+        // 花瓣一侧（两端同源的那段代码）
+        pl._separatePetalFromMobs(b, [m]);
+        const hit1 = mobHitTest(m, b.x, b.y, PETAL_R);
+        const d1 = hit1 ? hit1.depth : 0;
+        const mvd = Math.hypot(m.x - saved.mx, m.y - saved.my);
+        const bvd = Math.hypot(b.x - saved.bx, b.y - saved.by);
+        return {
+          ok: d1 < d0 * 0.75 && mvd > 0.5 && bvd > 0.5,
+          detail: '深度 ' + d0.toFixed(1) + ' -> ' + d1.toFixed(1) +
+            ' 分离 生物=' + mvd.toFixed(1) + 'px 花瓣=' + bvd.toFixed(1) + 'px'
+        };
+      } finally {
+        m.x = saved.mx; m.y = saved.my;
+        b.x = saved.bx; b.y = saved.by; b.vx = saved.bvx; b.vy = saved.bvy;
+      }
     });
 
     // 8c3) 花瓣血量镜像：世代号错位（客户端/服务端脱轨差一 tick）也必须能对上

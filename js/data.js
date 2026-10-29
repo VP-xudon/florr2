@@ -157,28 +157,27 @@ const MAX_MOB_RARITY_COLOR = '#d2eb34';
 // 字段含义：
 //   detachAfter            脱轨延时（>0 = 滞留型：脱离轨道后留在原地）
 //   launch                 脱轨瞬间喷射 { count 方向数, speedK 速度倍率, life 存活秒数 }
-//   solid                  【与生物有没有实体碰撞】。true = 有质量的实体：重叠时机体被持续推出花瓣轮廓，
-//                          花瓣自己不动（钉在轨道/吸附点上），于是生物贴着花瓣表面滑动 = 揉搓；
-//                          false = 穿过生物，只在重合瞬间传一次动能。两种都照常在重合期间结算伤害。
-//                          这一项必须在下面【逐个花瓣显式声明】，不允许靠"没写就默认某种行为"。
+//   sticky                 【会不会被生物"吸"过去黏在表面揉搓】。只影响吸附/落点，不影响碰撞——
+//                          所有花瓣都是实体、都和生物结算碰撞（分离 + 双向伤害），
+//                          这一项不再决定"能不能穿过去"（旧字段 solid 已废弃）。
 //   attractMobs            把周围生物的仇恨拉到自己身上
 //   holdReloadUntilDeath   实体未死亡前卡片不重新装填
 //   noDamage               不造成伤害（只挨打）
 //   healOverTime           持续回血，数值单位为「每秒」（展示为 x/s）
 //   maxMobRarity           可吸引的最高生物稀有度表
 const PETAL_TRAITS = {
-  // —— 8 种启用花瓣的实体碰撞属性（唯一来源，行为层只读它）——
-  basic: { solid: false },
-  light: { solid: false },
-  rose: { solid: false },
-  stinger: { solid: false },
-  leaf: { reload: 1.8, healOverTime: true, solid: false },
-  pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5, solid: false },
-  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 }, solid: false },
-  // 蜜是唯一"有质量"的花瓣：生物会被它从身上推开（因此会沿着它滑走），它自己不动。
+  // —— 8 种启用花瓣的吸附属性（唯一来源，行为层只读它）——
+  basic: { sticky: false },
+  light: { sticky: false },
+  rose: { sticky: false },
+  stinger: { sticky: false },
+  leaf: { reload: 1.8, healOverTime: true, sticky: false },
+  pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5, sticky: false },
+  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 }, sticky: false },
+  // 蜜会被生物吸住并贴在表面（吸血式"拉仇恨"的载体），其它花瓣保持轨道运动。
   honey: {
     reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5,
-    solid: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
+    sticky: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
     maxMobRarity: HONEY_MAX_MOB_RARITY
   }
 };
@@ -228,7 +227,7 @@ function buildPetalTypes() {
       // ---- 能力字段：全部来自 PETAL_TRAITS，行为层只读字段、不判断 slug ----
       detachAfter: tr.detachAfter || 0,            // 滞留型：脱轨延时（>0 生效）
       launch: tr.launch || null,                    // 喷射参数（Peas）
-      solid: !!tr.solid,                            // 与生物有实体碰撞（唯一来源，见 PETAL_TRAITS 注释）
+      sticky: !!tr.sticky,                          // 会被生物吸住揉搓（唯一来源，见 PETAL_TRAITS 注释）
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
       noDamage: !!tr.noDamage,
