@@ -371,6 +371,12 @@ class Player {
     if (!mobs || !mobs.length) return;
     for (const m of mobs) {
       if (!m || m.dead) continue;
+      // 先用【轮廓外接圆】做一次廉价排除：nearMobs 是按"吸附范围"筛的，比真实接触范围大一圈，
+      // 逐片花瓣 × 每只近邻都跑轮廓求交是纯浪费（轮廓有近百条边）。
+      // 半径取法与 circleVsMobPoly 内部完全一致（poly.r × collSize），不会漏判。
+      const dx = m.x - b.x, dy = m.y - b.y;
+      const bound = ((m.shape && m.shape.r) ? m.shape.r * m.collSize : (m.r || 0)) + PETAL_R;
+      if (dx * dx + dy * dy > bound * bound) continue;
       const hit = mobHitTest(m, b.x, b.y, PETAL_R);
       if (!hit || hit.depth <= PETAL_CONTACT_SKIN) continue;
       const invP = 1 / (b.weight || 1);
