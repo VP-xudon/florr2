@@ -279,6 +279,7 @@ class LocalServer {
       m.spawnZone = zone || null;
       m.netId = this.nextId++;
       this.ents.push(m);
+      this._announceBossSpawn(m);          // super / eternal 才真的播（内部判）
     }
     return true;
   }
@@ -340,6 +341,8 @@ class LocalServer {
       py += Math.sin(dir) * sp;
       dir += CURVE;
     }
+    // 生成播报：整条链只播一次，且只认【头节】（其余节在 _announceBossSpawn 里也会被挡掉）
+    if (segs.length) this._announceBossSpawn(segs[0]);
 
     // 【预置轨迹】：_solveChains 是按"沿头走过的弧长倒退"摆放每一节的。
     // 若轨迹从空开始，尾节需要的弧长远大于头在最初几秒内走过的距离 ->
@@ -442,6 +445,7 @@ class LocalServer {
     const m = new Mob(type, x, y, level || 1, rarity);
     m.netId = this.nextId++;
     this.ents.push(m);
+    this._announceBossSpawn(m);            // /summon 等走通用工厂的生成同样播报
     return m;
   }
 
@@ -856,17 +860,13 @@ class LocalServer {
   _combatTick() {
     const p = this.player;
     if (!p) return;
-    // 花瓣的两个"接触冷却"（接触是离散事件，不是持续推力）：
-    //   kbT   = 传能冷却：同一次接触只传一次动能
-    //   hitCd = 伤害冷却：一次接触双方各结算一次，冷却期内即使仍然重叠也不再结算
+    // 接触的两种"节奏"，口径完全不同，别混：
+    //   kbT = 传能冷却：击退是【离散事件】，一次接触只传一次动能（PetalFX 自己判）；
+    //   伤害 = 【每 tick 结算一次，一次就是完整面板值】，没有冷却、没有摊平系数。
     const TICK_DT = 1 / 25;
     for (const b of p.petals) {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
-      if (b.hitCd > 0) b.hitCd = Math.max(0, b.hitCd - TICK_DT);
     }
-    // 花朵【本体攻击】的接触冷却：与花瓣同一节奏，否则贴脸站桩是 20×25 = 500 dps，
-    // 任何生物都在一两帧里被"体伤"烧死（受击方有受伤无敌帧，出手方却一直没有冷却）。
-    if (p.bodyHitCd > 0) p.bodyHitCd = Math.max(0, p.bodyHitCd - TICK_DT);
     // ---- 持续回血（Leaf）已迁入 PetalFX 的 passive 效果 ----
     // 规则：只要实体加载好且未死亡就每帧回 heal×dt（封顶 maxHp、不弹字）。
     // 放在 PetalFX.tick 里而不是这里，理由：
@@ -920,24 +920,18 @@ class LocalServer {
           dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
           wP, wM, shareP, shareM, kbBoost
         });
-        // ---- ③ 伤害：接触是【离散事件】，一次接触双方各结算一次 ----
-        // 冷却期内不再结算 —— 这是"双方同时掉血"的结构性保证：下面两行永远成对出现，
-        // 只有"这一侧没有攻击力"（数值为 0）才是 0，不存在"只有一边掉血"的分支。
-        if (b.hitCd > 0) continue;
-        b.hitCd = PETAL_HIT_CD;
-        // 双向伤害走【同一个公式】（花瓣与花朵本体同阵营，口径必须一致）：
-        //   伤害方 dmg - 受击方 armor，钳到 0。
+        // ---- ③ 伤害：每 tick 结算一次，一次就是完整面板值 ----
+        // 两侧永远成对出现，只有"这一侧没有攻击力"（数值为 0）才是 0，不存在单向掉血。
+        // 双向走【同一个公式】：伤害方 dmg - 受击方 armor，钳到 0，全额扣，不做任何削峰。
+        // 所以"伤害 ≥ 耐久"就是当 tick 直接碎（common 瓢虫 10 vs common basic 10、
+        // rare 瓢虫 90 vs 任何低稀有度花瓣，都是一下没），不会出现"贴着磨一会才碎"。
         const toMob = this._dmg(st.dmg, m.armor);
         const toPetal = this._dmg(m.dmg, b.armor);
         if (toPetal > 0) {
-          // 单次接触的伤害上限：一片花瓣至少能挨两下。
-          // 没有它，任意 rare 生物都能把任何花瓣打成负血 —— 耐久条与受伤红闪根本来不及显示，
-          // 玩家只能看到花瓣"凭空消失"，也就是"花瓣不受伤、生物却在掉血"的观感。
-          const dmgP = Math.min(toPetal, (b.maxHp || 30) * PETAL_HIT_HP_CAP);
-          b.hp -= dmgP; b.hurtT = 0.3;
+          b.hp -= toPetal; b.hurtT = 0.3;
         }
         if (toMob > 0) this._hitMob(m, toMob);
-        // 攻击磨损：每【次接触】按最大耐久比例磨损（不再是每个 tick）
+        // 攻击磨损：按最大耐久比例、每 tick 磨损（PETAL_ATTACK_DUR 本来就是按 25Hz 定的）
         b.hp -= b.maxHp * PETAL_ATTACK_DUR;
         if (b.hp <= 0) this._destroyPetal(b);
         if (m.dead) break;
@@ -948,13 +942,12 @@ class LocalServer {
       // 花朵本体作为实体：把体伤视为本体的 Damage(bodyDmg)、血量视为本体 Health(hp)，与怪一视同仁双向结算。
       const phit = mobHitTest(m, p.x, p.y, p.r + 0.5);
       if (phit) {
+        // 体伤（出手）：与花瓣同口径 —— 每 tick 结算一次完整面板值。
         const toMob = this._dmg(p.bodyDmg, m.armor);
+        // 体伤（挨打）：同样给面板值；真正的节流在花朵自己身上
+        //（Player.hurt → hurtInvuln 受伤无敌帧），全项目唯一带无敌帧的实体。
         const toFlower = this._dmg(m.dmg, p.armor);
-        // 体伤同样是【接触事件】：冷却期内不重复结算（与花瓣同一条规则）。
-        if (!(p.bodyHitCd > 0)) {
-          p.bodyHitCd = PETAL_HIT_CD;
-          if (toMob > 0) this._hitMob(m, toMob);
-        }
+        if (toMob > 0) this._hitMob(m, toMob);
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
           if (hurt && !p.dead) {
@@ -1053,6 +1046,8 @@ class LocalServer {
     if (r.applied > 0) {
       m.pendDmg = (m.pendDmg || 0) + r.applied;
       if (!(m.dmgTextT > 0)) {
+        // 飘字聚合窗口：每 tick 结算一次，若逐 tick 弹字会被刷屏（25 条/秒），
+        // 这里聚合成 0.12s 一条 —— 数值是该窗口内【真实累计】的伤害。
         m.dmgTextT = 0.12;
         (this._dmgList || (this._dmgList = [])).push(m);   // 见 _combatTick 末尾
       }
@@ -1081,6 +1076,7 @@ class LocalServer {
     if (!m) return;
     const ri = RARITY_ORDER.indexOf(m.rarity);
     if (ri < RARITY_ORDER.indexOf('super')) return;      // 只播报 super / eternal
+    if (m.segIdx != null && !m.isHeadSeg) return;        // 多节生物只有头节播报
     let top = null, best = -1;
     for (const t of m.threat || []) {
       if (!t.ent || t.ent.honey) continue;               // 蜜不是伤害来源
@@ -1098,6 +1094,32 @@ class LocalServer {
       text: I18N.tf('Chat/Sys/BossDestroyed',
         { 0: art, 1: rarName, 2: mobName, 3: killer },
         art + ' ' + rarName + ' ' + mobName + ' was destroyed by ' + killer)
+    });
+  }
+
+  // 生成播报：与击杀播报同规格 —— 只播 super / eternal、颜色 = 稀有度色、多节生物只有头节播。
+  // 文案一律走本项目自己的键（js/i18n-extra.js）：
+  //   · 有专属台词的物种（MOB_SPAWN_LINES）整句替换，颜色仍按稀有度；
+  //   · 其余走默认模板 "A <rarity> <mobname> has been spawned!"。
+  // 刻意不读官方 Chat/MobSpawned* 模板，也不用 registry 里每只生物的 spawn 文本。
+  _announceBossSpawn(m) {
+    if (!m) return;
+    const ri = RARITY_ORDER.indexOf(m.rarity);
+    if (ri < RARITY_ORDER.indexOf('super')) return;      // 只播报 super / eternal
+    if (m.segIdx != null && !m.isHeadSeg) return;        // 多节生物只有头节播报
+    const rarName = I18N.t('Rarities/' + m.rarity + '/Name', m.rarity);
+    const mobName = m.name || (m.type && m.type.name) || 'Mob';
+    const slug = m.type && m.type.slug;
+    const lineKey = slug ? MOB_SPAWN_LINES[slug] : null;
+    const special = lineKey ? I18N.t(lineKey, '') : '';
+    const art = /^[aeiou]/i.test(rarName) ? 'An' : 'A';
+    const color = (typeof RARITIES !== 'undefined' && RARITIES[m.rarity])
+      ? RARITIES[m.rarity].color : '#fff';
+    this._events.push({
+      kind: 'sys', channel: 'global', color,
+      text: special || I18N.tf('Chat/Sys/Spawn/Default',
+        { 0: art, 1: rarName, 2: mobName },
+        art + ' ' + rarName + ' ' + mobName + ' has been spawned!')
     });
   }
 

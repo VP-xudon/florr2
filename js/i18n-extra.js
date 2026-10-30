@@ -55,7 +55,16 @@
       'Invalid parameter. Segmented mobs accept [type=normal] or [type=long], e.g. /summon 3 common[type=long] 1',
 
     // ---- 全服击杀公告 ----
-    'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}'
+    'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}',
+
+    // ---- 全服生成公告（super / eternal 才播）----
+    // 默认模板：A <rarity> <mobname> has been spawned!
+    // {0}=A/An  {1}=稀有度名  {2}=生物名
+    'Chat/Sys/Spawn/Default': '{0} {1} {2} has been spawned!',
+    // 专属台词：登记了台词的生物不再用默认模板（整句替换，颜色仍按稀有度）
+    'Chat/Sys/Spawn/ladybug': 'A red-and-black figure rises above the horizon.',
+    'Chat/Sys/Spawn/bee': 'A deep buzzing drifts in from somewhere far away.',
+    'Chat/Sys/Spawn/centipede': 'Is that a giant train in the distance?'
   };
 
   const ZH = {
@@ -103,7 +112,14 @@
     'Chat/Command/summon/BadParam':
       '参数无效。多节生物支持 [type=normal] 或 [type=long]，例如 /summon 3 common[type=long] 1',
 
-    'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}'
+    'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}',
+
+    // ---- 全服生成公告（super / eternal 才播）----
+    // 中文没有冠词，{0}（A/An）不参与拼接；默认：一只<稀有度><生物名>已在某处生成！
+    'Chat/Sys/Spawn/Default': '一只{1}{2}已在某处生成！',
+    'Chat/Sys/Spawn/ladybug': '一个红黑相间的身影浮现于地平线之上。',
+    'Chat/Sys/Spawn/bee': '巨大的嗡嗡声从远处隐约传来。',
+    'Chat/Sys/Spawn/centipede': '远方是一列巨型火车吗？'
   };
 
   I18N.addPack('en_US', EN);

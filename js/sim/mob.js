@@ -90,7 +90,7 @@ class Mob {
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
     this.honeyImmune = false;           // 被蜜影响满 40s 后永久免疫所有蜜
-    this.flash = 0; this.hitCd = 0; this.squash = 0;
+    this.flash = 0; this.squash = 0;
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
     this.dispHp = null; this.ghostHp = null; this.ghostV = 0;
@@ -291,7 +291,6 @@ class Mob {
     this._tickHpSmooth(dt);
     this.flash = Math.max(0, this.flash - dt);
     this.hurtT = Math.max(0, this.hurtT - dt);
-    this.hitCd = Math.max(0, this.hitCd - dt);
     this.squash = damp(this.squash, 0, 10, dt);
     tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
     // 碰撞外形：统一走 _ensureShape（客户端 draw 也调它）——

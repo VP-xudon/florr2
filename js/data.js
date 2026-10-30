@@ -320,6 +320,16 @@ const MOB_TRAITS = {
   centipede: { segmented: true, sizeScale: 1.4 }
 };
 
+// ---- 生物生成播报的专属台词（i18n key，文案在 js/i18n-extra.js）----
+// 没登记的生物走默认模板 Chat/Sys/Spawn/Default：A <rarity> <mobname> has been spawned!
+// 刻意【不用】官方 Chat/MobSpawned* 模板，也不用 registry 里每只生物的 spawn 文本 ——
+// 那套是"某处生成"的官方台本，我们要自己控制默认文案与专属台词。
+const MOB_SPAWN_LINES = {
+  ladybug: 'Chat/Sys/Spawn/ladybug',
+  bee: 'Chat/Sys/Spawn/bee',
+  centipede: 'Chat/Sys/Spawn/centipede'
+};
+
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
   const out = [];

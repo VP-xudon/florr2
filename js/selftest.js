@@ -580,21 +580,67 @@
         b.fxNoCombat = savedNoCmb;
       }
       const st = petalStatsFor(b.card.type, b.card.rarity);
-      const toPetal = Math.max((m.dmg || 0) - (b.armor || 0), 0);
-      const toMob = Math.max((st.dmg || 0) - (m.armor || 0), 0);
-      // 接触是【离散事件】：3 个 tick 里只有第 1 个结算（后面两个在 PETAL_HIT_CD 冷却里）。
-      // 花瓣单次受伤有上限（× PETAL_HIT_HP_CAP，保证能挨两下），另有每次接触的攻击磨损。
-      const wantPetal = Math.min(toPetal, (bMax0 || 0) * PETAL_HIT_HP_CAP)
-        + (bMax0 || 0) * PETAL_ATTACK_DUR;
+      const toPetalPanel = Math.max((m.dmg || 0) - (b.armor || 0), 0);
+      const toMobPanel = Math.max((st.dmg || 0) - (m.armor || 0), 0);
+      // 伤害【每 tick 结算一次，一次就是完整面板值】（见 sim/constants.js）：
+      // 花瓣没有单次受伤上限（伤害 ≥ 耐久就当 tick 碎），另有每 tick 的攻击磨损。
+      const perTickPetal = toPetalPanel + (bMax0 || 0) * PETAL_ATTACK_DUR;
+      const wantPetal = perTickPetal * 3;
       const okB = Math.abs((bHp0 - bAfter) - wantPetal) < 0.01;
-      // 生物侧：第一 tick 有伤害（≥ 单片花瓣的一击），后两个 tick 必须为 0（冷却生效）。
-      // 同时确认"每一击都 ≤ 花瓣伤害 - 护甲"，没有凭空放大。
-      const okM = tickDmg[0] >= toMob && tickDmg[1] === 0 && tickDmg[2] === 0;
+      // 生物侧：三个 tick 都必须吃到完整面板伤害（没有冷却空窗），且不超过"花瓣 + 花朵本体"
+      // 的合计（这颗测试生物离花朵很近，本体那一路可能额外补一份体伤）。
+      const wantM = toMobPanel;
+      const wantBody = Math.max((p.bodyDmg || 0) - (m.armor || 0), 0);
+      const capM = wantM + wantBody + 1e-6;
+      const okM = tickDmg.length === 3
+        && tickDmg.every((d) => d >= wantM - 1e-6 && d <= capM);
       return {
         ok: bAfter < bHp0 && mAfter < mHp0 && okB && okM,
-        detail: `花瓣 -${(bHp0 - bAfter).toFixed(1)}（应为 ${wantPetal.toFixed(1)}）`
-          + ` 生物各tick -${tickDmg.map((x) => x.toFixed(0)).join('/')}`
-          + `（单片一击 ${toMob.toFixed(1)}，后两 tick 应为 0）`
+        detail: `花瓣 -${(bHp0 - bAfter).toFixed(2)}（应为 ${wantPetal.toFixed(2)}）`
+          + ` 生物各tick -${tickDmg.map((x) => x.toFixed(2)).join('/')}`
+          + `（每 tick 应为 ${wantM.toFixed(2)}）`
+      };
+    });
+
+    // 8c2a) 花瓣承受的是【每 tick 完整面板伤害】：伤害 ≥ 耐久 -> 同一 tick 直接碎。
+    //       守的是"贴着磨一会才碎"这个观感 bug（曾经有单次受伤上限 + 冷却门槛）。
+    check('fix: 高伤生物一击打碎花瓣', () => {
+      const srv = game.net && game.net.debugServer;
+      const pl = srv && srv.player;
+      if (!pl) return '无本地服务端（跳过）';
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      const b = (pl.petals || []).find((x) => !x.dead && !x.stationary);
+      if (!type || !b) return '没有可用花瓣（跳过）';
+      const m = new Mob(type, b.x, b.y, 1, 'rare');      // rare 瓢虫 dmg 90
+      m.netId = 1e9 + 4;
+      m._ensureShape();
+      if (!m.shape) return '轮廓未就绪（跳过）';
+      const saved = {
+        ents: srv.ents, awake: srv._awake, ev: srv._events,
+        hp: b.hp, maxHp: b.maxHp, dead: b.dead, hurtT: b.hurtT,
+        noCmb: b.fxNoCombat, respawnT: b.respawnT,
+        reload: pl.reload ? pl.reload[b.slotIndex] : undefined,
+        pHp: pl.hp, pDead: pl.dead, pHurtInvuln: pl.hurtInvuln, pKilledBy: pl.killedBy
+      };
+      let died = false;
+      try {
+        b.hp = b.maxHp = 10;            // common basic 的真实耐久
+        b.dead = false; b.respawnT = 0; b.fxNoCombat = false;
+        pl.hp = pl.maxHp; pl.dead = false; pl.hurtInvuln = 0;   // 别让本体在这条断言里被打死
+        srv.ents = [m]; srv._awake = [m]; srv._events = [];
+        srv._combatTick();              // 只跑一个 tick
+        died = !!b.dead;
+      } finally {
+        b.dead = saved.dead; b.hp = saved.hp; b.maxHp = saved.maxHp;
+        b.hurtT = saved.hurtT; b.fxNoCombat = saved.noCmb; b.respawnT = saved.respawnT;
+        if (pl.reload) pl.reload[b.slotIndex] = saved.reload;
+        pl.hp = saved.pHp; pl.dead = saved.pDead;
+        pl.hurtInvuln = saved.pHurtInvuln; pl.killedBy = saved.pKilledBy;
+        srv.ents = saved.ents; srv._awake = saved.awake; srv._events = saved.ev;
+      }
+      return {
+        ok: died,
+        detail: `rare 瓢虫 dmg=${m.dmg} vs 花瓣 hp=10 -> ${died ? '一击碎' : '没碎'}`
       };
     });
 
@@ -880,6 +926,25 @@
         && ev.color === RARITIES.eternal.color
         && ev.text.indexOf('Guest 1234') >= 0 && ev.text.indexOf('Centipede') >= 0;
       return { ok, detail: ev ? ev.text : '无事件' };
+    });
+
+    // 8k2) Super/Eternal 生成公告：默认模板 / 专属台词 / 只有头节播
+    check('chat: Boss 生成全服公告', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv) return '跳过';
+      const before = srv._events.length;
+      srv._announceBossSpawn({ name: 'Ladybug', rarity: 'super', type: { name: 'Ladybug', slug: 'ladybug' } });
+      srv._announceBossSpawn({ name: 'Bee', rarity: 'common', type: { name: 'Bee', slug: 'bee' } });   // 非 super -> 不播
+      srv._announceBossSpawn({                                                   // 非头节 -> 不播
+        name: 'Centipede', rarity: 'eternal', segIdx: 3, isHeadSeg: false,
+        type: { name: 'Centipede', slug: 'centipede' }
+      });
+      const evs = srv._events.slice(before);
+      srv._events.length = before;
+      const want = I18N.t('Chat/Sys/Spawn/ladybug', '');
+      const ok = evs.length === 1 && evs[0].kind === 'sys' && evs[0].channel === 'global'
+        && evs[0].color === RARITIES.super.color && evs[0].text === want;
+      return { ok, detail: evs.length ? evs[0].text : '无事件' };
     });
 
     // 9) F3 调试屏幕：能开关、有内容、关掉后碰撞箱一起关
