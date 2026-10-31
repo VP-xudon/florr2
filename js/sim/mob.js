@@ -118,12 +118,14 @@ class Mob {
     const applied = Math.min(dmg, this.hp);
     this.hp -= applied;
     this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈；不缩放，缩放只留给死亡退场）
-    // 【被看不见的敌人偷袭 -> 逃开一段】：判定必须在 noteThreat 之前做，
+    // 【被墙后的敌人偷袭 -> 逃开一段】：判定必须在 noteThreat 之前做，
     // 因为记完仇恨 topThreat() 就会返回攻击者（若可见）。
-    // 条件：① 这一下是从视野外来的（墙后 / 超出视野 / 对方站在减速瓦片里）
+    // 条件：① 攻击者与它之间隔着【墙】（视野 360° 无死角，只有墙会挡视线）
     //       ② 自己当前也没在追任何【看得见】的目标
     // 满足就往攻击者的反方向、以【追击速度】跑 MOB_FLEE_DIST 那么远。
-    if (src && applied > 0 && !this.canSee(src) && !this.topThreat()) {
+    // 旧实现用的是 !canSee()（还包含"对方站在减速瓦片里"和距离），于是玩家
+    // 在减速带上正对着打它也会被当成偷袭 -> 生物莫名其妙开始逃跑。
+    if (src && applied > 0 && this.wallBlocked(src) && !this.topThreat()) {
       this.fleeT = MOB_FLEE_DIST / Math.max(1, this.chaseSpeed);
       this.fleeAX = src.x; this.fleeAY = src.y;
     }
@@ -151,8 +153,13 @@ class Mob {
   //
   // 多节生物是一个【个体】：任一节受伤，段首也要记同一笔，
   // 否则打身体后半段时整条毫无反应（段首没有威胁值就不追击）。
+  //
+  // 【唯一的例外是尾巴】：最尾一节只是被拖着走的那一截，挨打不会让整条掉头 ——
+  // 打它连自己的仇恨也不记（否则玩家用远程点尾巴就能把整条拉过来）。
+  // "尾巴"按【当前】形态判断（后面没有活着的节），所以断了半截之后新露出的尾节同样适用。
   noteThreat(src, amount) {
     if (!src || this.hostility === 'passive') return;
+    if (this.segIdx != null && (!this._next || this._next.dead)) return;
     this._addThreat(src, amount);
     if (this.segIdx != null) {
       let h = this;
@@ -180,13 +187,14 @@ class Mob {
     return pick ? pick.ent : null;
   }
 
-  // 视线判定：距离 ≤ sightR、中间没有墙、对方也不在减速瓦片里。
-  // 【减速瓦片 = 生物的禁区】：只有玩家能进，玩家一进去就等于离开生物视野。
+  // 视线判定：360° 无死角 —— 只受【距离】与【墙体遮挡】两条约束。
+  // 旧实现里"站在减速瓦片里 = 隐身"，于是玩家在减速带上正对着打它，
+  // 也会被判成"被看不见的敌人偷袭" -> 生物莫名其妙开始逃跑。
+  // 减速瓦片本来就由 map.mobBlockedAt 禁止生物踏入，不需要再兼任隐身草。
   // 视线采样（lineBlocked）较贵，同一目标 0.15s 内复用上一次结果。
   canSee(ent) {
     if (!ent || ent.dead) return false;
     const map = this._map;
-    if (map && map.slowAt && map.slowAt(ent.x, ent.y)) return false;
     const dx = ent.x - this.x, dy = ent.y - this.y;
     const sr = this.sightR || MOB_SIGHT_R;
     if (dx * dx + dy * dy > sr * sr) return false;
@@ -197,6 +205,14 @@ class Mob {
     const ok = !map.lineBlocked(this.x, this.y, ent.x, ent.y);
     this._seeCache = { ent, t: now, ok };
     return ok;
+  }
+
+  // 视线是否被【墙】挡住。与 canSee 分开：canSee 还带距离限制，
+  // 而"偷袭"只认墙（被墙后打 = 措手不及；正面隔着再远也看得见）。
+  wallBlocked(ent) {
+    const map = this._map;
+    if (!ent || !map || !map.lineBlocked) return false;
+    return !!map.lineBlocked(this.x, this.y, ent.x, ent.y);
   }
 
   // 瓢虫鞘翅斑点（贴图上的圆点已删除，全部改为运行时随机生成）：
@@ -299,7 +315,25 @@ class Mob {
 
     // 多节生物里被【刚性粘合】的节：位置与朝向全由 net.js _solveChains 解算，
     // 这里绝不跑 AI / 位移（两套逻辑同时改坐标 = 原地打转、左右抽搐、连不成一条）。
-    if (this._chainLocked) return;
+    // 但【击退冲量不能丢】：把它积分成"相对轨迹槽位的局部偏移"（pushX/pushY），
+    // 由链解算叠加上去并沿相邻节扩散，然后按弹性速率回位。
+    // 少了这一段，冲量只会写进 kbX 又被下一帧的解算覆盖 —— 打中段等于没打。
+    if (this._chainLocked) {
+      const kx = this.kbX || 0, ky = this.kbY || 0;
+      if (kx || ky) {
+        this.pushX = (this.pushX || 0) + kx * dt;
+        this.pushY = (this.pushY || 0) + ky * dt;
+        // 上限 = 自身半径 × CHAIN_PUSH_MAX：绝不允许一节被顶进邻节里
+        const lim = (this.r || 12) * CHAIN_PUSH_MAX;
+        const d = Math.hypot(this.pushX, this.pushY);
+        if (d > lim) { const s = lim / d; this.pushX *= s; this.pushY *= s; }
+      }
+      this.pushX = damp(this.pushX || 0, 0, CHAIN_PUSH_RECOVER, dt);
+      this.pushY = damp(this.pushY || 0, 0, CHAIN_PUSH_RECOVER, dt);
+      if (Math.abs(this.pushX) < 0.05) this.pushX = 0;
+      if (Math.abs(this.pushY) < 0.05) this.pushY = 0;
+      return;
+    }
     // —— 1) 问 AI：现在想怎么动。AI 只给"移动欲望"，不直接改坐标 ——
     // 这里只服务【段首】（头节）：非头节在上面的 _chainLocked 分支就已返回，
     // 位置全部由 _solveChains 沿头的真实路径解算（不是"跟随前一节"）。

@@ -316,7 +316,12 @@ const UI = {
     window.addEventListener('scroll', () => { if (this._tipOn) this._hideTip(); }, true);
   },
 
-  setBagVisible(v) { this.refs.inv.classList.toggle('hidden', !v); if (!v) this._hideTip(); },
+  setBagVisible(v) {
+    this.refs.inv.classList.toggle('hidden', !v);
+    if (!v) { this._hideTip(); return; }
+    // 关着的时候所有改动只标脏，真正打开时才刷新（见 renderInventory）
+    if (this._invDirty || !this._invBuilt) this.renderInventory();
+  },
   isBagVisible() { return !this.refs.inv.classList.contains('hidden'); },
   toggleBag() { if (this.onBagToggle) this.onBagToggle(); },
 
@@ -598,15 +603,50 @@ const UI = {
 
   // ---------------- 背包窗口 = 全部花瓣画廊（每张卡带数量角标） ----------------
   // 调试模式 ?mode=debug：全部显示 ∞，怎么拿都拿不空；否则每种默认 2 张。
+  // 【结构只建一次，之后只更新数量/显隐】
+  // 卡片操作（装配 / 切换 / 拾取 / 卸下）非常频繁，以前每次都 innerHTML='' 重建整表：
+  // 一次 = 几十上百个 canvas + 各自一个 ResizeObserver + 各自一次强制重排 —— 这就是
+  // "一碰卡片 UI 就卡一下"的来源。现在重建成本只在第一次打开背包时付一次。
   renderInventory() {
+    if (!this.isBagVisible()) { this._invDirty = true; return; }   // 关着：只标脏
+    this._invDirty = false;
+    if (!this._invBuilt) this._buildInventory();
+    this._syncInventoryCounts();
+  },
+
+  _buildInventory() {
     const g = this.refs.invGallery;
+    if (!g) return;
     g.innerHTML = '';
     const rarName = (r) => I18N.t('Rarities/' + r + '/Name', r);
     const petals = PETAL_TYPES.slice().sort((a, b) => a.name.localeCompare(b.name));
+    this._invCells = new Map();
+    this._invGroups = new Map();
     for (const rar of [...RARITY_ORDER].reverse()) {   // 高稀有度在上、低稀有度在下
       const col = (RARITIES[rar] && RARITIES[rar].color) || '#fff';
       const grp = this._rarGroup(rarName(rar), col, petals, rar);
-      if (grp) g.appendChild(grp);   // 该等级一张都没有则不显示分割线
+      if (!grp) continue;
+      g.appendChild(grp);
+      this._invGroups.set(rar, grp);
+    }
+    this._invBuilt = true;
+  },
+
+  // 只刷新"数量角标 + 是否显示"，不动 DOM 结构、不重画卡面
+  _syncInventoryCounts() {
+    if (!this._invCells) return;
+    const visible = new Map();     // rarity -> 是否还有可见卡
+    for (const [key, rec] of this._invCells) {
+      const n = this._galleryCount(key);
+      if (rec.n !== n) { rec.n = n; CardRenderer.setCount(rec.cv, n); }
+      const show = n > 0;
+      if (rec.shown !== show) { rec.shown = show; rec.cell.style.display = show ? '' : 'none'; }
+      if (show) visible.set(rec.rar, true);
+    }
+    for (const [rar, grp] of this._invGroups) {
+      const show = !!visible.get(rar);
+      const cur = grp.style.display !== 'none';
+      if (cur !== show) grp.style.display = show ? '' : 'none';
     }
   },
 
@@ -650,10 +690,10 @@ const UI = {
     if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
   },
 
-  // 生成一个「稀有度分组」：该等级一张卡都没有则不显示分割线；否则展示分割条 + 等级名字 + 卡片网格（带数量）
+  // 生成一个「稀有度分组」：分割条 + 等级名字 + 卡片网格。
+  // 【每张卡都建好】但数量为 0 的先隐藏 —— 这样后续刷新只需要改 display 与角标文字，
+  // 不再重建 DOM（重建 = 每个 canvas 一次强制重排，见 renderInventory 的注释）。
   _rarGroup(name, color, petals, rarity) {
-    const items = petals.filter(p => this._galleryCount(p.key + '|' + rarity) > 0);
-    if (items.length === 0) return null;   // 该等级一张都没有 -> 不显示分割线
     const group = document.createElement('div');
     group.className = 'rar-group';
     group.style.color = color;
@@ -667,14 +707,16 @@ const UI = {
     group.appendChild(div);
     const grid = document.createElement('div');
     grid.className = 'rar-grid';
-    for (const p of items) {
+    for (const p of petals) {
       const key = p.key + '|' + rarity;
+      const n = this._galleryCount(key);
       const cell = document.createElement('div');
       cell.className = 'cardcell';
-      cell.appendChild(CardRenderer.createCard({
-        rarity, svg: p.svg, count: this._galleryCount(key),
+      const cv = CardRenderer.createCard({
+        rarity, svg: p.svg, count: n,
         pad: 0.0756, radius: 0.0588   // 背包卡牌：描边/圆角按卡面比例同步缩小
-      }));
+      });
+      cell.appendChild(cv);
       const card = { type: p, rarity };
       this._bindCard(cell, card, { type: 'gallery', index: -1 },
         () => {
@@ -685,6 +727,9 @@ const UI = {
         });  // gallery 支持拖拽和点击
       this._bindTip(cell, p, rarity);
       grid.appendChild(cell);
+      const show = n > 0;
+      if (!show) cell.style.display = 'none';
+      this._invCells.set(key, { cell, cv, n, rar: rarity, shown: show });
     }
     group.appendChild(grid);
     return group;
@@ -836,8 +881,18 @@ const UI = {
       //   · reload 阴影进行中 -> 0（视觉全部交给扇形阴影，绝不叠加）
       //   · 有花瓣实体        -> 1 - hp/maxHp（归零即整块全阴影，无缝接 reload 起始）
       //   · 无实体（装填中）  -> 0
+      const card = p.slots[i];
+      const isAcc = !!(card && card.type && card.type.accessory);
+      // 装备型饰品（Third Eye 等）：没有经典 reload 扇形，取而代之的是
+      // "整块暗灰 -> 快速渐淡变亮"—— 直接把水缸阴影从 1 平滑放掉，复用同一套渲染。
+      // 只在同一格换了新卡时重置一次，之后的每一帧由下面的平滑衰减自然淡出。
+      if (isAcc && cv._accCard !== card) { cv._accCard = card; cv._hpShadowSm = 1; }
+      // 不可堆叠花瓣的重复件：恒定暗灰"未装填"态（不参与轨道、不产生实体）
+      const inactive = !!(p.slotActive && p.slotActive[i] === false);
       let hpTarget = 0;
       if (p.dead) {
+        hpTarget = 1;
+      } else if (inactive) {
         hpTarget = 1;
       } else if (!active) {
         // 水位 = 1 - 存活实体血量总和 / 【卡面总 hp】。
@@ -879,6 +934,19 @@ const UI = {
     }
   },
 
+  // 拾取落槽动画：卡牌凭空出现在槽里 -> "快速渐大"（0.22s，0.55 -> 1.06 -> 1）。
+  // 与飞入动画区分开：这里没有位移，只有缩放 + 淡入。
+  popSlot(row, index) {
+    const host = (row === 'subslot') ? this.refs.subRow : this.refs.slotRow;
+    const cell = host && host.children ? host.children[index] : null;
+    const el = cell && (cell.querySelector('.qinner') || cell.querySelector('.card'));
+    if (!el) return;
+    el.classList.remove('slot-pop');
+    void el.offsetWidth;          // 强制重排，保证连续拾取也能重播
+    el.classList.add('slot-pop');
+    setTimeout(() => el.classList.remove('slot-pop'), 280);
+  },
+
   // 装填计时的暂停/恢复：卡牌"换上来"的动画（互换翻转 / 飞入卡槽）播放期间必须暂停，
   // 等动画完全结束、卡牌已经落在卡槽里，才开始结算冷却并播放阴影动画（用户要求）。
   _holdReload(i) {
@@ -901,15 +969,10 @@ const UI = {
     _showTip(type, rarity, el) {
         // 元素所在窗口已关闭时不再响应（隐藏窗口内部元素理论上收不到事件，这是第二道保险）
         if (el && el.closest && el.closest('.window.hidden')) return;
-        // 数值随稀有度换算（与装备/提示一致）
-        let dmg = type.dmg || 0, hp = type.hp || 0, heal = type.heal || 0;
-        // 有「各稀有度数值表」就整表取用（Rose）；否则退回倍率表（Basic）；再否则用基础值
-        const rs = type.rarityStats && type.rarityStats[rarity];
-        if (rs) { dmg = rs.dmg || 0; hp = rs.hp || 0; heal = rs.heal || 0; }
-        else {
-          const m = type.rarityMultipliers && type.rarityMultipliers[rarity];
-          if (m) { dmg = type.dmg * (m.dmg || 1); hp = type.hp * (m.hp || 1); }
-        }
+        // 数值随稀有度换算：直接走 petalStatsFor（与装备、战斗、引擎加成完全同源，
+        // 不再在这里手写一套倍率/整表分支，避免悬停框和实际效果对不上）
+        const st = petalStatsFor(type, rarity);
+        const dmg = st.dmg, hp = st.hp, heal = st.heal;
         const slug = type.slug || String(type.name || '').toLowerCase().replace(/ /g, '_');
         // 从"刚离开的另一张卡"快速移来（120ms 宽限）：不做「上一个渐隐 + 下一个渐显」，
         // 直接保持不透明并把框平移过去 —— 任何时刻画面上只有一个悬浮框
@@ -929,6 +992,14 @@ const UI = {
           healPerSec: !!type.healOverTime,
           reload: (type.reload != null) ? type.reload : Math.max(0, type.spd || 0),
           reloadText: type.reloadText || null,
+          // 装备加成类属性（0 = 没有这一项，整行不显示）：
+          //   转速加成（Faster）、reach 额外伸距（Third Eye）—— 标签色同 Max Mob Rarity
+          rotSpeed: st.rotSpeed || 0,
+          attackRange: st.attackRange || 0,
+          // 装备型饰品（Third Eye）：没有装填，右上角改画"淡灰圆 + 加号"
+          accessory: !!type.accessory,
+          // 不可堆叠（Third Eye）：右上角最右侧再加"灰色梯形 + 白 ×"图标
+          noStack: type.stackable === false,
           // Honey 的 Max Mob Rarity：标签固定 #d2eb34，值用【被吸引稀有度自己的颜色】
           ...(() => {
             const mr = (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(type, rarity) : null;

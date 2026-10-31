@@ -1280,9 +1280,14 @@ class Game {
     this.renderInventory();
   }
 
-  // 拾取掉落：卡牌进入「背包」（=全部花瓣画廊 all petals），数量 +1；调试模式恒为 ∞
-  // 背包就是 inventory 的 all-petals 部分，后续掉落直接累计到这里
+  // 拾取掉落：与"点击背包卡"完全同规则 —— 【优先填空槽】（主槽优先、从左到右，主槽满则副槽），
+  // 槽全满才进背包画廊计数。落槽时播"快速渐大"（不是飞入），因为卡是凭空出现在槽里的。
   pickupCard(type, rarity) {
+    const t = this.firstEmptyAny();
+    if (t && this.addGalleryCard(type, rarity, { type: t.row, index: t.index })) {
+      if (typeof UI !== 'undefined' && UI.popSlot) UI.popSlot(t.row, t.index);
+      return true;
+    }
     if (typeof UI !== 'undefined' && UI.addGalleryCount) UI.addGalleryCount(type, rarity);
     return true;
   }

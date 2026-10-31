@@ -312,7 +312,11 @@ const CardRenderer = (function () {
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb.join(' ') + '"')
           : out.replace(/<svg\b/, '<svg viewBox="' + vb.join(' ') + '"');
       }
-      const url = 'data:image/svg+xml,' + encodeURIComponent(out);
+      // 引擎接管：花瓣注册项可以改写素材（比如去掉贴图里画死的可动部件）。
+      // 卡面与世界实体共用同一条改写，所以两边永远不会出现"一个有、一个没有"。
+      const variant = (typeof PetalFX !== 'undefined' && PetalFX.artVariant)
+        ? PetalFX.artVariant(svgId, out) : null;
+      const url = 'data:image/svg+xml,' + encodeURIComponent(variant || out);
       _tinted[svgId] = url;
       return url;
     });
@@ -327,15 +331,21 @@ const CardRenderer = (function () {
     if (_artSvg[svgId]) return _artSvg[svgId];
     _artSvg[svgId] = loadRaw(svgId).then((txt) => {
       if (!txt) return null;
+      let out = txt;
       const bb = measureBox(svgId, txt);
-      if (!bb) return txt;
-      // 统一基准：PETAL_ENT_REF（Basic 内容包围盒，离线实测常量 —— 与 svgId 无关、无竞态）
-      const rw = PETAL_ENT_REF[0], rh = PETAL_ENT_REF[1];
-      const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
-      _entWinW[svgId] = v[2];      // 实体窗口宽：多体花瓣直径换算基准
-      return /viewBox="[^"]*"/.test(txt)
-        ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
-        : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
+      if (bb) {
+        // 统一基准：PETAL_ENT_REF（Basic 内容包围盒，离线实测常量 —— 与 svgId 无关、无竞态）
+        const rw = PETAL_ENT_REF[0], rh = PETAL_ENT_REF[1];
+        const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
+        _entWinW[svgId] = v[2];    // 实体窗口宽：多体花瓣直径换算基准
+        out = /viewBox="[^"]*"/.test(txt)
+          ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
+          : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
+      }
+      // 引擎接管（与卡面同一条改写）：去掉贴图里画死的可动部件。
+      // 测不出包围盒时也要执行 —— 否则"测量失败"这一支会漏掉改写，又冒出两个眼珠。
+      return ((typeof PetalFX !== 'undefined' && PetalFX.artVariant)
+        ? (PetalFX.artVariant(svgId, out) || out) : out);
     });
     return _artSvg[svgId];
   }
@@ -501,23 +511,43 @@ const CardRenderer = (function () {
   // Ubuntu 800。文本取自 i18N（Petals/<slug>/Name），切换译文包时卡面文字随之改变。
   // 布局（用户要求）：文字【强制在底部】，且图层在图形之上（drawCard 里先画图形、
   // 再调本函数 -> 天然上层）；x 居中，【基线】贴 13% 底边距（基线对齐而非底部对齐）。
-  // 字号：【全花瓣严格统一的固定值】—— 不读 metrics、不按宽度收缩、不做任何自适应
-  // 计算。曾按各花瓣的字母高度换算，导致 Light（t 高 19.3）比 Basic（15.6）大半圈。
-  const NAME_FS_RATIO = 0.27;        // 字号 = 内板高 × 0.27（Basic 的原生观感）
+  // 字号：【基准值全花瓣统一】—— 不读 metrics、不按字母高度自适应
+  // （曾按各花瓣的字母高度换算，导致 Light 比 Basic 大半圈）。
+  // 唯一允许的变化是【长名字自动缩小】：超过 NAME_MAX_UNITS 个半角宽就按比例缩，
+  // 基线位置完全不动（见 drawName），所以所有卡的文字仍落在同一条底线上。
+  const NAME_FS_RATIO = 0.27;        // 基准字号 = 内板高 × 0.27（Basic 的原生观感）
   const NAME_BASE_RATIO = 0.13;      // 基线 = 内板底往上 13%
+  const NAME_MAX_UNITS = 7;          // 超过这么多【半角宽】就开始缩字
+  const NAME_MIN_SCALE = 0.55;       // 缩放下限：再长的名字也不至于缩成一团
+  const NAME_FIT_W = 0.94;           // 可用宽度 = 内板宽 × 0.94（两侧各留 3% 余量）
+  // 视觉宽度（半角字符数）：CJK / 全角字符算 2，其余算 1。
+  function nameUnits(str) {
+    let n = 0;
+    for (let i = 0; i < str.length; i++) n += (str.charCodeAt(i) > 0x2e7f) ? 2 : 1;
+    return n;
+  }
   // (p, iw, ih) = 内板矩形。
   function drawName(ctx, st, p, iw, ih) {
     const name = st.name;
     if (!name) return;
-    const fs = ih * NAME_FS_RATIO;
+    let fs = ih * NAME_FS_RATIO;
     if (!(fs > 2)) return;
+    // ① 名字太长（半角宽 > 7）按比例缩；② 再兜一道底：实测宽度超出内板也缩。
+    //    文字宽度与字号成正比，所以这两步合起来一次算完，不需要迭代。
+    const units = nameUnits(name);
+    if (units > NAME_MAX_UNITS) fs *= Math.max(NAME_MIN_SCALE, NAME_MAX_UNITS / units);
     ctx.save();
+    ctx.font = `800 ${fs}px ${FONT}`;
+    const availW = iw * NAME_FIT_W;
+    const tw = ctx.measureText(name).width;
+    if (tw > availW && tw > 0) fs = Math.max(2, fs * (availW / tw));
     ctx.font = `800 ${fs}px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     // 基线固定在底部边距处（【不】按字形 descender 补偿）：带下伸部的名字（如
     // Stinger 的 g）若按"底部对齐"会把基线抬高，与其他卡的文字不平行。
     // 统一基线对齐后所有卡面文字同线，下伸部自然伸进底边距内。
+    // 【缩字不改基线】—— 缩放只作用于字号，文字的底边位置因此保持不变。
     const baseY = p + ih - ih * NAME_BASE_RATIO;
     ctx.lineWidth = fs * 0.115;
     ctx.lineJoin = 'round';
@@ -567,6 +597,11 @@ const CardRenderer = (function () {
           drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay, st.svg);
         } else {
           ctx.drawImage(im, ox, oy, dw, dh);
+          // 可动部件（如 Third Eye 的眼珠）：与世界里同一套引擎钩子、同一份比例。
+          // 卡面是静态的，传 look = null —— 眼珠在眼眶正中（跟着朝向偏移会让卡面看着"错位"）。
+          if (typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
+            PetalFX.artOverlay(ctx, st.svg, null, ox + dw / 2, oy + dh / 2, Math.min(dw, dh));
+          }
         }
       }
       // 名称：强制底部、固定字号，画在图形【上层】（本调用在 drawImage 之后）
@@ -576,7 +611,53 @@ const CardRenderer = (function () {
     syncCount(cv, st);
   }
 
-  // 画布尺寸跟随元素布局（CSS 决定显示尺寸，这里只同步后备缓冲区）
+  // ---- 批量绘制调度（性能关键）----
+  // 每张卡单独 requestAnimationFrame + 自己一个 ResizeObserver 时，一次重建背包 = 
+  // 几十上百个 rAF 回调、每个都读 clientWidth（强制重排）-> 一次操作就能卡住一整帧。
+  // 这里改成：【一个】共享 ResizeObserver + 【一个】rAF，并且先统一读尺寸、再统一下笔，
+  // 把 N 次强制重排压成 1 次。
+  const _paintQueue = new Set();
+  let _paintRaf = 0;
+  function schedulePaint(cv) {
+    if (!cv) return;
+    _paintQueue.add(cv);
+    if (_paintRaf) return;
+    _paintRaf = requestAnimationFrame(() => {
+      _paintRaf = 0;
+      const list = [];
+      for (const c of _paintQueue) list.push(c);
+      _paintQueue.clear();
+      // ① 统一读（只触发一次布局）
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      const size = new Array(list.length);
+      for (let i = 0; i < list.length; i++) {
+        const c = list[i];
+        if (!c.isConnected) { size[i] = null; continue; }
+        const w = c.clientWidth, h = c.clientHeight;
+        size[i] = (w && h) ? [Math.max(1, Math.round(w * dpr)), Math.max(1, Math.round(h * dpr))] : null;
+      }
+      // ② 再统一写 + 绘制（写 canvas.width 不影响布局：CSS 已定死显示尺寸）
+      for (let i = 0; i < list.length; i++) {
+        const c = list[i], sz = size[i];
+        if (!sz) continue;
+        if (c.width !== sz[0] || c.height !== sz[1]) { c.width = sz[0]; c.height = sz[1]; }
+        drawCard(c, c._card);
+      }
+    });
+  }
+  let _cardRO = null;
+  function observeCard(cv) {
+    if (typeof ResizeObserver === 'undefined') return;
+    if (!_cardRO) {
+      _cardRO = new ResizeObserver((entries) => {
+        for (const e of entries) schedulePaint(e.target);
+      });
+    }
+    _cardRO.observe(cv);
+  }
+
+  // 画布尺寸跟随元素布局（CSS 决定显示尺寸，这里只同步后备缓冲区）。
+  // 单独调用时立刻画（同步路径，供 paintCard 这类"我已经知道要重画"的地方用）。
   function paint(cv) {
     const st = cv._card;
     if (!st || !cv.isConnected) return;
@@ -609,16 +690,19 @@ const CardRenderer = (function () {
     }
     if (o.svg) {
       // 先画纯色卡面，素材就绪后自动重绘（与原来 img 异步替换同一观感）
-      asset(o.svg).then((u) => { if (u) { cv._card.img = imgFor(cv, u); paint(cv); } });
+      asset(o.svg).then((u) => { if (u) { cv._card.img = imgFor(cv, u); schedulePaint(cv); } });
     }
-    // 入 DOM 后才有 clientWidth：下一帧首次绘制；之后跟随布局变化重绘
-    requestAnimationFrame(() => paint(cv));
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => paint(cv));
-      ro.observe(cv);
-      cv._ro = ro;
-    }
+    // 入 DOM 后才有 clientWidth：交给批量调度统一画一帧
+    schedulePaint(cv);
+    observeCard(cv);       // 共享的 ResizeObserver（不是每卡一个）
     return cv;
+  }
+
+  // 更新数量角标：只改 DOM 文本，不重画卡面（背包刷新走这条，避免整表重建）
+  function setCount(cv, n) {
+    if (!cv || !cv._card) return;
+    cv._card.count = n;
+    syncCount(cv, cv._card);
   }
 
   // 离屏渲染一张卡面到给定 canvas（不插入 DOM、不依赖布局）。
@@ -676,7 +760,8 @@ const CardRenderer = (function () {
   }
 
   return {
-    createCard, darken, rarityColor, artCanvas, renderCardTo, repaintAll, paintCard: paint, FONT,
+    createCard, darken, rarityColor, artCanvas, renderCardTo, repaintAll, paintCard: paint,
+    schedulePaint, setCount, FONT,
     // 多体花瓣（Light）：卡面布局 / 直径换算 / 通用绘制 / 实体光点数
     multiLayout, lightDRatio, drawMulti, lightSubCount
   };

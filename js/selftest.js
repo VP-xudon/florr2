@@ -178,9 +178,12 @@
     check('fix: 击退总位移守恒', () => {
       const p = game.player, srv = game.net.debugServer;
       if (!srv || !srv.player) return '无本地服务端（跳过）';
-      // 出生无敌会挡掉伤害，两端都要清（否则快照会把无敌又加回来）
-      p.invuln = 0; p.invulnSrc = {}; p.invulnTotal = 0;
+      // 出生无敌会挡掉伤害，两端都要清（否则快照会把无敌又加回来）。
+      // 受伤无敌帧也要清：周围生物可能刚好在这几帧咬了玩家一口，那样下面的人造接触会被
+      // hurtInvuln 直接免伤，断言就变成"看运气"（这条曾经偶发 FAIL 就是这个原因）。
+      p.invuln = 0; p.invulnSrc = {}; p.invulnTotal = 0; p.hurtInvuln = 0;
       srv.player.invuln = 0; srv.player.invulnSrc = {}; srv.player.invulnTotal = 0;
+      srv.player.hurtInvuln = 0;
       // 高稀有度生物一击就有上千伤害，会把玩家直接打死（死亡分支不再发 hurt）。
       // 把两端血量抬高，保证测的是"击退"而不是"被秒"。
       p.maxHp = p.hp = 1e6;
@@ -343,6 +346,116 @@
       return {
         ok: bad.length === 0,
         detail: bad.length ? bad.join(' ') : 'light/stinger/peas 与 PETAL_SUB_COUNT 一致'
+      };
+    });
+
+    // 6b) 装备型花瓣：Faster 加最大转速、Third Eye 加 reach，且同种只认最左一格
+    check('engine: 装备加成（转速 / reach / 不可堆叠）', () => {
+      const p = game && game.player;
+      const pick = (slug) => (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : [])
+        .find((x) => x && x.slug === slug);
+      const faster = pick('faster'), eye = pick('third_eye');
+      if (!p || !faster || !eye) return '缺少花瓣数据（跳过）';
+      const saved = p.slots.slice();
+      try {
+        // 只放 3 格：1×faster(common +0.5) / 2×third_eye(legendary +40，第二件应作废)
+        p.slots = [{ type: faster, rarity: 'common' },
+                   { type: eye, rarity: 'legendary' },
+                   { type: eye, rarity: 'eternal' }];
+        p.recompute();
+        const rotOk = Math.abs((p.rotMax - PETAL_SPIN) - 0.5) < 1e-6;
+        const reachOk = Math.abs((p.reachBonus || 0) - 40) < 1e-6;
+        const stackOk = p.slotActive[0] === true && p.slotActive[1] === true && p.slotActive[2] === false;
+        return {
+          ok: rotOk && reachOk && stackOk,
+          detail: `rotMax=${p.rotMax.toFixed(2)}（+${(p.rotMax - PETAL_SPIN).toFixed(2)}）` +
+            ` reach=+${p.reachBonus} 生效=${p.slotActive.map((v) => (v ? '1' : '0')).join('')}`
+        };
+      } finally {
+        p.slots = saved;
+        p.recompute();
+      }
+    });
+
+    // 6b2) 击退引擎的花瓣重量：同等级生物重量 × 递减份额（common 0.5 -> eternal 0.05）
+    check('sim: 花瓣击退重量份额递减', () => {
+      if (typeof petalKnockbackWeight !== 'function' || typeof rarityWeight !== 'function') {
+        return '缺少重量函数（跳过）';
+      }
+      // 份额（相对同等级生物重量）必须逐档递减；重量本身当然是逐档递增的。
+      const share = (r) => petalKnockbackWeight(r) / rarityWeight(r);
+      const c = share('common'), e = share('eternal');
+      const mono = RARITY_ORDER.every((r, i) => i === 0
+        || share(r) < share(RARITY_ORDER[i - 1]) + 1e-12);
+      const ok = Math.abs(c - 0.5) < 1e-9 && Math.abs(e - 0.05) < 1e-9 && mono;
+      return {
+        ok,
+        detail: `common=${c.toFixed(3)}× eternal=${e.toFixed(3)}× 单调=${mono}`
+          + `（eternal 击退重量=${petalKnockbackWeight('eternal').toFixed(1)}，`
+          + `生物=${rarityWeight('eternal').toFixed(1)}）`
+      };
+    });
+
+    // 6b3) 素材接管：Third Eye 贴图里画死的眼珠必须被改写掉（否则渲染出两只眼）
+    check('engine: 饰品素材去掉"死眼珠"', () => {
+      if (typeof PetalFX === 'undefined' || !PetalFX.artVariant) return '引擎未就绪（跳过）';
+      const pick = (slug) => (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : [])
+        .find((x) => x && x.slug === slug);
+      const eye = pick('third_eye');
+      if (!eye) return '缺少 third_eye（跳过）';
+      const src = '<svg><path fill="#eee" d="M0 0"/><path fill="#111" d="M1 1"/></svg>';
+      const out = PetalFX.artVariant(eye.svg, src);
+      const ok = !!out && out.indexOf('#eee') < 0 && out.indexOf('#111') >= 0;
+      return { ok, detail: ok ? '浅色眼珠已改写为眼眶色' : ('未改写：' + String(out).slice(0, 60)) };
+    });
+
+    // 6c) 转速与 reach 互不影响：装上 Faster 后，花瓣的实际轨道半径不能变
+    check('engine: 转速不影响 reach 伸距', () => {
+      const srv = game.net && game.net.debugServer;
+      const p = srv && srv.player;
+      const pick = (slug) => (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : [])
+        .find((x) => x && x.slug === slug);
+      const basic = pick('basic'), faster = pick('faster'), eye = pick('third_eye');
+      if (!p || !basic || !faster || !eye) return '缺少花瓣数据（跳过）';
+      const saved = {
+        slots: p.slots.slice(), mode: p.mode, modeT: p.modeT, spin: p.spin,
+        petals: p.petals, ghosts: p.petalGhosts, reload: p.reload.slice(),
+        x: p.x, y: p.y, vx: p.vx, vy: p.vy, slow: p.slowTile
+      };
+      // 固定 reach 模式 + 装填完成，跑 1.5s，取花瓣到本体的平均半径
+      const measure = () => {
+        p.mode = 'reach'; p.modeT = 1; p.slowTile = false;
+        p.petals = []; p.petalGhosts = []; p.spin = 0;
+        p.reload = p.slots.map((c) => (c ? { card: c, age: 99, dur: 1 } : null));
+        for (let i = 0; i < 90; i++) {
+          // 与 update() 同一节奏：先推进公转角，再同步花瓣（否则目标点不动，测的不是真实轨道）
+          p.spin += (p.rotMax || PETAL_SPIN) * ROT_SCALE * (1 / 60);
+          p._syncPetals(1 / 60, srv.map, []);
+        }
+        let sum = 0, n = 0;
+        for (const b of p.petals) { sum += Math.hypot(b.x - p.x, b.y - p.y); n++; }
+        return n ? sum / n : 0;
+      };
+      let rNoFast = 0, rFast = 0;
+      try {
+        p.slots = [{ type: basic, rarity: 'common' }, { type: eye, rarity: 'legendary' }];
+        p.recompute();
+        rNoFast = measure();
+        // 再加一件 eternal Faster：转速上去了，但 reach 伸距必须一模一样
+        p.slots = [{ type: basic, rarity: 'common' }, { type: eye, rarity: 'legendary' },
+                   { type: faster, rarity: 'eternal' }];
+        p.recompute();
+        rFast = measure();
+      } finally {
+        p.slots = saved.slots; p.mode = saved.mode; p.modeT = saved.modeT; p.spin = saved.spin;
+        p.petals = saved.petals; p.petalGhosts = saved.ghosts; p.reload = saved.reload;
+        p.x = saved.x; p.y = saved.y; p.vx = saved.vx; p.vy = saved.vy; p.slowTile = saved.slow;
+        p.recompute();
+      }
+      const diff = Math.abs(rFast - rNoFast);
+      return {
+        ok: rNoFast > 50 && diff < 2,
+        detail: `无Faster=${rNoFast.toFixed(1)}px 有Faster=${rFast.toFixed(1)}px 差=${diff.toFixed(1)}px`
       };
     });
 
@@ -713,6 +826,112 @@
       return { ok: moved > 4, detail: '1.6s 位移=' + moved.toFixed(1) + 'px' };
     });
 
+    // 8d1) 蜈蚣：打尾节不记仇恨；打中段会沿链传冲量（整条被带动）
+    check('ai: 蜈蚣尾节不记仇 + 击退沿链传递', () => {
+      const srv = game.net && game.net.debugServer;
+      const head = srv && srv.ents && srv.ents.find((m) => m.segIdx === 0 && !m.dead && !m._lead);
+      if (!head || !head._next || head._next.dead) return '场上没有多节链（跳过）';
+      const mid = head._next;
+      let tail = head;
+      while (tail._next && !tail._next.dead) tail = tail._next;
+      if (tail === head) return '链太短（跳过）';
+      // 被动型不记仇恨，测试期间临时改成中立（结束还原）
+      const savedHost = [head, mid, tail].map((s) => s.hostility);
+      const savedKb = [head, mid].map((s) => [s.kbX, s.kbY]);
+      const savedPush = [mid.pushX, mid.pushY];
+      const src = { name: 'Probe', x: head.x + 60, y: head.y };
+      let tailThreat = -1, midThreat = -1, headGot = 0, pushed = 0;
+      try {
+        for (const s of [head, mid, tail]) { s.hostility = 'hostile'; s.threat.length = 0; }
+        tail.noteThreat(src, 50);
+        tailThreat = tail.threat.length;          // 尾节：应当 0
+        mid.noteThreat(src, 50);
+        midThreat = mid.threat.length;            // 中段：自己记 + 段首记
+        head.kbX = head.kbY = 0;
+        mid.pushX = mid.pushY = 0;
+        applyKnockback(mid, 1, 0, 20);            // 打中段
+        headGot = Math.abs(head.kbX);             // 段首应当分到一份冲量
+        mid.update(1 / 60, srv.player, srv.map);  // 一节 update：冲量积分成本地偏移
+        pushed = Math.hypot(mid.pushX || 0, mid.pushY || 0);
+      } finally {
+        [head, mid, tail].forEach((s, i) => { s.hostility = savedHost[i]; s.threat.length = 0; });
+        head.kbX = savedKb[0][0]; head.kbY = savedKb[0][1];
+        mid.kbX = savedKb[1][0]; mid.kbY = savedKb[1][1];
+        mid.pushX = savedPush[0]; mid.pushY = savedPush[1];
+      }
+      const ok = tailThreat === 0 && midThreat > 0 && headGot > 1 && pushed > 0.01;
+      return {
+        ok,
+        detail: `尾节仇恨=${tailThreat} 中段仇恨=${midThreat} 段首冲量=${headGot.toFixed(1)}`
+          + ` 中段偏移=${pushed.toFixed(2)}px`
+      };
+    });
+
+    // 8d1b) /kill-mob 的伤害是无穷大：再高血的 eternal 也必须一击必杀
+    check('sim: kill-mob 对 eternal 一击必杀', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv) return '无本地服务端（跳过）';
+      const type = MOB_TYPES.find((t) => t && t.slug === 'ladybug');
+      if (!type) return '缺少瓢虫数据（跳过）';
+      const m = new Mob(type, game.player.x, game.player.y, 1, 'eternal');
+      m.netId = 1e9 + 7;
+      const before = m.hp;
+      let killed = false;
+      const n0 = srv.ents.length;
+      try {
+        srv.ents.push(m);
+        killed = !!srv._hitMob(m, Infinity);
+      } finally {
+        srv.ents.length = n0;                 // 立刻移出世界，别污染后续断言
+      }
+      return {
+        ok: killed && m.dead && m.hp === 0,
+        detail: `eternal 血量=${before} -> 击杀=${killed}`
+      };
+    });
+
+    // 8d2) 昆虫视野 360°：只有【墙】会挡视线（减速瓦片不再等于隐身）
+    check('sim: 视野 360°（只认墙）', () => {
+      const srv = game.net && game.net.debugServer;
+      const proto = srv && srv.ents && srv.ents.find((e) => !e.dead && !e.obstacle);
+      if (!proto) return '没有可用生物（跳过）';
+      const m = Object.create(Object.getPrototypeOf(proto));
+      Object.assign(m, { x: 0, y: 0, age: 0, _seeCache: null });
+      const tgt = { x: 40, y: 0, dead: false };
+      // 正前方 40px：目标站在减速瓦片里（slowAt=true）但中间没有墙
+      m._map = { slowAt: () => true, lineBlocked: () => false };
+      const seeOpen = m.canSee(tgt);
+      const wallOpen = m.wallBlocked(tgt);
+      // 同一位置但中间隔墙
+      m._seeCache = null;
+      m._map = { slowAt: () => false, lineBlocked: () => true };
+      const seeWall = m.canSee(tgt);
+      const wallWall = m.wallBlocked(tgt);
+      return {
+        ok: seeOpen === true && wallOpen === false && seeWall === false && wallWall === true,
+        detail: `开阔=看${seeOpen}/墙${wallOpen}　隔墙=看${seeWall}/墙${wallWall}`
+      };
+    });
+
+    // 8d3) 蜈蚣出生带随机弯曲：整条不能是一条直线（首尾朝向必须差出一个角）
+    check('sim: 蜈蚣出生带弯曲', () => {
+      const srv = game.net && game.net.debugServer;
+      const type = (typeof MOB_TYPES !== 'undefined') ? MOB_TYPES.find((t) => t && t.slug === 'centipede') : null;
+      if (!srv || !srv.ents || !type) return '跳过';
+      const before = srv.ents.length;
+      srv._spawnChain(type, 0, 0, 'common', null, 'normal');
+      const added = srv.ents.slice(before);
+      srv.ents.length = before;                       // 立刻移除测试链，别污染世界
+      if (added.length < 3) return { ok: false, detail: '生成的节数=' + added.length };
+      let d = added[added.length - 1].facing - added[0].facing;
+      while (d > Math.PI) d -= TAU;
+      while (d < -Math.PI) d += TAU;
+      return {
+        ok: Math.abs(d) > 0.2,
+        detail: `节数=${added.length} 首尾朝向差=${d.toFixed(2)}rad`
+      };
+    });
+
     // 8e) 普通生物也必须真的会移动（旧 bug：撞墙误判让全体生物原地转头）
     check('sim: 普通生物真的会移动', () => {
       const srv = game.net && game.net.debugServer;
@@ -997,6 +1216,57 @@
       return {
         ok: hpOk && faceOk && fpsOk,
         detail: `花瓣="${text.trim()}" 朝向=${facingTxt} 帧率来源=${typeof game.perf.fps}`
+      };
+    });
+
+    // 9b) 卡面文字：长名字自动缩字不溢出，且文字底边（基线）不变
+    check('ui: 卡面长名字自动缩字', () => {
+      if (typeof CardRenderer === 'undefined' || !CardRenderer.renderCardTo) return '卡牌渲染未就绪（跳过）';
+      const cv = document.createElement('canvas');
+      // paintCard 要求 canvas 已在 DOM 里（它按 clientWidth 同步后备缓冲），
+      // 所以挂到屏幕外（仍在布局中，display:none 会得到 0 宽）。
+      cv.style.position = 'absolute';
+      cv.style.left = '-9999px';
+      cv.style.top = '0';
+      document.body.appendChild(cv);
+      const PX = 96;
+      const ink = (name) => {
+        cv._card = cv._card || {};
+        CardRenderer.renderCardTo(cv, { rarity: 'common', svg: null, px: PX });
+        cv._card.name = name;
+        CardRenderer.paintCard(cv);
+        const ctx = cv.getContext('2d');
+        const W = cv.width, H = cv.height;
+        const d = ctx.getImageData(0, 0, W, H).data;
+        let x0 = W, x1 = -1, y1 = -1;
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            // 名称是卡面上唯一接近纯白的元素
+            if (d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240 && d[i + 3] > 200) {
+              if (x < x0) x0 = x;
+              if (x > x1) x1 = x;
+              if (y > y1) y1 = y;       // 底边 = 所有墨迹里最靠下的那一行
+            }
+          }
+        }
+        return { x0, x1, y1, W, H };
+      };
+      let short, long;
+      try {
+        short = ink('Basic');
+        long = ink('WWWWWWWWWW');      // 10 个最宽字符：必然触发缩字
+      } catch (e) {
+        return '像素读取失败（跳过）：' + e.message;
+      } finally {
+        cv.remove();
+      }
+      const inside = (r) => r.x1 > 0 && r.x0 > r.W * 0.045 && r.x1 < r.W * 0.955;
+      const baseOk = short.y1 > 0 && Math.abs(long.y1 - short.y1) <= 2;   // 底边不变
+      return {
+        ok: inside(long) && inside(short) && baseOk,
+        detail: `Basic x=${short.x0}..${short.x1}/底 y=${short.y1}`
+          + `　长名 x=${long.x0}..${long.x1}/底 y=${long.y1}（画布 ${short.W}）`
       };
     });
 

@@ -208,7 +208,17 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 - `RARITIES` 共 9 档：`common → unusual → rare → epic → legendary → mythic → ultra → super → eternal`（无 `unique`；个别覆盖表里会出现但不在主序列）。
 - `registry.js` 里 **花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实、84+ 忽略**。二创/缺名项不进入游戏，登记到 `NEEDS_MANUAL`。
-- **当前真正启用的花瓣 8 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf`。其余 registry 数据保留但不加载。
+- **当前真正启用的花瓣 10 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye`。其余 registry 数据保留但不加载。
+- **装备加成（`PetalFX.bonus`）**：`faster` 给主角加【最大转速】（rad/s，可叠加，与装填无关），
+  `third_eye` 给 reach 模式加【伸出距离】（px）。数值在 `PETAL_RARITY_OVERRIDES` 的 `rotSpeed` / `attackRange`，
+  `Player.recompute()` 只做求和；`/rot-speed` 的倍率被限制在 0.1~1.0 × 当前动态最大转速。
+- **花瓣轨道 = 解析公转 + 残差弹簧**（`Player._syncPetals`）：每帧先按 `rotMax × ROT_SCALE` 把花瓣
+  随轨道整体搬运同一角度（零积分误差），弹簧只修"它相对应到位置的残差"。
+  绝不能让弹簧直接去追一个高速旋转的目标点 —— 显式积分误差会随角速度累积成半径漂移，
+  表现就是"装上 Faster 后 Third Eye 的伸距被吃掉"（两个无关系统互相干扰）。
+  这样轨道半径严格等于 `reach`，与转速无关；玩家位移造成的拖尾感仍由残差弹簧给出。
+- **装备型饰品（`accessory: true`）**：不进入轨道、没有装填、不参与战斗，固定在人物额头并随朝向转动
+  （`Player._drawAccessories`）；`stackable: false` 的花瓣只有最左一格生效，其余在卡面显示为暗灰未装填态。
 - **当前真正会生成的生物 3 种**（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, centipede`；地图生成区里的 `garden` 组展开为这几种。其他生物可用 `/summon` 手动召唤调试。
 - 花瓣 key 是 `'p' + id`（如玫瑰 `p5`），`slug` 才是 i18n/特效匹配用的 `rose`。
 - 掉落：按生物稀有度查表，`rollMobDrops()`（返回项带 `chance` = 命中档的有效概率，供掉落粒子分级）；初始装备 = 4× common Basic + 1× common Rose，背包只有 1× common Basic。
@@ -259,6 +269,14 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - 现有注册：`rose`（主动回血）、`leaf`（被动持续回血）、`honey`（`solid` 实体碰撞 + 仇恨吸引）、
   `pollen` / `peas`（滞留 / 喷射）、`basic` / `light` / `stinger`（无特效，仅登记）。
 - 能力字段仍声明在 `data.js` 的 `PETAL_TRAITS`（构建到 `type` 上），注册项的 `traits` 只是可选覆盖，两份不会分叉。
+- **装备加成**：`bonus(type, rarity)` 返回 `{ rotSpeed, reach }`（`recompute()` 只做求和，装上即生效）；
+  `orbitOffset(ctx, out)` 微调轨道目标点（Faster 的"活泼飘动"）。
+- **装备型饰品**：`accessory: true` → 不进轨道/无装填/不参与战斗；`drawAccessory(ctx, acc, player, R)`
+  可整段接管绘制，不接管则按 `ACC_*` 版面画在额头。
+- **素材渲染接管**（避免"贴图里画死 + 代码又画一个"导致重影）：
+  `artVariant(svgId, svgText) -> string` 改写素材文本（卡面 / 世界实体 / 幽灵统一生效），
+  `artOverlay(ctx, look, cx, cy, size)` 在素材之上补画可动部件（`look = null` 表示卡面静态居中）。
+  两条钩子都按 `svgId` 反查类型，因此 `cards.js`、`sim/*` 都不需要认识任何 slug。
 
 ### 5.8 生物 AI 引擎（`ai.js`）
 
@@ -334,6 +352,39 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 | `RECONCILE_RATE` / `RECONCILE_SNAP` | 14 / 120 | 预测位置向权威位置收敛速率（每秒）与硬吸附阈值（px） |
 
 生物速度口径：追击 = 0.90×玩家最高速（蜜蜂 1.05×）；游荡 = 0.95 × 0.3~0.5 随机 × 0.75（蜜蜂 ×1.2），只有蜜蜂走 S 型。
+
+**击退重量口径（两套，别混用）**：
+- 实体分离用 `b.weight = rarityWeight(rarity)`（面积口径，生物/花瓣同一套）。
+- **动量传递（击退）用 `petalWeight()` = 同等级生物重量 × 递减份额**：common ×0.5 → eternal ×0.05，
+  等比递进（每档 ×0.1^(1/8)）。见 `sim/constants.js` 的 `petalKnockbackWeight`。
+  花瓣比同等级生物轻得多，所以动量小得多 —— 想让"花瓣击退更/更不猛"只调这两个端点，
+  再配合 `KB_DISPARITY_MIN/MAX`（0.2 / 1.5）：下限必须 ≤ sqrt(最小份额)≈0.224，
+  否则高稀有度花瓣会被地板抬到同一档，"越高级推得越轻"的递进就看不出来。
+
+**多节生物（蜈蚣）的三条规则**：
+- **尾节不记仇恨**：`noteThreat` 里 `!this._next || this._next.dead` 直接返回 —— 打最尾一节不会让整条掉头
+  （按"当前形态"判断，断了半截后新露出的尾节同样适用）。
+- **击退沿链传递**：被刚性粘合的节位置由 `_solveChains` 覆盖，冲量若只写 `kbX/kbY` 会被下一帧抹掉。
+  现在 `applyKnockback` 把 `CHAIN_KB_SHARE`(0.45) 的比例交给段首（整条被推着走），
+  其余由 `Mob.update` 的 `_chainLocked` 分支积分成 `pushX/pushY` 局部偏移（弹性回位）。
+- **偏移沿线扩散**：`_solveChains` 每帧对 push 场做一次 `[1,2,1]/4` 平滑后再叠加到轨迹槽位，
+  所以"打中间会带弯两侧"。改动这三处时别只改一处，否则会退化成"中段被打没反应"或"身体散架"。
+
+**卡牌 UI 性能**（一碰就卡的根因，别回退）：
+- 背包画廊**结构只建一次**（`UI._buildInventory`），之后只更新数量与显隐（`_syncInventoryCounts`）；
+  关着时只标 `_invDirty`，打开时才刷新。绝不要恢复成每次操作 `innerHTML=''` 全量重建。
+- 卡面绘制走**批量调度**（`CardRenderer.schedulePaint` + 单个共享 `ResizeObserver`）：
+  先统一读 `clientWidth`（一次布局）再统一下笔。每卡一个 rAF/RO 会让一次重建产生上百次强制重排。
+- `display:none` 的卡不会被绘制（尺寸为 0 自动跳过），恢复可见时由 ResizeObserver 触发。
+- **卡面名称**：基准字号统一（`NAME_FS_RATIO`），只有"名字太长"才缩——超过 7 个半角宽
+  （CJK 算 2）按比例缩，再用实测宽度兜一道"不超内板 94%"。**缩放不动基线**
+  （`NAME_BASE_RATIO` 固定），所以所有卡的文字仍落在同一条底线上。
+
+**装备型饰品（accessory）版面**：`ACC_ART_SIZE_K=0.4992`（眼眶尺寸 = R×0.4992）、`ACC_ART_LIFT_K=0.95`
+（头顶 = y − R×0.95）、`ACC_ART_DROP_K=0.5`（再下压自身尺寸的一半 = 落在额头）。
+世界里画饰品与任何复用版面的地方都读这三个常量（`sim/constants.js`），不要另写魔法数。
+**眼珠**（`petal-effects.js` 的 `PUPIL_*`）是相对素材的比例：眼眶缩小时眼珠要按 1/缩比 反向补偿，
+才能做到"眼眶变小、眼珠不变大"；卡面与世界共用同一个 `artOverlay`。
 
 ## 7. 代码约定（重要）
 

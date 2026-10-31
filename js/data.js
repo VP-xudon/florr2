@@ -35,7 +35,10 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 //   basic  = id 1（Basic / 基本）
 //   light  = id 2（Light / 轻：外观同 Basic 但更小，按稀有度由 1 个圆组成 1~5 个）
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
-const ENABLED_PETAL_SLUGS = new Set(['basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf']);
+const ENABLED_PETAL_SLUGS = new Set([
+  'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
+  'faster', 'third_eye'
+]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
 const REACH_IMMUNE_SLUGS = new Set(['rose']);
@@ -109,6 +112,33 @@ const PETAL_RARITY_OVERRIDES = {
     super:     { dmg: 34992,  hp: 26244, heal: 729 },
     eternal:   { dmg: 104976, hp: 78732, heal: 1261.2 },
     unique:    { dmg: 104976, hp: 78732, heal: 1261.2 }
+  },
+  // Faster：伤害/血量逐级 ×3（common 12/5 与 wiki 一致）；
+  // rotSpeed = 装备后给主角【加】的最大转速（rad/s），可叠加，与装填状态无关。
+  faster: {
+    common:    { dmg: 12,    hp: 5,     rotSpeed: 0.5 },
+    unusual:   { dmg: 36,    hp: 15,    rotSpeed: 0.7 },
+    rare:      { dmg: 108,   hp: 45,    rotSpeed: 0.9 },
+    epic:      { dmg: 324,   hp: 135,   rotSpeed: 1.1 },
+    legendary: { dmg: 972,   hp: 405,   rotSpeed: 1.3 },
+    mythic:    { dmg: 2916,  hp: 1215,  rotSpeed: 1.5 },
+    ultra:     { dmg: 8748,  hp: 3645,  rotSpeed: 1.7 },
+    super:     { dmg: 26244, hp: 10935, rotSpeed: 1.9 },
+    eternal:   { dmg: 78732, hp: 32805, rotSpeed: 2.1 },
+    unique:    { dmg: 78732, hp: 32805, rotSpeed: 2.1 }
+  },
+  // Third Eye：装备型饰品，没有伤害/血量，只有 attackRange（reach 模式下多伸出去的距离，px）
+  third_eye: {
+    common:    { dmg: 0, hp: 0, attackRange: 0 },
+    unusual:   { dmg: 0, hp: 0, attackRange: 0 },
+    rare:      { dmg: 0, hp: 0, attackRange: 0 },
+    epic:      { dmg: 0, hp: 0, attackRange: 0 },
+    legendary: { dmg: 0, hp: 0, attackRange: 40 },
+    mythic:    { dmg: 0, hp: 0, attackRange: 90 },
+    ultra:     { dmg: 0, hp: 0, attackRange: 140 },
+    super:     { dmg: 0, hp: 0, attackRange: 190 },
+    eternal:   { dmg: 0, hp: 0, attackRange: 240 },
+    unique:    { dmg: 0, hp: 0, attackRange: 240 }
   }
 };
 
@@ -179,7 +209,16 @@ const PETAL_TRAITS = {
     reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5,
     sticky: true, attractMobs: true, holdReloadUntilDeath: true, noDamage: true,
     maxMobRarity: HONEY_MAX_MOB_RARITY
-  }
+  },
+  // Faster：普通攻击花瓣（数值见 PETAL_RARITY_OVERRIDES），额外给主角加最大转速。
+  // 它"活泼"的飘动由 PetalFX 的 orbitOffset 注册项实现——数据层不描述表现。
+  faster: { reload: 2.5, sticky: false },
+  // Third Eye：装备型饰品（accessory）——
+  //   · 不进入轨道、没有装填、不参与战斗，固定在人物额头并随朝向转动；
+  //   · 同种不可堆叠：装备多个时只有最左边那格生效，其余强制为暗灰未装填态；
+  //   · 效果 = reach 模式下把花瓣再向外伸 attackRange 像素（见 PETAL_RARITY_OVERRIDES）。
+  // sticky 必须显式声明（特性表完整性断言要求每张启用花瓣都有 boolean）
+  third_eye: { accessory: true, stackable: false, noDamage: true, sticky: false, reload: 0 }
 };
 
 function buildPetalTypes() {
@@ -231,6 +270,10 @@ function buildPetalTypes() {
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
       noDamage: !!tr.noDamage,
+      // 装备型（饰品）：不进入轨道、无装填，固定在人物身上（Third Eye）
+      accessory: !!tr.accessory,
+      // 同种能否多件同时生效；false = 只有最左边那格生效，其余为暗灰未装填态
+      stackable: tr.stackable !== false,
       healOverTime: !!tr.healOverTime,              // 持续回血，数值单位为「每秒」（Leaf）
       maxMobRarity: tr.maxMobRarity || null,
       // 一卡多体（Pollen / Stinger）：每个实体各占一个轨道位、各自结算
@@ -269,14 +312,25 @@ function petalMaxMobRarity(type, rarity) {
 // 按稀有度取花瓣数值：优先 rarityStats（整表，如 Rose），其次 rarityMultipliers（倍率表，如
 // Basic），最后退回基础 stats。dmg/hp/heal 都走这里——绝不在战斗/装填里直接读 type.dmg。
 function petalStatsFor(type, rarity) {
+  const pick = (o) => ({
+    dmg: o.dmg || 0, hp: o.hp || 0, heal: o.heal || 0,
+    // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成
+    rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0
+  });
   const rs = type.rarityStats && type.rarityStats[rarity];
-  if (rs) return { dmg: rs.dmg || 0, hp: rs.hp || 0, heal: rs.heal || 0 };
+  if (rs) return pick(rs);
   const mult = type.rarityMultipliers && type.rarityMultipliers[rarity];
   const s = type;
   if (mult) {
-    return { dmg: (s.dmg || 0) * (mult.dmg || 1), hp: (s.hp || 0) * (mult.hp || 1), heal: (s.heal || 0) * (mult.heal || 1) };
+    return {
+      dmg: (s.dmg || 0) * (mult.dmg || 1),
+      hp: (s.hp || 0) * (mult.hp || 1),
+      heal: (s.heal || 0) * (mult.heal || 1),
+      rotSpeed: (s.rotSpeed || 0) * (mult.rotSpeed || 1),
+      attackRange: (s.attackRange || 0) * (mult.attackRange || 1)
+    };
   }
-  return { dmg: s.dmg || 0, hp: s.hp || 0, heal: s.heal || 0 };
+  return pick(s);
 }
 
 // ---------------- 生物 ----------------

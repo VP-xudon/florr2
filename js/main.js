@@ -97,7 +97,7 @@ async function loadSelftest() {
   try {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'js/selftest.js?v=30';
+      s.src = 'js/selftest.js?v=42';
       s.async = true;
       s.onload = resolve;
       s.onerror = () => reject(new Error('js/selftest.js 加载失败'));

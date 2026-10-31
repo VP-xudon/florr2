@@ -54,11 +54,32 @@ class Player {
   recompute() {
     // 花瓣血量独立于人物血量：装备花瓣【不再】增加 maxHp（hp 是花瓣自己的"水缸"）。
     let spd = 0, dmg = 0;
-    for (const p of this.slots) {
-      if (p) {
-        const st = petalStatsFor(p.type, p.rarity);   // 按稀有度取值（倍率/整表）
-        dmg += st.dmg; spd += p.type.spd;
+    // ---- 装备加成（装上就生效，与是否装填完成无关；同类可叠加）----
+    //   rotSpeed：Faster  → 加最大转速
+    //   reach   ：Third Eye → reach 模式下花瓣再向外伸的距离
+    // 数值由 PetalFX.bonus 统一给出（数据表 + 注册项），这里只求和，不认 slug。
+    let rotBonus = 0, reachBonus = 0;
+    const seenType = Object.create(null);
+    this.slotActive = [];        // 每格是否"生效"（不可堆叠花瓣的重复件 = false）
+    this.accessories = [];       // 装备型饰品（不进入轨道，直接画在人物身上）
+    for (let i = 0; i < this.slots.length; i++) {
+      const p = this.slots[i];
+      let active = !!p;
+      // 不可堆叠：只有最左边那格生效，往右的同类全部作废（UI 显示为暗灰未装填）
+      if (p && p.type.stackable === false) {
+        if (seenType[p.type.key]) active = false;
+        else seenType[p.type.key] = 1;
       }
+      this.slotActive[i] = active;
+      if (!p || !active) continue;
+      const st = petalStatsFor(p.type, p.rarity);   // 按稀有度取值（倍率/整表）
+      dmg += st.dmg; spd += p.type.spd;
+      if (typeof PetalFX !== 'undefined' && PetalFX.bonus) {
+        const b = PetalFX.bonus(p.type, p.rarity);
+        rotBonus += b.rotSpeed || 0;
+        reachBonus += b.reach || 0;
+      }
+      if (p.type.accessory) this.accessories.push({ card: p, slot: i });
     }
     // 注意：maxHp 不在这里重置——它由构造函数给默认值 100，调试参数 ?hp=N 在之外覆盖。
     // 若在此硬编码写回 FLOWER_BASE_HP，则每次换装 recompute() 都会把 ?hp 覆盖回 100，
@@ -66,6 +87,10 @@ class Player {
     this.speed = Math.max(60, this.baseSpeed + spd);
     this.damage = dmg;
     this.bodyDmg = FLOWER_BODY_DMG;   // 体伤：与 maxHp 同源，重算后稳定为 20
+    // 最大转速 = 基础 + 所有 Faster 加成（叠加）。/rot-speed 只能在这个值上打 0.1~1.0 的倍率，
+    // 所以转速上限是【动态】的，绝不硬编码在别处。
+    this.rotMax = PETAL_SPIN + rotBonus;
+    this.reachBonus = reachBonus;
   }
 
   // 受击结算：返回【本击是否真正扣到了血】（护甲已在调用方扣减）。
@@ -184,7 +209,8 @@ class Player {
     this.hurtInvuln = Math.max(0, this.hurtInvuln - dt);   // 受伤无敌帧衰减
     this.flash = Math.max(0, this.flash - dt);
 
-    this.spin += PETAL_SPIN * ROT_SCALE * dt;
+    // 转速 = 【动态最大转速】× 倍率。最大转速由装备（Faster）决定，倍率由 /rot-speed 决定。
+    this.spin += (this.rotMax || PETAL_SPIN) * ROT_SCALE * dt;
     // 装填计时必须在 _syncPetals 之前：新换上来的卡要先有 reload 状态（age=0 -> 未完成），
     // 这一步之后花瓣实体才会被放出来
     this._tickReload(dt);
@@ -403,7 +429,13 @@ class Player {
     // 装填中/被打碎重冷的槽位照样占一个位置 —— 其它花瓣自动给它留出空位。
     const equipped = [];
     for (let i = 0; i < this.slots.length; i++) {
-      if (this.slots[i]) equipped.push(i);
+      const c = this.slots[i];
+      if (!c) continue;
+      // 不可堆叠花瓣的重复件不参与轨道（它们本来就是暗灰未装填态）
+      if (this.slotActive && this.slotActive[i] === false) continue;
+      // 装备型饰品（Third Eye）固定贴在人物身上，不占轨道位、不生成花瓣实体
+      if (c.type.accessory) continue;
+      equipped.push(i);
     }
     const n = equipped.length;
 
@@ -655,10 +687,22 @@ class Player {
       // 保持基础轨道距离（detect 的收拢仍然生效，因为它 ≤ 1）。
       const noReach = !!(b.card && b.card.type && b.card.type.noReach);
       const mult = noReach ? Math.min(1, reachMult) : reachMult;
-      const reach = baseReach * mult;
+      // Third Eye 的 reach 加成：只在 reach 模式下生效，并按模式过渡量平滑放大，
+      // 松开按键时同样平滑收回（modeT 回落到 0）。
+      // 【reach 免疫的花瓣（Rose 等）连这份加成也不吃】—— 它们必须永远待在基础轨道距离上。
+      // 之前只把倍率钳到 1、却照样加 reachBonus，表现就是"玫瑰还是被 reach 出去了，只是短一点"。
+      const rb = noReach ? 0 : (this.reachBonus || 0) * (this.mode === 'reach' ? this.modeT : 0);
+      const reach = baseReach * mult + rb;
       const ang = this.spin + (b.spot || 0) * spotStep;
       let tx = this.x + Math.cos(ang) * reach;
       let ty = this.y + Math.sin(ang) * reach;
+      // 引擎钩子：花瓣可以微调自己的"应到位置"（Faster 的活泼飘动走这里）
+      if (typeof PetalFX !== 'undefined' && PetalFX.orbitOffset) {
+        if (!this._wob) this._wob = { x: 0, y: 0 };
+        if (PetalFX.orbitOffset(b, this, dtc, this._wob)) {
+          tx += this._wob.x; ty += this._wob.y;
+        }
+      }
       // 阵型偏移：整坨跟着同一个轨道位走，各子体再叠加【旋转到本瓣朝向】的布局偏移 ——
       // 于是它们恒保持卡面那一坨的形状（"被神秘力量锁定排列在一起"）。
       // 旋转基准取 R = ang + π/2，与单片花瓣自身的绘制朝向同一帧：
@@ -719,6 +763,24 @@ class Player {
       // 欠阻尼弹簧：速度带惯性，离目标越远加速越大；
       // 模式切换 / 数量重排 / 急转向都表现为"甩一下再归位"的自然追赶
       if (b.vx == null) { b.vx = 0; b.vy = 0; }
+      // ---- 公转解耦（重要）----
+      // 轨道点是【匀速公转】的。若让弹簧直接去追这个高速旋转的目标，显式积分的误差
+      // 会随角速度累积 —— 稳态半径随转速漂移，表现就是"装上 Faster 之后 Third Eye 的
+      // reach 伸距被吃掉一截"（两套互不相关的系统互相影响）。
+      // 解法：先把花瓣随轨道【整体搬运同一角度】（解析公转，零积分误差），
+      // 弹簧只负责修"残差"。于是轨道半径严格等于 reach、与转速完全无关；
+      // 玩家位移造成的拖尾感（故意保留的缓冲）仍然来自残差弹簧，手感不变。
+      // 吸附（sticky）时目标是生物表面而不是轨道点，不做搬运。
+      const dang = mob ? 0 : (this.rotMax || PETAL_SPIN) * ROT_SCALE * dtc;
+      if (dang) {
+        const cw = Math.cos(dang), sw = Math.sin(dang);
+        const dxp = b.x - this.x, dyp = b.y - this.y;
+        b.x = this.x + dxp * cw - dyp * sw;
+        b.y = this.y + dxp * sw + dyp * cw;
+        const v0x = b.vx, v0y = b.vy;
+        b.vx = v0x * cw - v0y * sw;
+        b.vy = v0x * sw + v0y * cw;
+      }
       b.vx += (K * (gx - b.x) - PETAL_SPRING_D * b.vx) * dtc;
       b.vy += (K * (gy - b.y) - PETAL_SPRING_D * b.vy) * dtc;
       const sp = Math.hypot(b.vx, b.vy);
@@ -745,6 +807,31 @@ class Player {
       svg: (b.card && b.card.type) ? b.card.type.svg : null,
       hp: b.hp, maxHp: b.maxHp
     }));
+  }
+
+  // 装备型花瓣（饰品）绘制：不进入轨道，固定贴在人物身上。
+  // 版面（尺寸 / 头顶高度 / 下压量）统一在 sim/constants.js 的 ACC_* 里，默认实现与
+  // 注册项共用同一套，避免"默认画一个尺寸、接管又画另一个尺寸"。
+  _drawAccessories(ctx, R) {
+    const list = this.accessories;
+    if (!list || !list.length) return;
+    for (const a of list) {
+      // 引擎优先：注册项可以完全接管绘制（Third Eye 的可动眼珠就是自定义的）
+      if (typeof PetalFX !== 'undefined' && PetalFX.drawAccessory
+        && PetalFX.drawAccessory(ctx, a, this, R)) continue;
+      // 默认实现：素材原样画在【额头】—— 不随朝向绕圈，普通饰品不需要写绘制代码
+      const svg = a.card.type.svg;
+      const cv = CardRenderer.artCanvas(svg, 128);
+      if (!cv) continue;
+      const size = R * ACC_ART_SIZE_K;
+      const cx = this.x;
+      const cy = this.y - R * ACC_ART_LIFT_K + size * ACC_ART_DROP_K;
+      drawPetalArt(ctx, cv, size, cx, cy, 0, 1, 1);
+      // 可动部件（如果这张花瓣声明了的话）由引擎统一补画，默认实现不必知道细节
+      if (typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
+        PetalFX.artOverlay(ctx, svg, this.facing, cx, cy, size);
+      }
+    }
   }
 
   draw(ctx) {
@@ -863,6 +950,9 @@ class Player {
     ctx.quadraticCurveTo(this.x, mY + 2 * bulge, this.x + mHw, mY);
     ctx.stroke();
     ctx.restore();
+
+    // 装备型饰品（Third Eye 等）：贴在【朝向那侧的额头】上，随朝向绕本体移动并自转。
+    this._drawAccessories(ctx, R);
 
     // 受伤红色滤镜（0.3s）：红色覆盖脸部，随剩余时间渐隐。受击只红闪，不再叠加白闪。
     if (this.hurtT > 0) {

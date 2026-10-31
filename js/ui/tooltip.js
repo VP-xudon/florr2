@@ -73,6 +73,24 @@ Object.assign(UI, {
               valueColor: t.maxMobRarityColor || '#ffffff'      // 稀有度名用它自己的颜色
             });
           }
+          // 装备加成（标签色与 Max Mob Rarity 同一支 #d2eb34）：
+          //   Rotation Speed = Faster 给主角叠加的最大转速
+          //   Attack Range   = Third Eye 在 reach 模式下额外伸出的距离
+          const bonusColor = (typeof MAX_MOB_RARITY_COLOR !== 'undefined') ? MAX_MOB_RARITY_COLOR : '#d2eb34';
+          if (t.rotSpeed > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/RotSpeedLabel', 'Rotation Speed:'),
+              value: '+' + fmtNum(t.rotSpeed) + ' rad/s',
+              labelColor: bonusColor
+            });
+          }
+          if (t.attackRange > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/AttackRangeLabel', 'Attack Range:'),
+              value: '+' + fmtNum(t.attackRange),
+              labelColor: bonusColor
+            });
+          }
         }
         // 行宽 = 标签宽 + 间距 + 数值宽（与绘制时同一字体、同一算法，不会互相压字）
         let statW = 0;
@@ -106,7 +124,11 @@ Object.assign(UI, {
         let contentW = Math.max(titleW, rarW, statW);
         for (const l of lines) contentW = Math.max(contentW, measure(FS_DESC, l));
         let W = Math.max(MIN_W, PADX * 2 + contentW);
-        if (reload) W = Math.max(W, PADX + titleW + 14 + reloadW + 8 + ICON + RH);
+        // 不可堆叠花瓣（Third Eye）在右上角最右侧再加一个图标，其它图标整体左移给它让位
+        const STACK_ICON = t.noStack ? (ICON + 8) : 0;
+        if (reload) W = Math.max(W, PADX + titleW + 14 + reloadW + 8 + ICON + RH + STACK_ICON);
+        // 饰品的"加号圆"占位也要留出右上角宽度（没有冷却文字，但有图标）
+        else if (t.accessory) W = Math.max(W, PADX + titleW + 14 + 8 + ICON + RH + STACK_ICON);
         // 生物：右上角 = 菱形图标 + 右侧 XP 数值（两者都要塞进标题右侧）
         if (t.mob) W = Math.max(W, PADX + titleW + 14 + measure(FS_RELOAD, xpTxt) + 8 + ICON + RH);
         W = Math.min(MAX_W, W);
@@ -133,7 +155,7 @@ Object.assign(UI, {
         // 高度：有掉落物 -> 末尾掉落行之后；否则数值行之后
         const H = (drops.length ? dropTop + (drops.length - 1) * dropRowH + CS + PCT_H : lastStat) + 16;
         return { W, H, RH, PADX, LH, ICON, lines, titleY, reloadY, rarityY, descTop, rows, statY, W_ALL, STAT_GAP,
-          xpTxt, drops, dropTop, dropRowH, CS, CGAP,
+          xpTxt, drops, dropTop, dropRowH, CS, CGAP, STACK_ICON,
           FS_TITLE, FS_RELOAD, FS_RAR, FS_DESC, FS_STAT };
       },
 
@@ -256,14 +278,16 @@ Object.assign(UI, {
               ctx.fill();
               ctx.restore();
             }
+        // 不可堆叠图标占位：右上角的所有图标整体左移，把最右侧那一格让给它
+            const rx2 = rx - (L.STACK_ICON || 0);
         // 冷却（白字）+ 后面紧跟一个表示旋转的静态图标
             if (t.reload > 0) {
               const cy = y + L.reloadY * S;
               const icon = L.ICON * S, gap = 6 * S;
-              text(t.reloadText || (fmtNum(t.reload) + 's'), rx - icon - gap, cy,
+              text(t.reloadText || (fmtNum(t.reload) + 's'), rx2 - icon - gap, cy,
                 L.FS_RELOAD, L.W_ALL, '#ffffff', 'right');
               // 图标：270° 圆环 + 端点箭头（静态，不旋转）
-              const icx = rx - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34, rad = icon * 0.42;
+              const icx = rx2 - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34, rad = icon * 0.42;
               ctx.save();
               ctx.translate(icx, icy);
               ctx.lineCap = 'butt';
@@ -285,6 +309,56 @@ Object.assign(UI, {
               ctx.stroke();
               ctx.fillStyle = '#fff';
               ctx.fill();
+              ctx.restore();
+            } else if (t.accessory) {
+              // 装备型饰品没有装填：右上角改画「淡灰圆 + 加号」，表示它是纯加成件
+              const cy = y + L.reloadY * S;
+              const icon = L.ICON * S;
+              const icx = rx2 - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34, rad = icon * 0.42;
+              ctx.save();
+              ctx.translate(icx, icy);
+              ctx.beginPath(); ctx.arc(0, 0, rad, 0, TAU);
+              ctx.fillStyle = 'rgba(226,235,230,0.30)';
+              ctx.fill();
+              ctx.lineWidth = Math.max(1, icon * 0.1);
+              ctx.strokeStyle = 'rgba(238,244,240,0.85)';
+              ctx.stroke();
+              const k = rad * 0.5;
+              ctx.beginPath();
+              ctx.moveTo(-k, 0); ctx.lineTo(k, 0);
+              ctx.moveTo(0, -k); ctx.lineTo(0, k);
+              ctx.lineCap = 'round';
+              ctx.stroke();
+              ctx.restore();
+            }
+            // 不可堆叠图标（排在最右侧）：灰色梯形 + 白色 ×
+            if (L.STACK_ICON) {
+              const cy = y + L.reloadY * S;
+              const icon = L.ICON * S;
+              const icx = rx - icon / 2, icy = cy - L.FS_RELOAD * S * 0.34;
+              const w = icon * 0.92, h = icon * 0.66;
+              ctx.save();
+              ctx.translate(icx, icy);
+              ctx.beginPath();                       // 上窄下宽的梯形
+              ctx.moveTo(-w * 0.30, -h * 0.5);
+              ctx.lineTo(w * 0.30, -h * 0.5);
+              ctx.lineTo(w * 0.50, h * 0.5);
+              ctx.lineTo(-w * 0.50, h * 0.5);
+              ctx.closePath();
+              ctx.fillStyle = 'rgba(150,158,154,0.95)';
+              ctx.fill();
+              ctx.lineJoin = 'round';
+              ctx.lineWidth = Math.max(1.2, icon * 0.14);
+              ctx.strokeStyle = '#000';
+              ctx.stroke();
+              const k = h * 0.26;                    // 白色 ×
+              ctx.beginPath();
+              ctx.moveTo(-k, -k); ctx.lineTo(k, k);
+              ctx.moveTo(k, -k); ctx.lineTo(-k, k);
+              ctx.lineCap = 'round';
+              ctx.lineWidth = Math.max(1, icon * 0.13);
+              ctx.strokeStyle = '#ffffff';
+              ctx.stroke();
               ctx.restore();
             }
         // 稀有度名（稀有度本色）

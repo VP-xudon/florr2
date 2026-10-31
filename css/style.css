@@ -76,6 +76,13 @@ body {
   border-radius: 4px; background: #ededed; border: 3.4px solid #c3c3c3; box-sizing: border-box;
 }
 .qslot .card { position: absolute; inset: 0; z-index: 1; }
+/* 拾取落槽：卡牌凭空出现在槽里时"快速渐大"（无位移，只有缩放 + 淡入） */
+@keyframes slot-pop {
+  0%   { transform: scale(0.55); opacity: 0.15; }
+  60%  { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.slot-pop { animation: slot-pop 0.22s cubic-bezier(.3,1.4,.5,1) both; transform-origin: center; }
 /* 花瓣血量"水缸"阴影已改画在卡牌 canvas 内板上（cards.js drawHpShadow，与
    reload 装填阴影同层同色、掉血从顶边下垂），DOM 层方案已删除。 */
 /* 数量角标（xN / ∞）：DOM 文本，可自由溢出卡牌边界（canvas 绘制会被自身裁掉而显示不全）。
@@ -236,11 +243,13 @@ body {
 .set-check { display: inline-flex; align-items: center; cursor: pointer; }
 .set-check .set-box {
   position: relative; width: 15px; height: 15px; box-sizing: border-box;
-  display: inline-block; background: #ececec; border: 1px solid #000; border-radius: 2px;
+  /* 未勾选 = 深色底（勾选时被浅色填充盖住） */
+  display: inline-block; background: #555; border: 1px solid #000; border-radius: 2px;
   -webkit-text-stroke: 0;
 }
 .set-check .set-box .set-fill {
-  position: absolute; inset: 0; background: #555; border-radius: 1px;
+  /* 勾选稳定态 = 浅色（与未勾选的深色底正好反过来） */
+  position: absolute; inset: 0; background: #ececec; border-radius: 1px;
   transform: scale(0); transform-origin: center;
 }
 .set-check.on .set-box .set-fill { transform: scale(1); }
@@ -430,13 +439,13 @@ body {
   width: 11px; height: 11px;
   box-sizing: border-box;
   display: inline-block;
-  background: #ececec;                 /* 未勾选：白/淡灰 */
+  background: #555;                    /* 未勾选：深色 */
   border: 1px solid #000;              /* 勾选框描边（填充不覆盖它） */
   border-radius: 2px;
 }
 .chat-tab .chat-box .chat-fill {
   position: absolute; inset: 0;
-  background: #555;                    /* 勾选稳定态：深灰 */
+  background: #ececec;                 /* 勾选稳定态：浅色 */
   border-radius: 1px;
   transform: scale(0);
   transform-origin: center;
@@ -444,13 +453,14 @@ body {
 .chat-tab.on .chat-box .chat-fill { transform: scale(1); }
 .chat-tab .chat-box .chat-fill.cbx-checking   { animation: cbx-check   0.36s cubic-bezier(.4,0,.2,1) forwards; }
 .chat-tab .chat-box .chat-fill.cbx-unchecking { animation: cbx-uncheck 0.36s cubic-bezier(.4,0,.2,1) forwards; }
+/* 红/绿过渡保持不变，只把"稳定态"翻过来：勾选 = 浅色，未勾选 = 深色 */
 @keyframes cbx-check {
   0%   { transform: scale(0); background: #3ecf5b; }   /* 绿，从中心出现 */
   55%  { transform: scale(1); background: #3ecf5b; }   /* 放大到满（不覆盖描边） */
-  100% { transform: scale(1); background: #555; }       /* 平滑变深灰 */
+  100% { transform: scale(1); background: #ececec; }   /* 平滑变浅色 */
 }
 @keyframes cbx-uncheck {
-  0%   { transform: scale(1); background: #555; }
+  0%   { transform: scale(1); background: #ececec; }
   40%  { transform: scale(1); background: #e0483a; }   /* 先平滑变红 */
   100% { transform: scale(0); background: #e0483a; }   /* 再缩到中心直至看不见 */
 }

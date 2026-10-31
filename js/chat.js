@@ -411,7 +411,8 @@ const Chat = {
   },
   _rotSpeed(v) {
     const n = parseFloat(v);
-    if (!isFinite(n) || n < 0 || n > 1) { this._sys('Chat/Command/RotSpeed/Usage'); return; }
+    // 倍率只能在 0.1~1.0 之间：1.0 = 当前【最大转速】（会随 Faster 装备变化，不是固定值）
+    if (!isFinite(n) || n < 0.1 || n > 1) { this._sys('Chat/Command/RotSpeed/Usage'); return; }
     ROT_SCALE = n;
     this._sys(I18N.tf('Chat/Command/RotSpeed/Set', { 0: n }, 'Petal rotation speed set to ' + n + '.'));
   },

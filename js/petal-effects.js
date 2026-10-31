@@ -71,6 +71,67 @@ const PetalFX = {
     return type[key];
   },
 
+  // ---- 给主角的【装备加成】（装上就生效，与是否装填好无关；同类可叠加）----
+  // 返回 { rotSpeed: 最大转速加成(rad/s), reach: reach 模式额外伸出距离(px) }。
+  // 数值默认来自数据表（PETAL_RARITY_OVERRIDES -> rarityStats），注册项可用 bonus() 追加，
+  // Player.recompute() 只做求和，绝不按 slug 判断。
+  bonus(type, rarity) {
+    const def = this.defOf(type);
+    // 注册项优先（同一种花瓣可能有数据表之外的额外加成）；
+    // 没有注册项时退回数据表 —— 两处都以"该稀有度的实际数值"为准，绝不相加，避免翻倍。
+    if (def && def.bonus) {
+      const o = def.bonus(type, rarity) || {};
+      return { rotSpeed: o.rotSpeed || 0, reach: o.reach || 0 };
+    }
+    const st = (typeof petalStatsFor === 'function') ? petalStatsFor(type, rarity) : null;
+    return { rotSpeed: (st && st.rotSpeed) || 0, reach: (st && st.attackRange) || 0 };
+  },
+
+  // ---- 装备型饰品（accessory）的绘制（可选）----
+  // 返回 true  = 注册项自己画完了（高度自定义，比如 Third Eye 的白色眼珠）；
+  // 返回 false = 用玩家层的默认实现（把素材原样画在头顶上方）。
+  // 这样普通饰品不需要写任何绘制代码，特殊饰品才需要接管。
+  drawAccessory(ctx2d, acc, player, R) {
+    const def = acc && acc.card && this.defOf(acc.card.type);
+    if (!def || !def.drawAccessory) return false;
+    return !!def.drawAccessory(ctx2d, acc, player, R);
+  },
+
+  // ---- 素材渲染接管（可选）----
+  // 有些花瓣的贴图里【画死了】本该由代码驱动的部件（Third Eye 的白色眼珠就是）。
+  // 只画贴图就会出现"两个眼珠"，只画代码又会丢掉贴图里的其它细节。
+  // 于是给注册项两条通用钩子，让渲染器保持无特判：
+  //   artVariant(svgId, svgText) -> string | null
+  //       改写素材文本。渲染管线（卡面 / 世界实体 / 幽灵）统一使用改写后的素材，
+  //       所以"去掉死部件"只需要在这里做一次。
+  //   artOverlay(ctx, look, cx, cy, size) -> bool
+  //       在素材之上按【运行状态】补画可动部件。look = 朝向角（世界），null = 静态居中（卡面）。
+  // 两条钩子都按 svgId 反查花瓣类型，因此 cards.js / sim 层都不需要认识任何 slug。
+  _svgDef(svgId) {
+    const t = (typeof getPetal === 'function') ? getPetal(svgId) : null;
+    return t ? this.defOf(t) : null;
+  },
+  artVariant(svgId, txt) {
+    const def = this._svgDef(svgId);
+    if (!def || !def.artVariant || typeof txt !== 'string') return null;
+    return def.artVariant(svgId, txt) || null;
+  },
+  artOverlay(ctx, svgId, look, cx, cy, size) {
+    const def = this._svgDef(svgId);
+    if (!def || !def.artOverlay) return false;
+    return !!def.artOverlay(ctx, look, cx, cy, size);
+  },
+
+  // ---- 在轨花瓣的【目标点微调】（默认没有）----
+  // 返回 true 表示把偏移写进了 out.{x,y}（相对应到位置的像素偏移）。
+  // 由 Player._syncPetals 在算出轨道目标后调用 —— 花瓣仍然走同一套弹簧，只是目标点在飘。
+  orbitOffset(body, player, dt, out) {
+    const type = body && body.card && body.card.type;
+    const def = this.defOf(type);
+    if (!def || !def.orbitOffset) return false;
+    return !!def.orbitOffset(this._ctx(body, player, dt), out);
+  },
+
   // ---- 每帧推进（在轨花瓣）----
   tick(body, player, dt) {
     if (!body || body.dead || body.fxDone) return;
@@ -337,4 +398,81 @@ PetalFX.register('honey', {
   canAttract(body, player, mob) {
     return dist2(body.x, body.y, mob.x, mob.y) <= HONEY_PULL_R * HONEY_PULL_R;
   },
+});
+
+// —— 内置特效 6：加速（Faster）——
+// 数值层面它是普通花瓣（伤害/血量见 PETAL_RARITY_OVERRIDES）；
+// 特殊的地方只有两处，都交给引擎：
+//   ① bonus.rotSpeed：装备即生效，叠加到主角的【最大转速】（recompute 求和，与装填无关）；
+//   ② orbitOffset：在"应到位置"周围做极小范围的不规则飘动 —— 两条不同频率的正弦叠加，
+//      相位每片花瓣随机，所以一群 Faster 不会同步摆动，看起来毛茸茸的很活泼。
+//      幅度只有 2.6px：手感上完全不影响轨道，只影响观感。
+PetalFX.register('faster', {
+  bonus(type, rarity) {
+    return { rotSpeed: (petalStatsFor(type, rarity).rotSpeed || 0) };
+  },
+  orbitOffset(ctx, out) {
+    const b = ctx.petal;
+    if (!b.wob) b.wob = { p1: rand(0, TAU), p2: rand(0, TAU) };
+    const t = (b.age || 0) * 3.45;     // 频率 ×3.45（再快 1.5 倍：2.3 → 3.45）
+    const A = 5.85;                    // 幅度 3.9 × 1.5（原始 2.6 的 2.25 倍）
+    out.x = (Math.sin(t * 5.3 + b.wob.p1) * 0.7 + Math.sin(t * 11.7 + b.wob.p2) * 0.3) * A;
+    out.y = (Math.cos(t * 4.7 + b.wob.p2) * 0.7 + Math.sin(t * 13.1 + b.wob.p1) * 0.3) * A;
+    return true;
+  }
+});
+
+// —— 内置特效 7：第三只眼（Third Eye）——
+// 装备型（accessory）：不进入轨道、没有装填、不参与战斗。
+//   · 表现：固定在人物额头，随朝向转动（渲染见 Player.drawAccessories）；
+//   · 数值：bonus.reach = 数据表里的 attackRange，reach 模式下把花瓣再向外伸那么远。
+// 眼珠几何（全部是【相对整张素材】的比例，世界与卡面共用同一份）：
+//   眼眶素材缩小到 0.8 倍（ACC_ART_SIZE_K），但眼珠要求"大小不变"——
+//   所以比例 = 原值 / 0.8，乘上缩小后的 size 正好还原原来的绝对尺寸。
+const PUPIL_RX = 0.13 / 0.8;      // 0.1625
+const PUPIL_RY = 0.16 / 0.8;      // 0.20
+const PUPIL_OFF_X = 0.16 / 0.8;   // 0.20：朝向前方时的最大水平偏移
+const PUPIL_OFF_Y = 0.12 / 0.8;   // 0.15：垂直偏移
+// 这里显式登记，让"饰品"这一形态和其它花瓣能力一样由引擎声明，而不是散落在渲染/逻辑里。
+PetalFX.register('third_eye', {
+  bonus(type, rarity) {
+    return { reach: (petalStatsFor(type, rarity).attackRange || 0) };
+  },
+  // 素材里那张脸已经画死了一个浅色眼珠；代码再画一个就会看到【两个眼珠】。
+  // 这里把素材里那个浅色眼珠改成与眼眶同色（只改这一张素材的填充），
+  // 于是渲染管线里只剩下 artOverlay 画的那一个 —— 世界、卡面、幽灵全部同时生效。
+  artVariant(svgId, txt) {
+    return txt.replace(/fill="#e+e+e+"/gi, 'fill="#111"');
+  },
+  // 可动部件：白色眼珠。世界里面朝哪就往哪偏（与主角自带的两个眼珠同一套做法）。
+  // 眼珠尺寸是【相对整张素材】的比例常量：
+  //   眼眶（素材）缩小了 0.8 倍，但"眼珠大小不变"—— 所以这两个比例是原来的 1/0.8，
+  //   乘上缩小后的 size 正好还原成原来的绝对大小。
+  // 卡面走同一个函数（同一份比例），因此卡面与世界里的眼珠严格同源、不会各画一套。
+  // look = null -> 【正中不动】（卡面是静态的；给 0 会被当成"朝右"，看起来像眼珠错位）。
+  artOverlay(ctx2d, look, cx, cy, size) {
+    const hasLook = (look != null);
+    const ox = hasLook ? Math.cos(look) * size * PUPIL_OFF_X : 0;
+    const oy = hasLook ? Math.sin(look) * size * PUPIL_OFF_Y : 0;
+    ctx2d.save();
+    ctx2d.fillStyle = '#ffffff';
+    ctx2d.beginPath();
+    ctx2d.ellipse(cx + ox, cy + oy, size * PUPIL_RX, size * PUPIL_RY, 0, 0, TAU);
+    ctx2d.fill();
+    ctx2d.restore();
+    return true;
+  },
+  // 高度自定义的绘制：本体固定在【额头】不随朝向绕圈（位置/尺寸见 sim/constants.js 的 ACC_*）；
+  // 随朝向移动的是里面那颗眼珠，交给 artOverlay 统一画。
+  drawAccessory(ctx2d, acc, player, R) {
+    const svg = acc.card.type.svg;
+    const cv = CardRenderer.artCanvas(svg, 128);
+    if (!cv) return true;                 // 素材未就绪：本次不画，也不回退默认尺寸
+    const size = R * ACC_ART_SIZE_K;
+    const cx = player.x;
+    const cy = player.y - R * ACC_ART_LIFT_K + size * ACC_ART_DROP_K;
+    drawPetalArt(ctx2d, cv, size, cx, cy, 0, 1, 1);
+    PetalFX.artOverlay(ctx2d, svg, player.facing, cx, cy, size);
+    return true;
+  }
 });

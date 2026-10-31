@@ -302,12 +302,12 @@ class LocalServer {
     const rs = type.rarityStats && type.rarityStats[rarity];
     let prev = null;
     const segs = [];                                     // 本链全部节（用于预置轨迹）
-    // 出生摆位：沿【直线】排开（CURVE = 0）。
-    // 早期为了"看起来软"曾用 0.11 rad/节（整条 76° 的弧），但头部规则改成
-    // "每趟走直线 + 换趟弧线转弯"之后，出生时那条弧会一直挂在身体上直到被走完，
-    // 视觉上就是一条无中生有的 S —— 这正是"行进还有蜜蜂一样的 S 型"的来源。
-    // 出生必须是直线，形状只能来自头真正走过的路径。
-    const CURVE = 0;                                     // 相邻两节之间的转角(rad)
+    // 出生摆位：带一点【随机弯曲】—— 每条链随机一个总弯曲角（±23°~±69°），
+    // 再按节数均摊到每一节，所以有的个体几乎笔直、有的明显盘着。
+    // 关键：弯曲量是【总量】而不是"每节固定角" —— 早期用 0.11 rad/节时，
+    // 8 节只有 50°，45 节的超长个体却绕了一整圈（那条"无中生有的 S"就是它）。
+    const bendTotal = rand(0.4, 1.2) * (Math.random() < 0.5 ? -1 : 1);
+    const CURVE = (n > 1) ? bendTotal / (n - 1) : 0;     // 相邻两节之间的转角(rad)
     let px = x, py = y, dir = a + Math.PI;               // dir = 由头指向尾的方向
     for (let i = 0; i < n; i++) {
       const m = new Mob(type, x, y, 1, rarity);
@@ -612,6 +612,36 @@ class LocalServer {
         prevSeg = cur; cur = cur._next;
       }
 
+      // ---- 3b) 击退偏移 + 沿链扩散 ----
+      // 体节被冲量顶开时，位置不能就这么被轨迹覆盖掉（那就是"打中段没反应"）。
+      // 每节带一个 pushX/pushY 局部偏移（见 sim/mob.js 的 _chainLocked 分支），这里：
+      //   ① 先沿链做一次 [1,2,1]/4 平滑 —— 体节之间有物理连接，打中间会带弯两侧；
+      //   ② 再把偏移叠加到轨迹槽位上。段首不叠加（它自己跑 AI，位置是权威的）。
+      // 偏移本身在 Mob.update 里按弹性速率回位，所以是"被顶开 -> 抖一下 -> 归位"。
+      const cn0 = chain.length;
+      if (cn0 > 2) {
+        const bx = this._chainBX || (this._chainBX = []);
+        const by = this._chainBY || (this._chainBY = []);
+        bx.length = cn0; by.length = cn0;
+        let any = false;
+        for (let i = 0; i < cn0; i++) {
+          const s = chain[i];
+          bx[i] = s.pushX || 0; by[i] = s.pushY || 0;
+          if (bx[i] || by[i]) any = true;
+        }
+        if (any) {
+          for (let i = 1; i < cn0; i++) {
+            const l = i - 1, r = (i + 1 < cn0) ? i + 1 : i;
+            chain[i].pushX = (bx[l] + bx[i] * 2 + bx[r]) * 0.25;
+            chain[i].pushY = (by[l] + by[i] * 2 + by[r]) * 0.25;
+          }
+          for (let i = 1; i < cn0; i++) {
+            const s = chain[i];
+            if (s.pushX || s.pushY) { s.x += s.pushX; s.y += s.pushY; }
+          }
+        }
+      }
+
       // ---- 4) 硬挤压：非相邻的两节【不允许重叠】----
       // 弧长摆放只保证"沿路径的间距"，当头折返或急转时，内弯一侧的节会在
       // 空间上挤到一起（看起来像被压扁、互相穿模）。
@@ -902,15 +932,16 @@ class LocalServer {
         const relN = Math.abs(((b.vx || 0) - (m.vx || 0)) * nx + ((b.vy || 0) - (m.vy || 0)) * ny);
         const jmass = clamp(Math.sqrt((b.maxHp || 30) / 30), 0.8, 1.8);
         const jshare = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[1];
-        // 花瓣重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight，随稀有度递增）。
-        // 花瓣实体长期缺失 weight，正是"连 Eternal 蜜都被 rare 生物随便推着跑"的根因。
+        // wP = 花瓣在【击退引擎】里的重量（不是实体分离用的 weight）：
+        //   同稀有度生物重量 × 递减份额（common ×0.5 → eternal ×0.05，见 sim/constants.js）。
+        // 花瓣比同等级生物轻得多，动量传递就小得多 —— 这是"花瓣击退别太猛"的唯一调参入口。
         const wP = petalWeight(b), wM = m.weight || 1;
         const invP = 1 / wP, invM = 1 / wM, invSum = (invP + invM) || 1;
         const shareP = invP / invSum, shareM = invM / invSum;   // 各自的"可动份额"（反质量分配）
-        // 质量悬殊系数：等重（=同等级实体之间）恒为 1，悬殊时放大传递效果。
-        // 【仅】作用于生物击退时封顶 1.5×（用户要求：最大动能传递 = 同等级实体间击退的 1.5 倍）；
+        // 质量悬殊系数：等重（=同等级实体之间）恒为 1，悬殊时按重量比开方缩放。
+        // 【仅】作用于生物击退，钳在 [KB_DISPARITY_MIN, KB_DISPARITY_MAX]；
         // 实体之间的推动 / 位移分离不走这里，按反质量自然分配，【不设上限】。
-        const kbBoost = clamp(Math.sqrt(wP / wM), 2 / 3, KB_DISPARITY_MAX);
+        const kbBoost = clamp(Math.sqrt(wP / wM), KB_DISPARITY_MIN, KB_DISPARITY_MAX);
         // ---- ① 物理分离（"生物一侧"）：生物被推出花瓣轮廓 ----
         // 花瓣一侧的分离在 Player._separatePetalFromMobs 里做（两端同源），
         // 这里只动生物（生物只有服务端能动）。两边加起来 = 完整的一对多体碰撞。
@@ -1295,7 +1326,10 @@ class LocalServer {
         if (m.type.id !== mobId) continue;
         if (rarity !== 'all' && m.rarity !== rarity) continue;
         if (scope === 'near' && (m.x - px) * (m.x - px) + (m.y - py) * (m.y - py) > NEAR_R * NEAR_R) continue;
-        if (this._hitMob(m, 1e9)) killed++;   // 只在真正死亡时计入，避免假报成功
+        // 伤害给【无穷大】：1e9 打不动 eternal（血量 9.18e8 只是蜜蜂一例，
+        // 其它物种的 eternal 血量会超过它），于是"指令说杀了但怪还在"。
+        // Infinity 会经过 hurt() 的 Math.min(dmg, hp) 截断成"本击实际伤害"，不会溢出。
+        if (this._hitMob(m, Infinity)) killed++;   // 只在真正死亡时计入，避免假报成功
         if (killed >= count) break;
       }
       this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill-mob/Done', { 0: killed }, 'Killed ' + killed + ' mob(s).') });

@@ -43,6 +43,28 @@ function rarityWeight(rarity) {
   const d = MOB_DIAM[rarity] || MOB_DIAM_BASE;
   return Math.pow(d / MOB_DIAM.common, 2);
 }
+// ---- 花瓣在【击退引擎】里的物理重量 ----
+// 花瓣不是生物那样的"实心块"，它传能时只该带走一小部分：口径定为
+//   common  = 同稀有度生物重量 × 0.5
+//   eternal = 同稀有度生物重量 × 0.05
+// 中间各档按【等比】递进（每档乘同一个比例 0.1^(1/8)），与"生物体重随稀有度递增"同构。
+// 只用于击退（动量传递）；实体分离仍按 rarityWeight 的原值，二者互不干扰。
+const PETAL_KB_WEIGHT_COMMON = 0.5;
+const PETAL_KB_WEIGHT_ETERNAL = 0.05;
+function petalKnockbackWeight(rarity) {
+  const i = Math.max(0, RARITY_ORDER.indexOf(rarity));
+  const n = Math.max(1, RARITY_ORDER.length - 1);
+  const k = PETAL_KB_WEIGHT_COMMON
+    * Math.pow(PETAL_KB_WEIGHT_ETERNAL / PETAL_KB_WEIGHT_COMMON, i / n);
+  return rarityWeight(rarity) * k;
+}
+// ---- 装备型饰品（accessory）的版面 ----
+// 统一在"本体半径 R"上取比例：尺寸 / 上浮距离（头顶）/ 再往下压的距离（占自身尺寸）。
+// 世界里画饰品、以及任何需要复用这套版面的地方都读这里，避免各处再写一份魔法数。
+// 饰品眼眶再缩 0.8 倍：0.624 × 0.8 = 0.4992（眼珠不跟着缩，见 petal-effects.js 的 PUPIL_*）
+const ACC_ART_SIZE_K = 0.4992;
+const ACC_ART_LIFT_K = 0.95;    // 头顶高度 = R × 0.95
+const ACC_ART_DROP_K = 0.65;    // 再往下移 = 自身尺寸 × 0.65（0.5 落在额头，再下压 0.15 高度）
 // 实体推挤的恢复系数（0=不弹，1=完全弹性）：低值主要表现为"推挤/阻力"而非弹飞
 const PUSH_RESTITUTION = 0.2;
 
@@ -77,11 +99,34 @@ const KNOCKBACK_SHARE = {
 //   位移对时间的积分正好收敛到目标总位移（∫v0·e^(-kt)dt = v0/k）。
 // 观感上是"被撞得滑出去一小段再停住"，而不是"位置突然跳一下"。
 const KNOCKBACK_DECAY = 12;
+// ---- 多节生物（刚性链）对击退的响应 ----
+// 被粘合的体节位置由链解算给出，冲量如果只写进 kbX/kbY 就会被下一帧覆盖 ——
+// 这正是"打蜈蚣中段几乎没反应"的原因。所以冲量分为两路：
+//   ① 局部偏移（pushX/pushY）：本节相对轨迹槽位被顶开一点，再弹性回位；
+//   ② 传给段首（CHAIN_KB_SHARE）：整条被推着动一下，身体自然跟着走。
+// 局部偏移还会在链解算里沿相邻节扩散一次，于是"打中间、两边都跟着动"。
+const CHAIN_KB_SHARE = 0.45;        // 冲量转给段首的比例（其余留作本节局部偏移）
+const CHAIN_PUSH_MAX = 1.2;         // 单节局部偏移上限（× 节半径，防止穿进邻节）
+const CHAIN_PUSH_RECOVER = 6;       // 局部偏移的弹性回位速率（1/s）
+
 // 施加反弹冲量：ux/uy 为单位方向，total 为希望的总位移（世界像素）
 function applyKnockback(ent, ux, uy, total) {
   const v = total * KNOCKBACK_DECAY;
   ent.kbX = (ent.kbX || 0) + ux * v;
   ent.kbY = (ent.kbY || 0) + uy * v;
+  // 刚性链：本节动不了（位置由解算覆盖），把一部分冲量交给段首 ——
+  // 「体节之间有物理连接」的落点就在这里，而不是在调用方按物种写分支。
+  if (ent._chainLocked && CHAIN_KB_SHARE > 0) {
+    let root = ent;
+    for (let guard = 0; guard < 64; guard++) {
+      if (!root._lead || root._lead.dead) break;
+      root = root._lead;
+    }
+    if (root !== ent && !root.dead) {
+      root.kbX = (root.kbX || 0) + ux * v * CHAIN_KB_SHARE;
+      root.kbY = (root.kbY || 0) + uy * v * CHAIN_KB_SHARE;
+    }
+  }
 }
 // 每帧推进反弹速度衰减（实体 update 里调用）
 function tickKnockback(ent, dt) {

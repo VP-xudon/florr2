@@ -54,6 +54,10 @@
     'Chat/Command/summon/BadParam':
       'Invalid parameter. Segmented mobs accept [type=normal] or [type=long], e.g. /summon 3 common[type=long] 1',
 
+    // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
+    'UI/Petal/RotSpeedLabel': 'Rotation Speed:',
+    'UI/Petal/AttackRangeLabel': 'Attack Range:',
+
     // ---- 全服击杀公告 ----
     'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}',
 
@@ -111,6 +115,10 @@
 
     'Chat/Command/summon/BadParam':
       '参数无效。多节生物支持 [type=normal] 或 [type=long]，例如 /summon 3 common[type=long] 1',
+
+    // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
+    'UI/Petal/RotSpeedLabel': '旋转速度：',
+    'UI/Petal/AttackRangeLabel': '攻击距离：',
 
     'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}',
 
