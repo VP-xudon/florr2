@@ -249,13 +249,22 @@
         if (out) hitCount++;
         return out;
       };
+      // 世界里还有【敌对生物在真实战斗】（蜘蛛看见就扑），它们的 hurt 事件会把 total
+      // 覆盖掉、还会抢先吃掉受伤无敌帧 —— 测量期间只留测试生物，结束后原样还原。
+      const savedEnts = srv.ents, savedAwake = srv._awake;
+      const savedHp = sm.hp, savedMaxHp = sm.maxHp;
       try {
+        srv.ents = [sm]; srv._awake = [sm];
+        // 花瓣也在打它：血量不抬高的话，花瓣几个 tick 就把它打死（死亡分支不发 hurt）
+        sm.hp = sm.maxHp = 1e6;
         for (let i = 0; i < 60 && total == null; i++) {
           sm.x = srv.player.x; sm.y = srv.player.y;
           sm.vx = 0; sm.vy = 0;
           game.update(1 / 60);
         }
       } finally {
+        srv.ents = savedEnts; srv._awake = savedAwake;
+        sm.hp = savedHp; sm.maxHp = savedMaxHp;
         window.physicsPush = origPush;
         window.mobHitTest = origHitTest;
         game._applyEvt = orig;

@@ -469,12 +469,14 @@ class Mob {
     }
     const gait = (this.gaitSprite && typeof SpiderGait !== 'undefined' && SpiderGait.ready())
       ? SpiderGait.legs(this.drawSize, this.gait) : null;
-    // 受击只做红色滤镜（hurtT -> 下方 artRedCanvas 红闪），不再叠加白闪剪影。
+    // 步态生物（蜘蛛）的实际绘制键 = 无腿身体：红闪/白闪/红滤镜都必须跟它同源，
+    // 否则红闪用的还是【带腿的旧剪影】，腿摆起来红闪却不动（观感就是"红闪没跟上"）。
+    let keyBody = key;
     if (gait) {
       // 八条腿【矢量绘制】（在身体之下）+ 无腿身体贴图：
       // 腿的相位由 gait 连续驱动 —— 不预渲染帧，任何缩放/角度都是矢量锐边。
       // ① 腿：与本体同一变换（pivot 平移 + 旋转 + 挤压），在 artCanvas 局部坐标系里画
-      const keyBody = 'mob21_body';
+      keyBody = 'mob21_body';
       if (!SpriteStore.ready(keyBody)) {
         const url = SpiderGait.bodyUrl();
         if (url && !SpriteStore.images[keyBody]) SpriteStore.load(keyBody, url);
@@ -487,7 +489,8 @@ class Mob {
       const pv = SpriteStore.mobPivot(keyBody);   // 与身体贴图同一轴心，腿才压得准
       ctx.translate(-this.drawSize / 2 - pv.x * this.drawSize,
         -this.drawSize / 2 - pv.y * this.drawSize);
-      ctx.strokeStyle = '#333';
+      // 受击时腿【一起变红】：红闪剪影只覆盖身体贴图，腿是矢量画的，必须自己变红
+      ctx.strokeStyle = (this.hurtT > 0 && !this.dead) ? '#ff4040' : '#333';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.lineWidth = gait.lw;
@@ -545,12 +548,13 @@ class Mob {
       ctx.rotate(rot);
       if (scale !== 1) ctx.scale(scale, scale);
       const ra = clamp(this.hurtT / 0.3, 0, 1) * 0.55;
-      const rc = SpriteStore.artRedCanvas(key, this.drawSize);
+      // 步态生物（蜘蛛）用【无腿身体】的红剪影：腿的红色由矢量描边自己承担
+      const rc = SpriteStore.artRedCanvas(keyBody, this.drawSize);
       if (rc) {
         // 红闪必须和本体用【同一个旋转轴心位移】。之前这里只写了 -size/2，
         // 于是像蜈蚣头这种主体不在画布中心的贴图，本体被平移了 -pv*size、
         // 红闪却没有 —— 表现为"红闪偏后、和身体不重合"。三条绘制路径现在同源。
-        const pv = SpriteStore.mobPivot(key);
+        const pv = SpriteStore.mobPivot(keyBody);
         ctx.globalAlpha = ra;
         ctx.drawImage(rc,
           -this.drawSize / 2 - pv.x * this.drawSize,
