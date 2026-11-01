@@ -608,6 +608,20 @@ const MOB_DROP_TABLE_ITEM = {
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
     unique:    [['mythic', 0.814], ['ultra', 0.186]]
   },
+  // Web：蜘蛛掉落，比 Faster【低一档】—— 没有 Common 档（Wiki 表的 Common 行只有 16.4% Unusual），
+  // 其余各档与 Faster 相同。之前误用通用表（带 Common 档）→ 会出现"Common Web"，与表矛盾。
+  web: {
+    common:    [['unusual', 0.164]],
+    unusual:   [['unusual', 0.512]],
+    rare:      [['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
   // Third Eye / Magic Eye：蜘蛛专属，Legendary 及以下一档都不掉（Wiki 表只有 Mythic 起）。
   //   Mythic 0.03% / Ultra 4.5% Mythic + 0.02% Ultra / Super+ 96% Mythic + 4% Ultra
   third_eye: {

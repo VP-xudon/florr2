@@ -850,6 +850,32 @@
       };
     });
 
+    // 8b1b) 蜘蛛掉率表：Web 没有 Common 档（不可能掉 Common Web）；Faster 有；Third Eye Legendary 不掉
+    check('data: 蜘蛛掉率表（Web 无 Common 档）', () => {
+      if (typeof dropDistFor !== 'function') return '掉率查询未就绪（跳过）';
+      const webC = dropDistFor('web', 'common') || [];
+      const fasterC = dropDistFor('faster', 'common') || [];
+      const webOk = webC.length > 0 && webC.every(([r]) => r !== 'common')
+        && webC.some(([r, c]) => r === 'unusual' && Math.abs(c - 0.164) < 1e-9);
+      const fasterOk = fasterC.some(([r]) => r === 'common')
+        && fasterC.some(([r, c]) => r === 'unusual' && Math.abs(c - 0.164) < 1e-9);
+      // 掷骰抽查：common 蜘蛛掉落的 Web 只能是 unusual（跑 400 次足以覆盖 16.4% 档）
+      let badRoll = 0;
+      for (let i = 0; i < 400; i++) {
+        for (const d of rollMobDrops('spider', 'common', false)) {
+          if (d.slug === 'web' && d.rarity === 'common') badRoll++;
+        }
+      }
+      const eyeOk = !dropDistFor('third_eye', 'legendary') && !!dropDistFor('third_eye', 'mythic');
+      const ok = webOk && fasterOk && eyeOk && badRoll === 0;
+      return {
+        ok,
+        detail: `Web(common 档)=${JSON.stringify(webC)} Faster 有 common=${fasterOk}`
+          + ` ThirdEye legendary 掉=${!!dropDistFor('third_eye', 'legendary')}`
+          + ` 400 次掷骰出现 Common Web=${badRoll}`
+      };
+    });
+
     // 8b2) 蜈蚣断链继承仇恨 + 敌对生物"看见即追"
     check('sim: 断链继承仇恨 + 敌对看见即追', () => {
       const pick = (slug) => MOB_TYPES.find((t) => t && t.slug === slug);
