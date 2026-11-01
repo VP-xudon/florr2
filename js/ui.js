@@ -182,6 +182,8 @@ const UI = {
 
       <!-- 底部常驻快捷栏：上行 = 当前装备的卡（主槽），下行 = 副槽（临时存储，按 R 整排互换） -->
       <div id="quickbar">
+        <!-- 状态效果条：位于卡槽正上方，按获得顺序排列（圆形小图标，见 renderStatus） -->
+        <div id="statusRow" class="status-row"></div>
         <div id="slotRow" class="quickrow"></div>
         <!-- [R] 提示用绝对定位挂在 .subwrap 上，不参与副槽行的居中计算 -->
         <div class="subwrap">
@@ -278,7 +280,7 @@ const UI = {
       dex: $('dex'), dexBody: $('dexBody'), dexCount: $('dexCount'),
       settings: $('settings'),
       setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
-      slotRow: $('slotRow'), subRow: $('subRow'),
+      slotRow: $('slotRow'), subRow: $('subRow'), statusRow: $('statusRow'),
       loading: $('loading')
     };
     this._initOverlay();   // 悬浮框 / 卡牌覆盖层：纯 canvas
@@ -311,6 +313,28 @@ const UI = {
     // 兜底：窗口失焦/右键菜单时，清掉可能残留的拖拽幽灵
     window.addEventListener('blur', () => this._removeGhost());
     root.addEventListener('contextmenu', (e) => { this._removeGhost(); e.preventDefault(); });
+    // ---- 焦点保护（曾经的"按空格反复开关窗口"）----
+    // <button> 被点击后会保持 focus，之后按空格 / 回车时浏览器会把它当成"再次点击"，
+    // 于是游戏里的空格（reach）与 UI 按钮各执行一次 —— 窗口开了又关、关了又开。
+    // 两条规则同时生效：
+    //   ① 指针按下 UI 元素后主动 blur（焦点不留在按钮上，不影响点击本身）；
+    //   ② 万一焦点已在 UI 里（Tab 导航 / 浏览器行为），捕获阶段吞掉空格与回车，
+    //      既不触发按钮的默认激活，也不让它冒泡给游戏。
+    const UI_ROOT_SEL = '#hud, .window, #quickbar, #touchLayer';
+    document.addEventListener('pointerdown', (e) => {
+      const t = e.target;
+      const el = (t && t.closest) ? t.closest('button, .dockbtn, .set-check, .cardcell, .qslot') : null;
+      if (el && el.blur) setTimeout(() => el.blur(), 0);
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      const k = e.key;
+      if (k !== ' ' && k !== 'Spacebar' && k !== 'Enter') return;
+      const a = document.activeElement;
+      if (!a || a === document.body || !a.closest || !a.closest(UI_ROOT_SEL)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (a.blur) a.blur();
+    }, true);
     // 任何元素发生滚动（含背包窗口内容 .win-body）-> 悬浮栏立刻渐隐，
     // 绝不能跟着内容一起滑走（scroll 不冒泡，用捕获阶段监听）
     window.addEventListener('scroll', () => { if (this._tipOn) this._hideTip(); }, true);
@@ -534,7 +558,11 @@ const UI = {
     // 旧卡面连同其事件监听、以及它的数量角标兄弟节点一起移除（否则会残留一排孤立的 xN）
     if (old) { if (old._countEl) old._countEl.remove(); old.remove(); }
     if (!card) return;
-    const cardEl = CardRenderer.createCard({ rarity: card.rarity, svg: card.type.svg });
+    // live：只有【主卡槽】里的卡才跟随玩家状态（如 Third Eye 的眼珠）；
+    // 背包 / 副槽 / 掉落物里的同一张卡必须静止（用户要求"没装上就不动"）。
+    const cardEl = CardRenderer.createCard({
+      rarity: card.rarity, svg: card.type.svg, live: drop === 'slot'
+    });
     cardEl.style.visibility = '';
     inner.appendChild(cardEl);
     this._bindCard(cardEl, card, { type: drop, index: i },
@@ -851,6 +879,39 @@ const UI = {
   //   · 花瓣本体与名称文字完全不被遮盖。
   // 视觉 = 一块"无阴影扇形"从 0 长满一整圈，扇形之外是阴影；扇形没有描边，就是两块区域的分界。
   //   · 扇形两条边界同点出发：慢边界与快边界，两者转速比率恒定（快 = 慢的 2 倍）；
+  // 状态效果条（卡槽正上方）：按【获得顺序】排圆形小图标。
+  // 每帧都会被调用，因此先用"签名"判重：效果集合与数值都没变就直接返回，不碰 DOM。
+  // 数值（将来有的效果）走右下角小角标 —— 只有 def.numeric 为真且 value 非空时才显示。
+  renderStatus(ent) {
+    const row = this.refs.statusRow;
+    if (!row || typeof StatusFX === 'undefined') return;
+    const list = StatusFX.list(ent);
+    let sig = '';
+    for (const e of list) sig += e.id + (e.value == null ? '' : ':' + e.value) + '|';
+    if (sig === this._statusSig) return;
+    this._statusSig = sig;
+    row.innerHTML = '';
+    if (!list.length) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+    for (const e of list) {
+      const def = StatusFX.defOf(e.id) || {};
+      const name = I18N.t(def.nameKey || ('Status/' + e.id + '/Name'), e.id);
+      const el = document.createElement('div');
+      el.className = 'status-icon';
+      if (def.color) el.style.background = def.color;
+      const short = def.shortKey ? I18N.t(def.shortKey, name) : name;
+      el.textContent = String(short || name).slice(0, 1);
+      if (def.numeric && e.value != null) {
+        const b = document.createElement('i');
+        b.className = 'status-val';
+        b.textContent = fmtNum(e.value);
+        el.appendChild(b);
+      }
+      this._bindSimpleTip(el, () => name);
+      row.appendChild(el);
+    }
+  },
+
   //   · 慢边界在装填期间正好转一圈，快边界转两圈，因此在"装填完成"那一刻快边界恰好追上慢边界，
   //     扇形宽度 = 2π -> 覆盖整圈 -> 阴影消失；
   //   · 整个过程时长 = 该花瓣的 reload 秒数（type.spd），装填完成后才会生成花瓣实体。
@@ -996,6 +1057,9 @@ const UI = {
           //   转速加成（Faster）、reach 额外伸距（Third Eye）—— 标签色同 Max Mob Rarity
           rotSpeed: st.rotSpeed || 0,
           attackRange: st.attackRange || 0,
+          // 场地型（Web）：网半径 + 存在时长
+          radius: st.radius || 0,
+          duration: st.duration || 0,
           // 装备型饰品（Third Eye）：没有装填，右上角改画"淡灰圆 + 加号"
           accessory: !!type.accessory,
           // 不可堆叠（Third Eye）：右上角最右侧再加"灰色梯形 + 白 ×"图标

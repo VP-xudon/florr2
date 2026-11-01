@@ -57,6 +57,15 @@
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': 'Rotation Speed:',
     'UI/Petal/AttackRangeLabel': 'Attack Range:',
+    // ---- 花瓣属性：场地型（Web）----
+    'UI/Petal/RadiusLabel': 'Radius:',
+    'UI/Petal/DurationLabel': 'Duration:',
+
+    // ---- 状态效果（卡槽上方的小圆图标）----
+    'Status/Web/Name': 'Web Slow',
+    'Status/Web/Short': 'W',
+    'Status/Poison/Name': 'Poison',
+    'Status/Poison/Short': '☠',
 
     // ---- 全服击杀公告 ----
     'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}',
@@ -119,6 +128,15 @@
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': '旋转速度：',
     'UI/Petal/AttackRangeLabel': '攻击距离：',
+    // ---- 花瓣属性：场地型（Web）----
+    'UI/Petal/RadiusLabel': '半径：',
+    'UI/Petal/DurationLabel': '持续时间：',
+
+    // ---- 状态效果（卡槽上方的小圆图标）----
+    'Status/Web/Name': '蛛网减速',
+    'Status/Web/Short': '网',
+    'Status/Poison/Name': '中毒',
+    'Status/Poison/Short': '☠',
 
     'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}',
 

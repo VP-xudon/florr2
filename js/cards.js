@@ -18,6 +18,10 @@ const CardRenderer = (function () {
   const _raw = {};      // svgId -> Promise<string|null>（petal/ 素材原文）
   const _winW = {};     // svgId -> number（卡面统一窗口宽：多体花瓣直径换算用）
   const _entWinW = {};  // svgId -> number（实体统一窗口宽：多体花瓣直径换算用）
+  // 完整窗口 [x, y, w, h]（素材自身的 viewBox 坐标）：把"素材坐标 -> 屏幕像素"的换算
+  // 交给需要精确对位的绘制方（例如按眼眶定位的眼珠）。两条管线窗口比例不同，必须各存一份。
+  const _artWin = {};   // svgId -> [x,y,w,h]（卡面管线）
+  const _entWin = {};   // svgId -> [x,y,w,h]（实体管线）
 
   // 统一缩放参数见下方 PETAL_ART_REF（Basic vb = 所有花瓣共用的窗口尺寸）。
   // 装填阴影角位移的「缓入」参数（drawReload 用）：
@@ -308,6 +312,7 @@ const CardRenderer = (function () {
       if (vb) {
         // 记下统一窗口宽：多体花瓣（Light）的直径换算基准
         _winW[svgId] = vb[2];
+        _artWin[svgId] = vb;
         out = /viewBox="[^"]*"/.test(out)
           ? out.replace(/viewBox="[^"]*"/, 'viewBox="' + vb.join(' ') + '"')
           : out.replace(/<svg\b/, '<svg viewBox="' + vb.join(' ') + '"');
@@ -338,6 +343,7 @@ const CardRenderer = (function () {
         const rw = PETAL_ENT_REF[0], rh = PETAL_ENT_REF[1];
         const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
         _entWinW[svgId] = v[2];    // 实体窗口宽：多体花瓣直径换算基准
+        _entWin[svgId] = v;        // 完整窗口（供按素材坐标对位的绘制方使用）
         out = /viewBox="[^"]*"/.test(txt)
           ? txt.replace(/viewBox="[^"]*"/, 'viewBox="' + v.join(' ') + '"')
           : txt.replace(/<svg\b/, '<svg viewBox="' + v.join(' ') + '"');
@@ -366,6 +372,22 @@ const CardRenderer = (function () {
           _artCv[key] = c;
         } catch (e) { /* 忽略 */ }
       };
+      img.src = 'data:image/svg+xml,' + encodeURIComponent(out);
+    });
+    return null;
+  }
+
+  // 实体素材的【矢量】版本：直接返回 SVG 的 <img>（浏览器按目标尺寸实时栅格化，
+  // 任意缩放都清晰）。artCanvas 是固定 128px 的位图 —— 显示尺寸接近或超过 128px 时
+  // 会糊；需要锐利边缘的地方（如装备型饰品）应当用这个。
+  const _artImg = {};   // svgId -> HTMLImageElement|null（未就绪为 null）
+  function artImage(svgId) {
+    if (_artImg[svgId] !== undefined) return _artImg[svgId];
+    _artImg[svgId] = null;
+    artSvg(svgId).then((out) => {
+      if (!out) return;
+      const img = new Image();
+      img.onload = () => { _artImg[svgId] = img; };
       img.src = 'data:image/svg+xml,' + encodeURIComponent(out);
     });
     return null;
@@ -597,10 +619,17 @@ const CardRenderer = (function () {
           drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay, st.svg);
         } else {
           ctx.drawImage(im, ox, oy, dw, dh);
-          // 可动部件（如 Third Eye 的眼珠）：与世界里同一套引擎钩子、同一份比例。
-          // 卡面是静态的，传 look = null —— 眼珠在眼眶正中（跟着朝向偏移会让卡面看着"错位"）。
-          if (typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
-            PetalFX.artOverlay(ctx, st.svg, null, ox + dw / 2, oy + dh / 2, Math.min(dw, dh));
+          // 可动部件（如 Third Eye 的眼珠）：与世界里同一套引擎钩子。
+          // box = 画出的矩形 + 它覆盖的素材窗口 —— 注册项据此把"素材坐标"精确换算成像素，
+          // 所以卡面和世界（窗口比例完全不同）能画出同一个大小/位置的眼珠。
+          // look 取【本地客户端】的当前朝向：卡面因此和实装那颗完全同步
+          // （由 markDynamic/dynTick 在朝向变化时驱动重画）。
+          const aw = _artWin[st.svg];
+          if (aw && typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
+            // 装备中（主卡槽）才取实时朝向；其余场合传 null -> 画正中、不动
+            const look = (st.live && PetalFX.lookAngle) ? PetalFX.lookAngle() : null;
+            PetalFX.artOverlay(ctx, st.svg, look,
+              { x: ox, y: oy, w: dw, h: dh, ux: aw[0], uy: aw[1], uw: aw[2], uh: aw[3] });
           }
         }
       }
@@ -679,6 +708,9 @@ const CardRenderer = (function () {
       svg: o.svg || null,                 // 用于反查名称与布局参数
       count: (o.count != null) ? o.count : null,
       pad: o.pad, radius: o.radius,
+      // live = 这张卡"正在装备中"（主卡槽）：可动部件才跟随玩家状态；
+      // 背包/副槽/掉落物里的同一张卡必须静止。
+      live: !!o.live,
       img: null
     };
     // 名称与布局参数在「绘制时」解析：语言包若后加载/切换，卡面文字会随之更新
@@ -695,7 +727,47 @@ const CardRenderer = (function () {
     // 入 DOM 后才有 clientWidth：交给批量调度统一画一帧
     schedulePaint(cv);
     observeCard(cv);       // 共享的 ResizeObserver（不是每卡一个）
+    markDynamic(cv, o.svg);
     return cv;
+  }
+
+  // ---- 动态卡面：声明了"可动部件"的花瓣（如 Third Eye 的眼珠）要跟着状态重画 ----
+  // 设计要点：
+  //   · 只有 hasOverlay 的花瓣才进队列 —— 其余卡面依旧"画一次就不动"，零成本；
+  //   · 只在朝向真的变了（> 3°）且该卡可见时才重画，并按 20Hz 限流（卡面是 UI，不必 60Hz）；
+  //   · 不可见（背包关着 / 卡被移除）自动跳过并清理，不积累。
+  const _dynCards = new Set();
+  let _dynRaf = 0;
+  const DYN_MIN_ANGLE = 0.05;   // 约 3°
+  const DYN_MIN_MS = 50;        // 单卡重画间隔（20Hz）
+  function markDynamic(cv, svgId) {
+    if (!cv || svgId == null) return;
+    // 只有【装备中】的卡（主卡槽）才进动态队列；背包/副槽/掉落物里的卡永远静止
+    if (!cv._card || !cv._card.live) return;
+    if (typeof PetalFX === 'undefined' || !PetalFX.hasOverlay || !PetalFX.hasOverlay(svgId)) return;
+    _dynCards.add(cv);
+    if (!_dynRaf) _dynRaf = requestAnimationFrame(dynTick);
+  }
+  function dynTick() {
+    _dynRaf = 0;
+    const look = (typeof PetalFX !== 'undefined' && PetalFX.lookAngle) ? PetalFX.lookAngle() : null;
+    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    for (const cv of _dynCards) {
+      if (!cv.isConnected) { _dynCards.delete(cv); continue; }   // 卡牌已销毁
+      if (!cv.clientWidth) continue;                             // 不可见：不画
+      if (now - (cv._dynT || 0) < DYN_MIN_MS) continue;
+      if (look == null) {
+        if (cv._dynLook == null) continue;          // 一直是"居中"：没有变化，不必重画
+      } else if (cv._dynLook != null) {
+        const dc = Math.abs(Math.cos(cv._dynLook) - Math.cos(look))
+          + Math.abs(Math.sin(cv._dynLook) - Math.sin(look));
+        if (dc < DYN_MIN_ANGLE) continue;
+      }
+      cv._dynT = now;
+      cv._dynLook = look;
+      drawCard(cv, cv._card);
+    }
+    if (_dynCards.size) _dynRaf = requestAnimationFrame(dynTick);
   }
 
   // 更新数量角标：只改 DOM 文本，不重画卡面（背包刷新走这条，避免整表重建）
@@ -744,6 +816,7 @@ const CardRenderer = (function () {
       }
     }
     drawCard(cv, st);                      // 先画纯色卡面（素材就绪后自动补画）
+    markDynamic(cv, st.svg);               // 有可动部件的卡同样要跟着朝向重画
     return cv;
   }
 
@@ -760,8 +833,14 @@ const CardRenderer = (function () {
   }
 
   return {
-    createCard, darken, rarityColor, artCanvas, renderCardTo, repaintAll, paintCard: paint,
+    createCard, darken, rarityColor, artCanvas, artImage, renderCardTo, repaintAll, paintCard: paint,
     schedulePaint, setCount, FONT,
+    // 素材窗口（[x,y,w,h]，素材自身 viewBox 坐标）：给"按素材坐标对位"的绘制方用
+    artWindow: (id) => _artWin[id] || null,
+    entityWindow: (id) => _entWin[id] || null,
+    // 内容包围盒（[x,y,w,h]，素材自身 viewBox 坐标，离屏 getBBox 实测）：
+    // 需要"图形真正的中心/尺寸"时用它 —— 窗口是统一化的，跟图形本身不一样大。
+    contentBox: (id) => _bb[id] || null,
     // 多体花瓣（Light）：卡面布局 / 直径换算 / 通用绘制 / 实体光点数
     multiLayout, lightDRatio, drawMulti, lightSubCount
   };

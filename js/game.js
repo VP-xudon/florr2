@@ -75,6 +75,7 @@ class Game {
     this.player = null;
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
     this.mobViews = new Map();   // netId -> 视图 Mob（快照差分创建/销毁用）
+    this.mobWebs = [];       // 敌方蛛网（Legend+ 蜘蛛原地自铺）：客户端镜像，纯表现
     this.cards = [];
     this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
 
@@ -455,6 +456,11 @@ class Game {
       const p = this.player;
       if (!p.dead) applyKnockback(p, ev.ux, ev.uy, ev.total);
       this.shake = Math.max(this.shake, HURT_SHAKE);   // 很轻微地抖一下
+      // 中毒：状态效果不进快照，靠这条事件在本地副本上挂同一份毒（dur/dps 与服端一致）。
+      // 本地预测会照常每帧扣血 —— 下一份权威快照会把血量拉回服务端的真实值。
+      if (p && !p.dead && ev.poison && typeof StatusFX !== 'undefined') {
+        StatusFX.add(p, 'poison', { dur: ev.poison.dur, value: ev.poison.rate });
+      }
     } else if (ev.kind === 'chat' || ev.kind === 'sys') {
       if (typeof Chat !== 'undefined') Chat.push(ev);
     } else if (ev.kind === 'respawned') {
@@ -478,6 +484,15 @@ class Game {
 
   // 视图生物每帧推进：插值坐标 + 自身动画计时（AI/移动/战斗都在服务端）
   _tickMobViews(dt) {
+    // 敌方蛛网（Legend+ 蜘蛛原地自铺）：客户端镜像一份用于绘制。
+    // 服务端另有权威判定（谁被减速），这里只负责"网在哪、什么时候消失"。
+    const webs = this.mobWebs;
+    for (let i = webs.length - 1; i >= 0; i--) {
+      const f = webs[i];
+      f.t += dt;
+      f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
+      if (f.t >= f.dur) webs.splice(i, 1);
+    }
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
     // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
     const k = dt / (this._snapDt || SNAP_DT);
@@ -519,6 +534,18 @@ class Game {
       // 早期这里手写了一份 'mob' + m.svg，多节生物（蜈蚣）就变成了整条 12.svg 的轮廓，
       // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
       if (!m.shape && !m.gone) m._ensureShape();
+      // Legend+ 蜘蛛原地铺网（表现层镜像；服务端另有权威判定与减速）
+      if (m.gaitSprite && !m.dead
+        && RARITY_ORDER.indexOf(m.rarity) >= RARITY_ORDER.indexOf('legendary')) {
+        m.webT = (m.webT || 0) + dt;
+        if (m.webT >= SPIDER_WEB_EVERY) {
+          m.webT = 0;
+          this._webType = this._webType
+            || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
+          const wr = this._webType ? (petalStatsFor(this._webType, m.rarity).radius || 120) : 120;
+          webs.push({ x: m.x, y: m.y, r: wr, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
+        }
+      }
     }
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
     // 【不要每步都 filter】：它会分配一个 4000+ 元素的新数组，每步一次就是纯 GC 压力。
@@ -631,7 +658,16 @@ class Game {
     }
 
     // —— 本地玩家：客户端预测（沿用原有 damp + moveEntity，手感与视觉零变化）——
+    const hpBefore = p.hp;
     p.update(dt, dir, this.map, this.mobs);   // 传入生物视图：花瓣会与生物碰撞
+    // 掉血就抖屏：与掉血量挂钩（比例越大抖得越狠，上限 = 一次普通受击）。
+    // 放在这里而不是只在 hurt 事件里，是为了覆盖【一切】掉血来源 ——
+    // 中毒（每帧连续扣血）、未来任何 DoT、环境伤害都不需要各自记得发抖动。
+    if (!p.dead && p.hp < hpBefore) {
+      const lost = hpBefore - p.hp;
+      const k = clamp(lost / Math.max(1, p.maxHp * 0.05), 0.25, 1);
+      this.shake = Math.max(this.shake, HURT_SHAKE * k);
+    }
 
     // —— 上行：把输入意图与最新装备交给服务端；随后推进服务端并收取快照/事件 ——
     this.net.send({ t: 'loadout', slots: p.slots, hold: p.reloadHold });
@@ -903,6 +939,12 @@ class Game {
     for (let i = 0; i < n; i++) this.dropFx.push(new DropSpark(x, y, col, mode, half));
   }
 
+  // 敌方蛛网（蜘蛛自铺）绘制：与玩家蛛网同一套视觉（渐大弹出、不渐隐）
+  _drawMobWebs(ctx) {
+    const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
+    drawWebList(ctx, this.mobWebs, img);
+  }
+
   // /tp 目标标记：实心红点 + 一圈脉冲 + 四向短线（长距离也一眼能定位）
   _drawTpMarker(ctx) {
     const t = this.tpTarget;
@@ -952,6 +994,11 @@ class Game {
       catch (e) { console.error('[drawGardenTiles]', e); }
     }
 
+    // 蛛网等场地型实体：铺在最底层 —— 掉落物、生物、玩家全在它上面
+    try {
+      if (this.player && !this.player.dead) this.player.drawWebs(ctx);
+      this._drawMobWebs(ctx);
+    } catch (e) { console.error('[draw webs]', e); }
     // 地面层：世界卡片 -> 掉落物粒子 -> 生物掉落物
     // （粒子在掉落卡【之下】，掉落卡整体又在实体与玩家尸体之下）
     for (const c of this.cards) c.draw(ctx);
@@ -1084,6 +1131,26 @@ class Game {
         ctx.lineTo(m.x, m.y);
       }
       ctx.stroke();
+
+      // 场地型实体（蛛网）：不是硬碰撞箱，只是一个"状态施加范围"——
+      // 所以画成虚线圆，和实线碰撞箱区分开。
+      const webs = p.webFields || [];
+      if (webs.length) {
+        ctx.save();
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = '#cfe0f0';
+        ctx.beginPath();
+        for (const f of webs) {
+          ctx.moveTo(f.x + f.r, f.y);
+          ctx.arc(f.x, f.y, f.r, 0, TAU);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 圆心小点：方便确认网生成在哪
+        ctx.fillStyle = 'rgba(207,224,240,.8)';
+        for (const f of webs) ctx.fillRect(f.x - 1.5, f.y - 1.5, 3, 3);
+        ctx.restore();
+      }
     }
     ctx.restore();
   }

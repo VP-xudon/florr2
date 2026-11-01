@@ -10,6 +10,9 @@ const MOB_CHASE_MULT = 0.90;          // 通用追击速度 = 0.90×（瓢虫及
 const MOB_WANDER_MULT = 0.95;         // 游荡速度的基准倍率（与追击解耦，保持原有游荡手感）
 const MOB_WANDER_RANGE = [0.3, 0.5];  // 游荡速度 = 基准 ×(0.3~0.5) 随机
 const MOB_WANDER_SCALE = 0.75;        // 游荡速度在基础值上再打 0.75 折（全生物统一）
+// 蜘蛛（aggressive）：追击 1.10× 玩家最高速；游荡 = 追击 × 0.9（不是通用那套随机慢走）
+const SPIDER_CHASE_K = 1.10;
+const SPIDER_WANDER_K = 0.90;
 // ---- 视野 / 脱战 ----
 // 生物的"看见"= 距离 ≤ 视野半径 且 两点之间没有墙。
 // 看不见的目标会被【暂时忽略】（仇恨仍记账，等重新看见才会继续追）——
@@ -34,7 +37,12 @@ const PEAS_FLIGHT_T = 2.0;            // Peas 喷射后的存活时长（s）：
 // 新增物种的移速口径同理 —— 写在各自 AI 的 init 里，不再往这张常量表里堆特判。
 // 花瓣【自转】：独立于公转（绕主角的轨道运动），从实体加载好那一刻起持续、缓慢地转。
 // 绘制朝向 = 公转朝向(阵型基准) + 自转；普通花瓣则完全用自转（不再由轨道位置反推）。
-const PETAL_SELF_SPIN = 0.9;          // 自转速度（rad/s）
+// 自转：口径是「公转 + 自转 = PETAL_SELF_TURN_T 秒一圈」。
+// 每片花瓣在【生成那一刻】按当时的公转角速度算出自己的自转速率并存死（b.selfRate），
+// 之后公转怎么变（/rot-speed、装上 Faster）都不会反过来改它 —— 这就是"不受公转影响"。
+// 不同花瓣要不同的自转速度时，在它的注册项/数据里声明 selfSpin（rad/s，优先于上式）。
+const PETAL_SELF_TURN_T = 1.5;        // 合计一圈所需秒数
+const PETAL_SELF_SPIN = 0.9;          // 兜底自转速度（rad/s，没有公转时用）
 // 实体重量按【横截面积(直径²)】换算：直径差 N 倍 -> 重量差 N² 倍。
 // 例：super 直径约为 common 的 ~11 倍 -> ~121 倍重（用户要求面积而非线性）。
 // 障碍型生物 ×5；花朵本体 = unusual 重量；花瓣 = 对应稀有度重量。
@@ -85,6 +93,15 @@ const FLOWER_BODY_DMG    = 20;    // 花朵本体伤害（体伤）基础值
 // 受伤后的无敌帧：只挡掉「同一 tick 里多只生物同时命中」的双扣，
 // 不改变战斗本身每 tick 结算的节奏（体伤/接触伤害都是每 tick 正常结算）。
 const FLOWER_HURT_INVULN = 0.2;
+// 场地型实体（Web 的网）给站在上面的实体刷状态的间隔：略大于一次 tick，
+// 这样"离开网之后大约这么久自然解除"，不会一走出来就瞬间失效、也不会残留。
+const STATUS_FIELD_REFRESH = 0.25;
+// 场地型实体（网）从生成中心"快速渐大弹出"的时长（秒）：0 -> 1 的缩放过渡
+const WEB_POP_T = 0.18;
+// Legend+ 蜘蛛的自铺蛛网：每 SPIDER_WEB_EVERY 秒在原地铺一张，SPIDER_WEB_DUR 秒后消失。
+// 网的半径按蜘蛛稀有度取 Web 花瓣同档的 radius（见 LocalServer._fieldTick）。
+const SPIDER_WEB_EVERY = 1.5;
+const SPIDER_WEB_DUR = 5;
 // 碰撞反弹：被非己方实体打伤时，本体沿远离方向位移的距离（占主角直径的比例）。
 const FLOWER_KNOCKBACK = 0.3;
 // 反弹总位移在双方之间的分配比例 [玩家份额, 生物份额]（按稀有度查表，份额和恒为 1）。

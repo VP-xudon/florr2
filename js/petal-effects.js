@@ -104,8 +104,11 @@ const PetalFX = {
   //   artVariant(svgId, svgText) -> string | null
   //       改写素材文本。渲染管线（卡面 / 世界实体 / 幽灵）统一使用改写后的素材，
   //       所以"去掉死部件"只需要在这里做一次。
-  //   artOverlay(ctx, look, cx, cy, size) -> bool
-  //       在素材之上按【运行状态】补画可动部件。look = 朝向角（世界），null = 静态居中（卡面）。
+  //   artOverlay(ctx, look, box) -> bool
+  //       在素材之上按【运行状态】补画可动部件。look = 朝向角（世界），null = 静态（卡面）。
+  //       box = { x, y, w, h, ux, uy, uw, uh }：素材被画到的矩形 + 它覆盖的素材窗口
+  //       （窗口用素材自身坐标系）。有了它，注册项能把"素材里的某个位置/尺寸"精确换到像素，
+  //       于是卡面（窗口 68×79）与世界（窗口 33×41）能画出同一个观感 —— 只按 w/h 取比例做不到。
   // 两条钩子都按 svgId 反查花瓣类型，因此 cards.js / sim 层都不需要认识任何 slug。
   _svgDef(svgId) {
     const t = (typeof getPetal === 'function') ? getPetal(svgId) : null;
@@ -116,10 +119,24 @@ const PetalFX = {
     if (!def || !def.artVariant || typeof txt !== 'string') return null;
     return def.artVariant(svgId, txt) || null;
   },
-  artOverlay(ctx, svgId, look, cx, cy, size) {
+  artOverlay(ctx, svgId, look, box) {
     const def = this._svgDef(svgId);
     if (!def || !def.artOverlay) return false;
-    return !!def.artOverlay(ctx, look, cx, cy, size);
+    return !!def.artOverlay(ctx, svgId, look, box);
+  },
+  // 这张素材有没有"可动部件"。卡面据此决定要不要进入动态重绘队列
+  // （没有可动部件的卡必须保持"画一次就不动"，否则就是纯浪费）。
+  hasOverlay(svgId) {
+    const def = this._svgDef(svgId);
+    return !!(def && def.artOverlay);
+  },
+  // 静态界面（卡面 / 悬浮框）复现实装观感时，统一从这里取【本地客户端】的当前朝向。
+  // 状态以本地显示为准（不做任何网络同步）；拿不到（未开局/已死亡）返回 null -> 画正中。
+  lookAngle() {
+    const g = (typeof window !== 'undefined') ? window.__game : null;
+    const p = g && g.player;
+    if (!p || p.dead) return null;
+    return (typeof p.facing === 'number') ? p.facing : null;
   },
 
   // ---- 在轨花瓣的【目标点微调】（默认没有）----
@@ -199,14 +216,42 @@ const PetalFX = {
   flightOf(body) {
     const type = body && body.card && body.card.type;
     const def = this.defOf(type);
-    if (def && def.flight) return def.flight(this) || null;
+    // 注意传的是【实体】：注册项要按实体自身状态决定怎么飞
+    // （Web 成网之后就不再飞了，全靠这里判断 body.isWeb）。
+    if (def && def.flight) return def.flight(body) || null;
     return this.trait(type, 'launch') || null;
   },
 
   // 滞留实体的存活上限（秒）：Infinity = 由血量决定（Honey）
   ttlOf(body) {
     const type = body && body.card && body.card.type;
+    // 场地型（Web）：落地后按能力声明里的 duration 计时（10s），与装填无关
+    if (body && body.isWeb) {
+      const web = this.trait(type, 'web');
+      return (web && web.duration > 0) ? web.duration : PETAL_DETACH_TTL;
+    }
     return this.trait(type, 'holdReloadUntilDeath') ? Infinity : PETAL_DETACH_TTL;
+  },
+
+  // 滞留实体的飞行寿命到期（Peas 飞完 / Web 落地）。返回 true = 注册项自己处理了，
+  // 调用方不要再走"退场幽灵 + 移除"（Web 就是在这里变成一张网）。
+  onExpire(body, player) {
+    if (!body) return false;
+    const type = body.card && body.card.type;
+    const def = this.defOf(type);
+    if (!def || !def.expire) return false;
+    return !!def.expire(this._ctx(body, player, 0));
+  },
+
+  // 实体被打碎（血量为 0 / 被强制移除）时的通知：注册项可以留下点什么。
+  // Web 用它实现"飞行途中被打碎也立刻成网"；轨道上被打碎则什么都不做。
+  // 调用方【仍然】照常走通用移除（退场幽灵、装填结算），这里只做额外的事。
+  onPop(body, player) {
+    if (!body) return false;
+    const type = body.card && body.card.type;
+    const def = this.defOf(type);
+    if (!def || !def.pop) return false;
+    return !!def.pop(this._ctx(body, player, 0));
   },
 
   // 花瓣 vs 生物的【接触传能】（每 tick、每次接触调一次；伤害不在这里）。
@@ -426,13 +471,18 @@ PetalFX.register('faster', {
 // 装备型（accessory）：不进入轨道、没有装填、不参与战斗。
 //   · 表现：固定在人物额头，随朝向转动（渲染见 Player.drawAccessories）；
 //   · 数值：bonus.reach = 数据表里的 attackRange，reach 模式下把花瓣再向外伸那么远。
-// 眼珠几何（全部是【相对整张素材】的比例，世界与卡面共用同一份）：
-//   眼眶素材缩小到 0.8 倍（ACC_ART_SIZE_K），但眼珠要求"大小不变"——
-//   所以比例 = 原值 / 0.8，乘上缩小后的 size 正好还原原来的绝对尺寸。
-const PUPIL_RX = 0.13 / 0.8;      // 0.1625
-const PUPIL_RY = 0.16 / 0.8;      // 0.20
-const PUPIL_OFF_X = 0.16 / 0.8;   // 0.20：朝向前方时的最大水平偏移
-const PUPIL_OFF_Y = 0.12 / 0.8;   // 0.15：垂直偏移
+// 眼珠几何 —— 全部【由眼眶实测包围盒推导】，不再有魔法坐标。
+// 为什么不能用贴图比例：卡面窗口 68.26×79.38、世界窗口 32.86×32.86，同一个"贴图比例"
+// 在两条管线里对应的实际眼眶大小完全不同（卡面上眼眶只占 35% 宽，世界里占 73%），
+// 按贴图比例画眼珠会让卡面那颗大出一倍多（就是之前的"巨大白眼球"）。
+// 眼眶 = 素材内容包围盒（CardRenderer.contentBox，离屏 getBBox 实测），
+// 所以"眼珠的移动中心"就是眼眶的正中间，与素材、窗口、管线都无关。
+const EYE_PUPIL = {
+  r: 0.2226 * 2,      // 眼珠半径 = 眼眶宽 × 0.445（直径 = 2× 基准）—— 【正圆】，横竖同一半径
+  ox: 0.274,          // 朝向偏移（× 眼眶宽）
+  oy: 0.159,          // 朝向偏移（× 眼眶高）
+  clip: 0.98          // 裁剪 = 眼眶椭圆 × 0.98：眼珠永远不溢出眼眶（视觉上"在眼皮下面"）
+};
 // 这里显式登记，让"饰品"这一形态和其它花瓣能力一样由引擎声明，而不是散落在渲染/逻辑里。
 PetalFX.register('third_eye', {
   bonus(type, rarity) {
@@ -444,35 +494,109 @@ PetalFX.register('third_eye', {
   artVariant(svgId, txt) {
     return txt.replace(/fill="#e+e+e+"/gi, 'fill="#111"');
   },
-  // 可动部件：白色眼珠。世界里面朝哪就往哪偏（与主角自带的两个眼珠同一套做法）。
-  // 眼珠尺寸是【相对整张素材】的比例常量：
-  //   眼眶（素材）缩小了 0.8 倍，但"眼珠大小不变"—— 所以这两个比例是原来的 1/0.8，
-  //   乘上缩小后的 size 正好还原成原来的绝对大小。
-  // 卡面走同一个函数（同一份比例），因此卡面与世界里的眼珠严格同源、不会各画一套。
-  // look = null -> 【正中不动】（卡面是静态的；给 0 会被当成"朝右"，看起来像眼珠错位）。
-  artOverlay(ctx2d, look, cx, cy, size) {
+  // 可动部件：白色眼珠。世界里面朝哪就往哪偏（与主角自带的两个眼珠同一套做法）；
+  // 卡面传 look = null -> 正中不动（给 0 会被当成"朝右"，看起来像眼珠错位）。
+  artOverlay(ctx2d, svgId, look, box) {
+    if (!box || !(box.uw > 0) || !(box.uh > 0)) return false;
+    // 眼眶 = 素材内容包围盒（实测），它的中心就是眼珠的运动中心
+    const cb = CardRenderer.contentBox(svgId);
+    if (!cb || !(cb[2] > 0) || !(cb[3] > 0)) return false;
+    const sx = box.w / box.uw, sy = box.h / box.uh;    // 素材单位 -> 像素
+    const cx = box.x + (cb[0] + cb[2] / 2 - box.ux) * sx;   // 眼眶正中
+    const cy = box.y + (cb[1] + cb[3] / 2 - box.uy) * sy;
+    const sw = cb[2] * sx, sh = cb[3] * sy;            // 眼眶在屏幕上的宽 / 高
     const hasLook = (look != null);
-    const ox = hasLook ? Math.cos(look) * size * PUPIL_OFF_X : 0;
-    const oy = hasLook ? Math.sin(look) * size * PUPIL_OFF_Y : 0;
+    const ox = hasLook ? Math.cos(look) * sw * EYE_PUPIL.ox : 0;
+    const oy = hasLook ? Math.sin(look) * sh * EYE_PUPIL.oy : 0;
     ctx2d.save();
+    // 裁剪到眼眶内：眼珠再怎么偏、再怎么大也不会溢出 → 视觉上就是"在眼皮下面"
+    ctx2d.beginPath();
+    ctx2d.ellipse(cx, cy, sw * 0.5 * EYE_PUPIL.clip, sh * 0.5 * EYE_PUPIL.clip, 0, 0, TAU);
+    ctx2d.clip();
     ctx2d.fillStyle = '#ffffff';
     ctx2d.beginPath();
-    ctx2d.ellipse(cx + ox, cy + oy, size * PUPIL_RX, size * PUPIL_RY, 0, 0, TAU);
+    // 【正圆】：半径只取眼眶宽度（横竖同一个值，绝不压成椭圆）
+    ctx2d.arc(cx + ox, cy + oy, sw * EYE_PUPIL.r, 0, TAU);
     ctx2d.fill();
     ctx2d.restore();
     return true;
   },
   // 高度自定义的绘制：本体固定在【额头】不随朝向绕圈（位置/尺寸见 sim/constants.js 的 ACC_*）；
   // 随朝向移动的是里面那颗眼珠，交给 artOverlay 统一画。
+  // 【矢量】：直接用素材的 SVG <img>（浏览器按目标尺寸实时栅格化），
+  // 而不是 128px 的离屏位图 —— 后者在这个尺寸/缩放下会发虚。
   drawAccessory(ctx2d, acc, player, R) {
     const svg = acc.card.type.svg;
-    const cv = CardRenderer.artCanvas(svg, 128);
-    if (!cv) return true;                 // 素材未就绪：本次不画，也不回退默认尺寸
+    const img = CardRenderer.artImage(svg) || CardRenderer.artCanvas(svg, 256);
+    if (!img) return true;                // 素材未就绪：本次不画，也不回退默认尺寸
     const size = R * ACC_ART_SIZE_K;
     const cx = player.x;
     const cy = player.y - R * ACC_ART_LIFT_K + size * ACC_ART_DROP_K;
-    drawPetalArt(ctx2d, cv, size, cx, cy, 0, 1, 1);
-    PetalFX.artOverlay(ctx2d, svg, player.facing, cx, cy, size);
+    drawPetalArt(ctx2d, img, size, cx, cy, 0, 1, 1);
+    const win = CardRenderer.entityWindow(svg);
+    if (win) {
+      PetalFX.artOverlay(ctx2d, svg, player.facing,
+        { x: cx - size / 2, y: cy - size / 2, w: size, h: size,
+          ux: win[0], uy: win[1], uw: win[2], uh: win[3] });
+    }
     return true;
   }
 });
+
+// —— 内置特效 8：蛛网（Web）——
+// 形态：reach 模式下脱离轨道 -> 顺惯性飞出 0.5s -> 【变成一张网】停在原地。
+//   · 网是实体（留在 petals 里，随快照同步），但【没有碰撞箱、不结算伤害】；
+//   · 网存活 Duration 秒（能力字段 web.duration），期间给半径内的敌对生物挂"蛛网减速"；
+//   · 脱轨那一刻卡片就重新装填（holdReloadUntilDeath = false），与 Pollen 同款"放下就走"。
+// 结算侧（谁被减速）不在这里：那是服务端的一次半径扫描（见 LocalServer._fieldTick），
+// 效果本身注册在 sim/status.js 的 StatusFX 里 —— 渲染/模拟/数值三者互不知情。
+const WEB_FLIGHT_T = 0.5;      // 飞行时长：0.5s 后落地成网
+PetalFX.register('web', {
+  // 脱轨：顺着脱手瞬间的速度直接飞出去（不额外加速，也不阻尼）
+  detach(ctx) {
+    const b = ctx.petal;
+    return { vx: (b.vx || 0), vy: (b.vy || 0), holdReload: false };
+  },
+  // 飞行参数：0.5s 到期；inertia = 像 Pollen 那样"阻尼滑行 -> 停住"（不是 Peas 的匀速直飞）
+  flight(body) {
+    if (body && body.isWeb) return null;
+    return { life: WEB_FLIGHT_T, inertia: true };
+  },
+  // 飞行到期 / 飞行途中被打碎 -> 在当前位置张开一张大网。
+  // 【注意】它不接管实体本身：调用方紧接着照常走通用移除（渐大渐隐的退场幽灵）。
+  expire(ctx) {
+    spawnWebField(ctx);
+    return true;
+  },
+  // 被打碎（服务端 _destroyPetal / 客户端 _killPetalBody 都会问一次）：
+  // 只有"已经脱轨、还没落地"的 Web 才需要立刻成网；轨道上被打碎就只是碎掉。
+  pop(ctx) {
+    const b = ctx.petal;
+    if (!b || !b.stationary || b.isWeb) return false;
+    spawnWebField(ctx);
+    return true;
+  }
+});
+
+// 在花瓣当前位置张开一张网（半径/时长都来自该稀有度的数据）。
+function spawnWebField(ctx) {
+  const b = ctx.petal;
+  const st = petalStatsFor(ctx.type, ctx.rarity);
+  if (!b || !ctx.player || !(st.radius > 0)) return;
+  // 标记：这张网已经由这个实体生成过了 —— 紧接着的通用移除（onPop）就不会再来一次
+  b.isWeb = true;
+  if (typeof ctx.player.spawnWeb !== 'function') return;
+  ctx.player.spawnWeb(b.x, b.y, st.radius, st.duration || 10, b.card);
+}
+
+// 蛛网【自己画的】素材（放射线 + 内凹环），不用 Web 花瓣本身的贴图。
+// 懒加载一次，未就绪时返回 null（调用方不画）。
+const WEB_NET_KEY = 'web_net';
+const WEB_NET_SRC = 'assets/petals/web_net.svg?v=2';   // 改素材内容时改这里（与 ?v= 同一套规则）
+PetalFX.netImage = function () {
+  if (typeof SpriteStore === 'undefined') return null;
+  const img = SpriteStore.get(WEB_NET_KEY);
+  if (img) return img;
+  if (!this._netLoading) { this._netLoading = true; SpriteStore.load(WEB_NET_KEY, WEB_NET_SRC); }
+  return null;
+};

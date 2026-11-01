@@ -55,6 +55,25 @@ body {
   pointer-events: auto; z-index: 45;
 }
 .quickrow { display: flex; gap: 8px; }
+/* 状态效果条：卡槽正上方，圆形小图标，按获得顺序从左到右排列 */
+.status-row {
+  display: flex; gap: 6px; margin-bottom: 6px;
+  justify-content: center;
+}
+.status-icon {
+  position: relative;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 800;
+  color: #fff; box-sizing: border-box; border: 2px solid #000;
+  -webkit-text-stroke: 0.6px #000; paint-order: stroke fill;
+}
+/* 带数值的效果（未来）：右下角小角标 */
+.status-val {
+  position: absolute; right: -7px; bottom: -5px;
+  font-size: 9px; font-style: normal; font-weight: 800; color: #fff;
+  -webkit-text-stroke: 1.6px #000; paint-order: stroke fill;
+}
 /* 主槽行：整体 0.9 倍（zoom 同步缩放描边/圆角/间距等所有子元素） */
 #slotRow { zoom: 0.9; }
 /* 副槽行：整体 0.75 倍（临时存储），位于主槽正下方 */
@@ -568,10 +587,16 @@ body.touch-ui canvas { touch-action: none; }
 }
 .t-stick.active .t-stick-base { border-color: rgba(255, 255, 255, .6); }
 
+/* A/B 按钮：独立挂在 body 上（不在摇杆层里），四边都显式写死，
+   保证【严格贴屏幕右下角】—— 之前夹在 #touchLayer(64vw×78vh) 里，
+   任何父级尺寸/变换都会把它带偏。 */
 .t-btns {
-  position: fixed; right: calc(14px + env(safe-area-inset-right, 0px));
+  position: fixed;
+  left: auto; top: auto;
+  right: calc(16px + env(safe-area-inset-right, 0px));
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  display: flex; gap: 12px; align-items: flex-end;
+  display: flex; gap: 12px; align-items: flex-end; justify-content: flex-end;
+  margin: 0; padding: 0;
   z-index: 31;
 }
 .t-btn {
@@ -591,7 +616,17 @@ body.touch-ui canvas { touch-action: none; }
 
 /* 触控设备上隐藏桌面提示类文字，并把快捷栏整体缩小，给摇杆/按钮让位 */
 body.touch-ui #touchLayer { touch-action: none; }
-body.touch-ui #quickbar { transform: scale(.82); transform-origin: 50% 100%; }
+/* 移动端：卡槽【靠左下】，避开右下角的 A/B 按钮与摇杆。
+   注意 transform 必须换掉桌面端的 translateX(-50%)（居中位移），
+   否则 scale 会把它覆盖掉 -> 整排右移半个宽度，看上去就是"位置不对"。
+   bottom 抬起 = #dockBtns（背包按钮）的高度 + 间距，两张都露得出来。 */
+body.touch-ui #quickbar {
+  left: calc(8px + env(safe-area-inset-left, 0px));
+  bottom: calc(16px + 62px + 8px);
+  transform: scale(.82);
+  transform-origin: 0% 100%;
+  align-items: flex-start;
+}
 body.touch-ui .chat-float { max-width: 46vw; }
 
 /* ================= F3 调试屏幕（ui/debug-screen.js） ================= */

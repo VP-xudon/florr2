@@ -36,6 +36,9 @@ class Player {
     this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
     this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
     this.petalWorld = [];
+    // 场地型实体（Web 落地后的那张大网）：独立于花瓣实体表 —— 没有碰撞箱、不占轨道位、
+    // 不参与伤害结算；{ x, y, r, t, dur, pop, spin }。
+    this.webFields = [];
     // 一卡多批（Pollen / Honey）：每个槽一个"世代号"。脱轨的实体【继续留在 this.petals】
     // 里（stationary），新一批实体用递增的世代号区分 —— 花瓣实体始终是同一套东西，
     // 不区分"跟着玩家的"和"放在地上的"，绘制/碰撞/战斗/仇恨全部复用同一条路径。
@@ -122,6 +125,61 @@ class Player {
     this.vx = 0; this.vy = 0;
   }
 
+  // 中毒：按 StatusFX 记录的 dps 每帧连续扣血。
+  // 刻意【不走 hurt()】——它有 0.2s 受伤无敌帧，会把 DoT 吃掉大半（1 秒只剩 5 次）。
+  // 死亡仍走同一条 die()，所以表现/复活流程完全一致。
+  _tickPoison(dt) {
+    if (this.dead || typeof StatusFX === 'undefined') return;
+    const rec = StatusFX.get(this, 'poison');
+    if (!rec || !(rec.value > 0)) return;
+    const dmg = rec.value * dt;
+    if (!(dmg > 0)) return;
+    this.hp -= dmg;
+    this.hurtT = Math.max(this.hurtT || 0, 0.08);   // 很淡的持续红闪
+    if (this.hp <= 0) {
+      this.hp = 0;
+      if (!this.killedBy) {
+        this.killedBy = (typeof I18N !== 'undefined')
+          ? I18N.t('Status/Poison/Name', 'Poison') : 'Poison';
+      }
+      this.die();
+    }
+  }
+
+  // ---- 场地型实体（Web 落地后的那张大网）----
+  // 独立于花瓣实体表：没有碰撞箱、不占轨道位、不参与伤害；只按半径挂状态效果。
+  // 生成时从中心【快速渐大弹出】（pop 0->1），到点直接移除（渲染侧自己渐隐）。
+  spawnWeb(x, y, radius, duration, card) {
+    if (!(radius > 0)) return null;
+    const f = {
+      x, y, r: radius, t: 0,
+      dur: (duration > 0) ? duration : 10,
+      pop: 0, spin: 0, card: card || null
+    };
+    this.webFields.push(f);
+    return f;
+  }
+
+  _tickWebs(dt) {
+    const arr = this.webFields;
+    if (!arr || !arr.length) return;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const f = arr[i];
+      f.t += dt;
+      f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
+      if (f.t >= f.dur) {
+        // 移除走【通用退场接口】：与生物死亡一模一样的"一瞬间渐大 + 渐隐"
+        const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
+        if (img) {
+          this.petalGhosts.push({
+            img, x: f.x, y: f.y, size: f.r * 2, alpha: 0.9, age: 0
+          });
+        }
+        arr.splice(i, 1);
+      }
+    }
+  }
+
   // 出生 / 重生的【唯一】重置入口：客户端预测副本与服务端权威副本都必须走这里。
   // 历史上两端各维护一份字段清单，服务端清了 _petalGen 而客户端没清：
   // 花瓣实体的世代号只增不减，于是快照键 "槽|子序|世代" 永远匹配不上 ——
@@ -139,6 +197,7 @@ class Player {
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
     // 花瓣实体、世代号、退场幽灵是同一份状态，必须一起清
     this.petals = []; this.petalWorld = []; this._petalGen = []; this.petalGhosts = [];
+    this.webFields = [];                   // 场上的网属于"这一条命"，重生即清空
     this.netPetals = null;                 // 旧快照键映射作废，避免重生瞬间串状态
     this.reload = this.slots.map((c) => c ? {
       card: c, age: 0,
@@ -185,7 +244,9 @@ class Player {
       // 并复用下方同一套 rate 9/4 指数平滑加减速。
       const sc = Math.min(len, 1);
       // 减速瓦片：×0.4；/speed 的倍率再整体乘上来（客户端/服务端共用同一个 MOVE_MULT）
-      const spd = this.speed * MOVE_MULT * (this.slowTile ? SLOW_TILE_SPEED : 1);
+      // 状态效果（如踩到蛛网）：统一走 StatusFX.speedMul —— 与减速瓦片相乘。
+      const spd = this.speed * MOVE_MULT * (this.slowTile ? SLOW_TILE_SPEED : 1)
+        * ((typeof StatusFX !== 'undefined') ? StatusFX.speedMul(this) : 1);
       tx = dir.x / len * spd * sc;
       ty = dir.y / len * spd * sc;
     }
@@ -203,6 +264,10 @@ class Player {
     this.breath += dt;
     this.age += dt;                  // 出场 Q 弹推进
     InvulnFX.tick(this, dt);            // 无敌时间推进（多来源，取最晚到期）
+    if (typeof StatusFX !== 'undefined') {
+      StatusFX.tick(this, dt);      // 状态效果时长
+      this._tickPoison(dt);         // 中毒持续掉血
+    }
     // 无敌视觉强度平滑跟随：进入/退出都是渐变，绝不硬切换（光晕亮度与血条金白共用它）。
     // 只跟随 invuln（出生/召唤/花瓣类）；受伤无敌帧走独立的 hurtInvuln，不产生任何视觉。
     this.invulnA = damp(this.invulnA, this.invuln > 0 ? 1 : 0, 8, dt);
@@ -218,6 +283,7 @@ class Player {
     const targetT = (this.mode === 'normal') ? 0 : 1;
     const modeRate = 1 / 0.15;  // 0.15秒完成过渡
     this.modeT = damp(this.modeT, targetT, modeRate, dt);
+    this._tickWebs(dt);                 // 场地型实体（网）的计时与弹出动画进度
     this._syncPetals(dt, map, mobs);
   }
 
@@ -234,10 +300,16 @@ class Player {
   // 该槽重新结算装填。与服务端 _destroyPetal 语义一致，但这里只做表现。
   _killPetalBody(b) {
     if (b.dead) return;
+    // 先问引擎（与服务端同一套语义）：飞行途中的 Web 被打碎要立刻成网
+    if (typeof PetalFX !== 'undefined' && PetalFX.onPop) PetalFX.onPop(b, this);
     b.dead = true;
     // 与服务端 _destroyPetal 同一规则：放在地上的滞留实体（Pollen / Honey）碎了就是碎了，
     // 不触发卡片重装。少了这一条，客户端会把该槽冷却重置一遍 -> 之后每次装填都比服务端慢一拍。
-    if (b.stationary) return;
+    // 但退场表现要走同一条路：原地放大渐隐（否则 Web 飞完就"凭空消失"）。
+    if (b.stationary) {
+      this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+      return;
+    }
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
     const cnt = (CardRenderer.lightSubCount) ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
@@ -379,6 +451,18 @@ class Player {
     return !!r && r.age >= r.dur;
   }
 
+  // 某片花瓣的自转速率（rad/s）——【生成时算一次并记住】，之后不再随公转变化。
+  // 口径：公转 + 自转 = PETAL_SELF_TURN_T 秒一圈；花瓣自带 selfSpin 时优先用它。
+  _petalSelfRate(b) {
+    if (b.selfRate != null) return b.selfRate;
+    const type = b && b.card && b.card.type;
+    const own = type && (typeof type.selfSpin === 'number') ? type.selfSpin : null;
+    if (own != null) return own;
+    const orbit = (this.rotMax || PETAL_SPIN) * ROT_SCALE;
+    const target = TAU / PETAL_SELF_TURN_T;
+    return (target - orbit) || PETAL_SELF_SPIN;
+  }
+
   // 花瓣运动：自由跟随主角（位移积分），实体碰撞由 _separatePetalFromMobs 负责。
   _resolvePetal(b, mx, my) {
     b.x += mx; b.y += my;
@@ -395,6 +479,8 @@ class Player {
   // 生物一侧的分离在 LocalServer._separateMobFromPetal 里做（生物只有服务端能动）。
   _separatePetalFromMobs(b, mobs) {
     if (!mobs || !mobs.length) return;
+    // 没有碰撞箱的实体（Web 落地后的那张网）：只是"一块场地"，不参与任何分离
+    if (b.noCollide) return;
     for (const m of mobs) {
       if (!m || m.dead) continue;
       // 先用【轮廓外接圆】做一次廉价排除：nearMobs 是按"吸附范围"筛的，比真实接触范围大一圈，
@@ -472,12 +558,12 @@ class Player {
       b.age += dt;
       b.hurtT = Math.max(0, (b.hurtT || 0) - dt);
       b.life = (b.life || 0) + dt;
+
       // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）。
       // 口径由 PetalFX.ttlOf 统一给出（能力字段 holdReloadUntilDeath 决定）。
       const lim = PetalFX.ttlOf(b);
       if (b.life >= lim) {
-        b.dead = true;
-        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+        this._killPetalBody(b);      // 通用移除（自带渐大渐隐退场）
         continue;
       }
       bodies.push(b);
@@ -527,6 +613,12 @@ class Player {
         body.ord = k; body.n = n;
         body.cnt = cnt;
         body.spot = (nSpot === 1) ? myBase : myBase + sub;   // 阵型型：整坨共用同一个轨道位
+        // 出生朝向：【底边朝着花朵】= 公转角度 + 90°（素材默认"下方"指向花心），
+        // 自转速率也在这里定死（见 _petalSelfRate），之后公转变化不再影响它。
+        if (body.selfRot == null) {
+          body.selfRot = this.spin + body.spot * spotStep + Math.PI / 2;
+          body.selfRate = this._petalSelfRate(body);
+        }
         // ---- 阵型多体（Stinger 起）：子实体按【卡面同款布局】锁定偏移 + 各自朝向 ----
         // 每个子实体仍是完全独立的个体（各自结算碰撞、各自有血量），
         // 只是位置/朝向常年被布局锁定成卡面那一坨的形状。
@@ -644,7 +736,7 @@ class Player {
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       // 自转：独立于公转，从加载好起持续转动（喷射飞行的实体也照样转）
-      b.selfRot = (b.selfRot || 0) + PETAL_SELF_SPIN * dtc;
+      b.selfRot = (b.selfRot || 0) + this._petalSelfRate(b) * dtc;
 
       // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
       // 不再跟随轨道、也不参与生物吸附（它就"放在地上"）。
@@ -657,11 +749,18 @@ class Player {
           // 注意：b.life 已在上面的"滞留实体"循环（_syncPetals 开头）每帧 +dt，
           // 这里再加一次会让存活时长减半 —— 绝不重复累加。
           if (b.life >= (flight.life || PEAS_FLIGHT_T)) {
-            // 【必须走公用移除接口】。直接 b.dead = true 只会让它在下一帧被静默剔除，
-            // 没有任何退场表现；_killPetalBody 会生成 petalGhosts 幽灵（原地放大渐隐），
-            // 与"花瓣被打碎"走的是同一条退场管线。
+            // 到期：先让引擎做"落地"该做的事（Web 在这里原地张开大网），
+            // 再走【通用移除接口】—— 小 web 实体因此照样有"渐大渐隐"的退场表现。
+            PetalFX.onExpire(b, this);
             this._killPetalBody(b);
             continue;
+          }
+          // inertia：与 Pollen 同款"阻尼滑行 -> 停住"（Web 落地前就是这样滑一小段），
+          // 而不是 Peas 那种"匀速直飞"。
+          if (flight.inertia) {
+            b.vx = damp(b.vx || 0, 0, PETAL_DETACH_DRAG, dt);
+            b.vy = damp(b.vy || 0, 0, PETAL_DETACH_DRAG, dt);
+            if (Math.abs(b.vx) < 1 && Math.abs(b.vy) < 1) { b.vx = 0; b.vy = 0; }
           }
           if (b.vx || b.vy) this._resolvePetal(b, (b.vx || 0) * dtc, (b.vy || 0) * dtc);
           continue;
@@ -683,10 +782,14 @@ class Player {
         continue;
       }
       if (b.fxActive) continue;     // 特效驱动中（如玫瑰飞向主角）：位置由引擎接管
-      // 逐个花瓣取倍率：标了 noReach 的花瓣（如 Rose）【不计算 reach 的延长】，
-      // 保持基础轨道距离（detect 的收拢仍然生效，因为它 ≤ 1）。
-      const noReach = !!(b.card && b.card.type && b.card.type.noReach);
-      const mult = noReach ? Math.min(1, reachMult) : reachMult;
+      // 逐个花瓣取倍率：标了 noReach 的花瓣（Rose / Peas）【不计算 reach 的延长】。
+      // fixedReach（Peas）= 恒定使用某个模式的距离，不受当前模式的伸/缩幅度影响 ——
+      // 它只结算模式的【特殊效果】（reach 的派生行为、detect 的判定），不再改轨道半径。
+      const ptype = b.card && b.card.type;
+      const noReach = !!(ptype && ptype.noReach);
+      const fixed = ptype && ptype.fixedReach;
+      const mult = (fixed === 'detect') ? PETAL_DETECT
+        : (noReach ? Math.min(1, reachMult) : reachMult);
       // Third Eye 的 reach 加成：只在 reach 模式下生效，并按模式过渡量平滑放大，
       // 松开按键时同样平滑收回（modeT 回落到 0）。
       // 【reach 免疫的花瓣（Rose 等）连这份加成也不吃】—— 它们必须永远待在基础轨道距离上。
@@ -819,19 +922,33 @@ class Player {
       // 引擎优先：注册项可以完全接管绘制（Third Eye 的可动眼珠就是自定义的）
       if (typeof PetalFX !== 'undefined' && PetalFX.drawAccessory
         && PetalFX.drawAccessory(ctx, a, this, R)) continue;
-      // 默认实现：素材原样画在【额头】—— 不随朝向绕圈，普通饰品不需要写绘制代码
+      // 默认实现：素材原样画在【额头】—— 不随朝向绕圈，普通饰品不需要写绘制代码。
+      // 素材用【矢量】版（SVG <img>），任意尺寸都清晰；位图只作未就绪时的兜底。
       const svg = a.card.type.svg;
-      const cv = CardRenderer.artCanvas(svg, 128);
-      if (!cv) continue;
+      const img = CardRenderer.artImage(svg) || CardRenderer.artCanvas(svg, 256);
+      if (!img) continue;
       const size = R * ACC_ART_SIZE_K;
       const cx = this.x;
       const cy = this.y - R * ACC_ART_LIFT_K + size * ACC_ART_DROP_K;
-      drawPetalArt(ctx, cv, size, cx, cy, 0, 1, 1);
-      // 可动部件（如果这张花瓣声明了的话）由引擎统一补画，默认实现不必知道细节
-      if (typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
-        PetalFX.artOverlay(ctx, svg, this.facing, cx, cy, size);
+      drawPetalArt(ctx, img, size, cx, cy, 0, 1, 1);
+      // 可动部件（如果这张花瓣声明了的话）由引擎统一补画，默认实现不必知道细节。
+      // box = 画出的矩形 + 它覆盖的素材窗口（引擎据此把素材坐标换成像素）。
+      const win = CardRenderer.entityWindow(svg);
+      if (win && typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
+        PetalFX.artOverlay(ctx, svg, this.facing, {
+          x: cx - size / 2, y: cy - size / 2, w: size, h: size,
+          ux: win[0], uy: win[1], uw: win[2], uh: win[3]
+        });
       }
     }
+  }
+
+  // 场地型实体（网）绘制：地面层 —— 在【掉落物与生物之下】（由 game.render 调用），半透明。
+  // 生成时从中心快速渐大弹出（WEB_POP_T）；【不旋转】（蛛网是铺在地上的）。
+  // 消失不在这里渐隐 —— 到期走通用退场幽灵，两处都做就是双重动画。
+  drawWebs(ctx) {
+    const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
+    drawWebList(ctx, this.webFields, img);
   }
 
   draw(ctx) {
@@ -840,6 +957,11 @@ class Player {
       for (const g of this.petalGhosts) {
         const size = PETAL_ENT_SIZE;
         const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
+        // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
+        if (g.img) {
+          drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));
+          continue;
+        }
         const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
         const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
         if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
@@ -882,6 +1004,11 @@ class Player {
     for (const g of this.petalGhosts) {
       const size = PETAL_ENT_SIZE;                         // 与在场花瓣同尺寸
       const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
+      // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
+      if (g.img) {
+        drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));
+        continue;
+      }
       const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
       const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
       if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
@@ -891,12 +1018,16 @@ class Player {
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
     // 半径乘 spawnPop：出生/重生时 Q 弹弹出（过冲回落），五官全按 R 缩放同步跟随。
     const R = this.r * 1.2 * spawnPop(this.age);   // 脸部半径
+    // 中毒：整张脸换成淡紫（描边同步换色），嘴强制哭脸 —— 见下方 bulge。
+    const poisoned = (typeof StatusFX !== 'undefined') && StatusFX.has(this, 'poison');
+    const FACE_FILL = poisoned ? '#d9bce8' : '#fae26a';
+    const FACE_LINE = poisoned ? '#a882c6' : '#dfbc4e';
     ctx.save();
     // 脸
-    ctx.fillStyle = '#fae26a';            // 介于改前(#f7db45)与改后(#fce98e)之间
+    ctx.fillStyle = FACE_FILL;            // 正常：介于改前(#f7db45)与改后(#fce98e)之间
     ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
     ctx.lineWidth = R * 0.085;   // 等比缩放（去下限，保证描边随脸同步缩小）
-    ctx.strokeStyle = '#dfbc4e';          // 描边：能看清，又不过分跳
+    ctx.strokeStyle = FACE_LINE;          // 描边：能看清，又不过分跳
     ctx.stroke();
     // 眼睛：黑色竖椭圆；reach/detect 时用「斜切顶边」重塑眼睛轮廓（不是叠加小三角）
     const look = this.facing;
@@ -927,7 +1058,7 @@ class Player {
         // 注意方向：多边形必须在斜线「上方」，否则会把整只眼睛连同下方一起擦掉（眼睛消失且回不来）
         const k = base * s;      // 每只眼各自朝自己的外侧抬起
         const top = ey - ery, big = R * 2;
-        ctx.fillStyle = '#fae26a';
+        ctx.fillStyle = FACE_FILL;
         ctx.beginPath();
         ctx.moveTo(ex - big, top - k * big - big);    // 上边界（比斜线再高 big）
         ctx.lineTo(ex + big, top + k * big - big);
@@ -944,7 +1075,9 @@ class Player {
     ctx.lineWidth = R * 0.07;
     ctx.lineCap = 'round';
     const mHw = R * 0.2408, mY = this.y + R * 0.4032;
-    const bulge = R * 0.1133 * (1 - 2 * this.modeT);   // 正=向下鼓(笑)，0=直线，负=向上鼓(哭)
+    // 正=向下鼓(笑)，0=直线，负=向上鼓(哭)；中毒时【强制哭脸】（与模式无关）
+    const mood = poisoned ? 1 : this.modeT;
+    const bulge = R * 0.1133 * (1 - 2 * mood);
     ctx.beginPath();
     ctx.moveTo(this.x - mHw, mY);
     ctx.quadraticCurveTo(this.x, mY + 2 * bulge, this.x + mHw, mY);

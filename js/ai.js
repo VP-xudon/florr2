@@ -348,6 +348,31 @@ MobAI.register('bee', {
 });
 
 // ============================================================================
+// 内置 AI 4：蜘蛛（spider）—— aggressive 敌对，追击极快、游荡也很快
+// 口径（用户要求）：
+//   · 仇恨半径 500（数据层 MOB_TRAITS.spider.sightR，比通用 1200 小得多）；
+//   · 追击速度 = 1.10 × 玩家默认最高速；
+//   · 游荡速度 = 追击速度 × 0.9 —— 不是通用那套"0.3~0.5 随机慢走"，
+//     所以它在花园里看起来一直是小跑着乱窜，而不是慢吞吞地晃。
+// 行为本身复用通用游走（追击 -> 逃离 -> 走/停 状态机），这里只改速度口径。
+// ============================================================================
+MobAI.register('spider', {
+  init(mob) {
+    mob.chaseSpeed = SPIDER_CHASE_K * PLAYER_BASE_SPEED;
+    mob.wanderSpeed = mob.chaseSpeed * SPIDER_WANDER_K;
+    mob.speed = mob.wanderSpeed;
+  },
+  create() {
+    const ai = MobAI.defs.wander.create();
+    ai.kind = 'spider';
+    return ai;
+  },
+  step(ai, dt, mob, player) { return MobAI.defs.wander.step(ai, dt, mob, player); },
+  notifyMoved(ai, d) { MobAI.defs.wander.notifyMoved(ai, d); },
+  facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
+});
+
+// ============================================================================
 // 内置 AI 3：蜈蚣（centipede）—— 全程弧线，不存在任何角度突变
 //
 // 硬性规则（用户口径）：不许有「角度转向」—— 换向、追击、逃跑、撞墙，

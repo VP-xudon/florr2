@@ -209,6 +209,13 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `RARITIES` 共 9 档：`common → unusual → rare → epic → legendary → mythic → ultra → super → eternal`（无 `unique`；个别覆盖表里会出现但不在主序列）。
 - `registry.js` 里 **花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实、84+ 忽略**。二创/缺名项不进入游戏，登记到 `NEEDS_MANUAL`。
 - **当前真正启用的花瓣 10 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye`。其余 registry 数据保留但不加载。
+- **可自然生成的生物 4 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider`。
+  蜘蛛是 aggressive：`MOB_TRAITS.spider.sightR = 500`，AI `spider` 把追击压成 1.10×（游荡 = 追击 × 0.9）。
+- **中毒（Poison）**：数值在 `MOB_RARITY_OVERRIDES[id].{poison,poisonRate}`（总量 / 每秒），
+  命中花朵时由 `_combatTick` 施加到 `StatusFX`，扣血在 `Player._tickPoison`（**不走 `hurt()`**，
+  否则 0.2s 受伤无敌帧会吃掉大半 DoT）。状态效果**不进快照**，客户端靠 `hurt` 事件里的 `poison` 字段自挂。
+- **隐藏掉落**（`DROP_HIDDEN_SLUGS`）：`mana_orb / blueberries / magic_leaf / magic_eye` —— 只入库不显示、不实际掉落，
+  被 `MOB_DROP_MAGICIAN` 替换后也一样；加魔法变种照这个模式办。
 - **装备加成（`PetalFX.bonus`）**：`faster` 给主角加【最大转速】（rad/s，可叠加，与装填无关），
   `third_eye` 给 reach 模式加【伸出距离】（px）。数值在 `PETAL_RARITY_OVERRIDES` 的 `rotSpeed` / `attackRange`，
   `Player.recompute()` 只做求和；`/rot-speed` 的倍率被限制在 0.1~1.0 × 当前动态最大转速。
@@ -361,7 +368,9 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   再配合 `KB_DISPARITY_MIN/MAX`（0.2 / 1.5）：下限必须 ≤ sqrt(最小份额)≈0.224，
   否则高稀有度花瓣会被地板抬到同一档，"越高级推得越轻"的递进就看不出来。
 
-**多节生物（蜈蚣）的三条规则**：
+**多节生物（蜈蚣）的四条规则**：
+- **断链继承仇恨**：前节死亡、本节升为新段首的那一刻，必须 `inheritThreat(旧段首)` 把旧账本并进来 ——
+  否则从中间打断后，后半截的威胁表是空的（仇恨只记在头与被打的那节上），新头会呆立游荡而不是继续追人。
 - **尾节不记仇恨**：`noteThreat` 里 `!this._next || this._next.dead` 直接返回 —— 打最尾一节不会让整条掉头
   （按"当前形态"判断，断了半截后新露出的尾节同样适用）。
 - **击退沿链传递**：被刚性粘合的节位置由 `_solveChains` 覆盖，冲量若只写 `kbX/kbY` 会被下一帧抹掉。
@@ -376,6 +385,29 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - 卡面绘制走**批量调度**（`CardRenderer.schedulePaint` + 单个共享 `ResizeObserver`）：
   先统一读 `clientWidth`（一次布局）再统一下笔。每卡一个 rAF/RO 会让一次重建产生上百次强制重排。
 - `display:none` 的卡不会被绘制（尺寸为 0 自动跳过），恢复可见时由 ResizeObserver 触发。
+- **焦点保护**：`UI.init()` 里注册了两条全局规则 —— 指针按下 UI 元素后 `blur()`，
+  以及焦点还在 `#hud/.window/#quickbar/#touchLayer` 里时吞掉空格/回车。
+  少了它们，按钮会锁焦点，之后按空格浏览器会"再点一次"，表现为窗口反复开关。
+- **移动端版面**：`body.touch-ui #quickbar` 改为靠左下（`transform-origin: 0% 100%`，
+  注意必须替换掉桌面端的 `translateX(-50%)`，否则 scale 会把居中位移吃掉 → 整排右移）；
+  A/B 按钮是 `body` 的独立子元素（`.t-btns`，四边写死），不放在 `#touchLayer` 里 ——
+  摇杆层是 64vw×78vh 的盒子，按钮跟着它会被带偏。
+- **状态效果（`sim/status.js` 的 `StatusFX`）**：任何实体都能带 `ent.status = [{id,dur,value}]`，
+  数组顺序 = 获得顺序（卡槽上方的小圆图标就按这个排）。数值只写在 `StatusFX.register` 的注册项里，
+  结算侧统一读 `StatusFX.speedMul(ent)`（玩家与生物都乘在"想走多快"上）。
+  新增效果 = `StatusFX.register(id, {...})` + 需要的结算点调用 `add/has`，不要在别处硬乘系数。
+- **场地型实体（Web）**：飞行 0.5s 到期（或飞行途中被打碎）→ `PetalFX.onExpire / onPop`
+  调 `player.spawnWeb(x, y, r, dur)` 生成【独立】的场地实体 `player.webFields`
+  （`{x,y,r,t,dur,pop,spin}`，没有碰撞箱、不占轨道位、不参与伤害）；
+  小 web 实体本体照常走通用移除接口（`_killPetalBody` / `_destroyPetal`）→ 有渐大渐隐退场。
+  谁被减速由服务端 `LocalServer._fieldTick` 每步扫 `webFields` 半径决定，客户端只负责画。
+  网用的是自绘素材 `assets/petals/web_net.svg`（放射线 + 内凹环），不是 Web 花瓣贴图。
+- **眼珠（Third Eye）**：位置/大小全部由 `CardRenderer.contentBox()`（素材内容包围盒实测）推导，
+  并裁剪在该椭圆内 —— 换素材也不会跑偏，不要再写死 viewBox 坐标。
+- **动态卡面**：声明了 `artOverlay` 的花瓣（Third Eye 的眼珠）会进 `_dynCards` 队列，
+  由 `dynTick` 在**本地朝向变化 > 3°、且该卡可见**时重画（单卡 20Hz 限流）。
+  朝向统一取自 `PetalFX.lookAngle()`（读本地 `player.facing`，不经过网络）。
+  没有可动部件的卡**不进队列**，仍保持"画一次就不动"——别把这条改成"每帧全量重绘"。
 - **卡面名称**：基准字号统一（`NAME_FS_RATIO`），只有"名字太长"才缩——超过 7 个半角宽
   （CJK 算 2）按比例缩，再用实测宽度兜一道"不超内板 94%"。**缩放不动基线**
   （`NAME_BASE_RATIO` 固定），所以所有卡的文字仍落在同一条底线上。

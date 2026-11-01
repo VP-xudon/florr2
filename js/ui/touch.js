@@ -32,23 +32,30 @@ const TouchCtl = {
       <div id="tStick" class="t-stick">
         <div class="t-stick-base"></div>
         <div class="t-stick-knob"></div>
-      </div>
-      <div id="tBtns" class="t-btns">
-        <button id="tBtnA" class="t-btn t-btn-a" type="button">
-          <b>A</b><i>${I18N.t('Touch/Reach', 'Reach')}</i>
-        </button>
-        <button id="tBtnB" class="t-btn t-btn-b" type="button">
-          <b>B</b><i>${I18N.t('Touch/Detect', 'Detect')}</i>
-        </button>
       </div>`;
     document.body.appendChild(root);
+    // A/B 按钮【挂在 body 上】而不是摇杆层里：摇杆层是 64vw×78vh 的固定盒子，
+    // 按钮必须严格贴屏幕右下角，独立成层才不会受任何父级布局/尺寸影响。
+    // tabindex=-1：不让按钮获得焦点（否则之后按空格会被浏览器当成"再次点击"）。
+    const btns = document.createElement('div');
+    btns.id = 'tBtns';
+    btns.className = 't-btns';
+    btns.innerHTML = `
+      <button id="tBtnA" class="t-btn t-btn-a" type="button" tabindex="-1">
+        <b>A</b><i>${I18N.t('Touch/Reach', 'Reach')}</i>
+      </button>
+      <button id="tBtnB" class="t-btn t-btn-b" type="button" tabindex="-1">
+        <b>B</b><i>${I18N.t('Touch/Detect', 'Detect')}</i>
+      </button>`;
+    document.body.appendChild(btns);
 
     this.refs = {
       root,
+      btns,
       stick: root.querySelector('#tStick'),
       knob: root.querySelector('.t-stick-knob'),
-      a: root.querySelector('#tBtnA'),
-      b: root.querySelector('#tBtnB')
+      a: btns.querySelector('#tBtnA'),
+      b: btns.querySelector('#tBtnB')
     };
     this._layout();
     window.addEventListener('resize', () => this._layout(), { passive: true });

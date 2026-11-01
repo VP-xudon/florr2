@@ -793,7 +793,13 @@ class LocalServer {
       m.sleeping = false;
       // 多节生物：前节已死 -> 本节升为"头"（重新跑自己的 AI 驱动它后面那整段）
       // —— 这就是【中间被打断分裂成多段】：每段由自己最前一节的 AI 控制，与有没有触角无关。
-      if (m._lead && m._lead.dead) m._lead = null;
+      if (m._lead && m._lead.dead) {
+        // 断链：本节立刻成为新段首 —— 【继承旧段首的仇恨表】。
+        // 少了这一步，从中间把头打断后，后半截的威胁表是空的（仇恨只记在头与被打的那一节上），
+        // 新头会一脸茫然地继续游荡；继承之后两段都会继续追打它的人。
+        m.inheritThreat(m._lead);
+        m._lead = null;
+      }
       // 段首（没有前一节）= 这一段的新头：必须解除"被粘合"标记，否则它会一直
       // 跳过自己的 AI/位移，整段就此冻结（表现为被打断后剩下的半条再也不动）。
       m._chainLocked = !!m._lead;
@@ -883,6 +889,69 @@ class LocalServer {
     this._solveChains();
     // 解算完再补一次链体与玩家的分离（只推玩家）—— 否则身体会从花朵身上穿过去。
     this._pushPlayerOutOfChains();
+
+    // 7) 场地型实体（玩家的 Web 网 / Legend+ 蜘蛛自铺网）：状态施加 + 网的寿命推进。
+    // 放在坐标全部定稿之后 —— 否则算出来的是"上一步的位置"。
+    this._fieldTick(dt);
+  }
+
+  // 场地型实体的判定：与放置者敌对的生物进入半径 -> 获得对应状态效果。
+  // 效果的【数值】不在这里（那是 StatusFX 注册项的事），这里只负责"谁站在网上"。
+  _fieldTick(dt) {
+    const p = this.player;
+    if (!p) return;
+    const src = this._awake || this.ents;
+
+    // ---- 玩家的网（Web 花瓣）：给站在上面的生物挂减速 ----
+    const webs = p.webFields;
+    if (webs && webs.length) {
+      for (const m of src) {
+        if (m.dead || m.sleeping) continue;
+        // 网对【所有生物】生效：生物与玩家永远是不同阵营（被动型只是不主动攻击，
+        // 并不代表它是玩家这边的）。之前按 hostility==='passive' 跳过，
+        // 而 common/unusual 的瓢虫恰好都是 Passive —— 于是"网好像完全不起作用"。
+        for (const w of webs) {
+          const r = w.r || 0;
+          if (!(r > 0)) continue;
+          const dx = m.x - w.x, dy = m.y - w.y;
+          if (dx * dx + dy * dy > r * r) continue;
+          StatusFX.add(m, 'web', { dur: STATUS_FIELD_REFRESH });
+          break;
+        }
+      }
+    }
+
+    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺）：给踩进去的【玩家】挂减速 ----
+    // 蜘蛛自己铺的网不会减自己的速（它根本不在这个判定里）。
+    this.mobWebs = this.mobWebs || [];
+    for (let i = this.mobWebs.length - 1; i >= 0; i--) {
+      const w = this.mobWebs[i];
+      w.t += dt;
+      w.pop = Math.min(1, w.pop + dt / WEB_POP_T);
+      if (w.t >= w.dur) this.mobWebs.splice(i, 1);
+    }
+    for (const m of src) {
+      if (m.dead || m.sleeping || !m.gaitSprite) continue;
+      if (RARITY_ORDER.indexOf(m.rarity) < RARITY_ORDER.indexOf('legendary')) continue;
+      m.webT = (m.webT || 0) + dt;
+      if (m.webT >= SPIDER_WEB_EVERY) {
+        m.webT = 0;
+        // 网的大小 = 该蜘蛛稀有度对应的 Web 花瓣半径（数据表，不硬编码）
+        this._webType = this._webType
+          || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
+        const r = this._webType ? (petalStatsFor(this._webType, m.rarity).radius || 120) : 120;
+        this.mobWebs.push({ x: m.x, y: m.y, r, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
+      }
+    }
+    if (this.mobWebs.length && !p.dead) {
+      for (const w of this.mobWebs) {
+        const dx = p.x - w.x, dy = p.y - w.y;
+        if (dx * dx + dy * dy <= w.r * w.r) {
+          StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
+          break;
+        }
+      }
+    }
   }
 
   // 战斗结算：只负责"谁掉多少血/谁该被弹开"，并把结果写成事件交给客户端表现。
@@ -981,6 +1050,15 @@ class LocalServer {
         if (toMob > 0) this._hitMob(m, toMob);
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
+          // 中毒（蜘蛛等）：命中花朵就把该稀有度的中毒总量施加给玩家。
+          // 总量 / 每秒速率 = 本次中毒的持续时长；扣血由 Player._tickPoison 每帧均摊。
+          // 只在【真的造成了伤害】时施加（被无敌帧挡掉的那一下不应挂毒）。
+          const poison = (m.poison > 0 && m.poisonRate > 0)
+            ? { dur: m.poison / m.poisonRate, rate: m.poisonRate } : null;
+          if (hurt && !p.dead && poison && typeof StatusFX !== 'undefined') {
+            // 服务端权威副本先挂上（生物/血量就在这里算）
+            StatusFX.add(p, 'poison', { dur: poison.dur, value: poison.rate });
+          }
           if (hurt && !p.dead) {
             const ux = phit.nx, uy = phit.ny;
             // 击退总位移 = 设计值 FLOWER_KNOCKBACK × 主角直径，按稀有度在双方之间分配。
@@ -991,8 +1069,10 @@ class LocalServer {
             const playerKb = total * sh[0];
             if (!m.dead) applyKnockback(m, -ux, -uy, total * sh[1]);
             applyKnockback(p, ux, uy, playerKb);
+            // poison 一并带给客户端：状态效果不进快照，客户端靠这条事件给自己挂毒
+            //（否则只有服务端那份玩家会掉血、会变紫，本地看到的永远是正常脸）。
             this._events.push({
-              kind: 'hurt', ux, uy, total: playerKb, shake: true
+              kind: 'hurt', ux, uy, total: playerKb, shake: true, poison
             });
           }
         }
@@ -1170,10 +1250,15 @@ class LocalServer {
   //   · 多体卡（Light 等：一张卡 = N 个实体）-> 只让【这一个实体】进入自己的重装填
   //     （respawnT），卡片本身【不】进入 reload —— 其余实体继续正常飞舞。
   _destroyPetal(b) {
+    const p = this.player;
+    // 先问引擎：某些实体"碎了"要留下东西（Web 在飞行途中被打碎 -> 原地立刻张网）。
+    // 注意顺序：必须在 b.dead = true 之前（钩子要读它的位置/状态）。
+    if (p && b && !b.dead && typeof PetalFX !== 'undefined' && PetalFX.onPop) {
+      PetalFX.onPop(b, p);
+    }
     b.dead = true;
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
-    const p = this.player;
     if (!p) return;
     // 放在地上的实体（Pollen / Honey 脱轨后）：打碎就是打碎，不会"复活"——
     // 它不属于当前这一批，卡槽在脱轨那一刻就已经进入冷却（Honey 的冷却暂停

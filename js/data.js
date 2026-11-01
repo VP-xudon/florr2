@@ -37,11 +37,12 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
-  'faster', 'third_eye'
+  'faster', 'third_eye', 'web'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
-const REACH_IMMUNE_SLUGS = new Set(['rose']);
+// reach 对它【完全无效】：轨道半径不随空格放大（Peas 另有 fixedReach：恒定 detect 距离）
+const REACH_IMMUNE_SLUGS = new Set(['rose', 'peas']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -127,6 +128,18 @@ const PETAL_RARITY_OVERRIDES = {
     eternal:   { dmg: 78732, hp: 32805, rotSpeed: 2.1 },
     unique:    { dmg: 78732, hp: 32805, rotSpeed: 2.1 }
   },
+  // Web：从 Unusual 起才有；dmg/hp 逐级 ×3；radius = 落地后那张网的半径（px）
+  web: {
+    unusual:   { dmg: 15,    hp: 15,    radius: 60 },
+    rare:      { dmg: 45,    hp: 45,    radius: 70 },
+    epic:      { dmg: 135,   hp: 135,   radius: 80 },
+    legendary: { dmg: 405,   hp: 405,   radius: 100 },
+    mythic:    { dmg: 1215,  hp: 1215,  radius: 150 },
+    ultra:     { dmg: 3645,  hp: 3645,  radius: 200 },
+    super:     { dmg: 10935, hp: 10935, radius: 250 },
+    eternal:   { dmg: 32805, hp: 32805, radius: 300 },
+    unique:    { dmg: 32805, hp: 32805, radius: 300 }
+  },
   // Third Eye：装备型饰品，没有伤害/血量，只有 attackRange（reach 模式下多伸出去的距离，px）
   third_eye: {
     common:    { dmg: 0, hp: 0, attackRange: 0 },
@@ -203,7 +216,11 @@ const PETAL_TRAITS = {
   stinger: { sticky: false },
   leaf: { reload: 1.8, healOverTime: true, sticky: false },
   pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5, sticky: false },
-  peas: { reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 }, sticky: false },
+  // Peas：固定按 detect 的距离公转（不随模式伸/缩），模式只影响它的特殊效果与判定。
+  peas: {
+    reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 },
+    sticky: false, fixedReach: 'detect'
+  },
   // 蜜会被生物吸住并贴在表面（吸血式"拉仇恨"的载体），其它花瓣保持轨道运动。
   honey: {
     reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5,
@@ -218,7 +235,11 @@ const PETAL_TRAITS = {
   //   · 同种不可堆叠：装备多个时只有最左边那格生效，其余强制为暗灰未装填态；
   //   · 效果 = reach 模式下把花瓣再向外伸 attackRange 像素（见 PETAL_RARITY_OVERRIDES）。
   // sticky 必须显式声明（特性表完整性断言要求每张启用花瓣都有 boolean）
-  third_eye: { accessory: true, stackable: false, noDamage: true, sticky: false, reload: 0 }
+  third_eye: { accessory: true, stackable: false, noDamage: true, sticky: false, reload: 0 },
+  // Web：reach 模式下脱轨、顺惯性飞出，0.5s 后自毁并原地张开一张网（由 PetalFX 接管）。
+  //   web.duration = 网的存在时长（秒）；web.radius 按稀有度在 PETAL_RARITY_OVERRIDES 里。
+  //   装填立刻开始（不像 Honey 那样等实体消失），与 Pollen 同款"放下就走"。
+  web: { reload: 3.0, reloadText: '3.0s + 0.5s', detachAfter: 0.05, sticky: false, web: { duration: 10 } }
 };
 
 function buildPetalTypes() {
@@ -270,6 +291,8 @@ function buildPetalTypes() {
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
       noDamage: !!tr.noDamage,
+      // 场地型（Web）：{ duration } —— 落地那张网的存在时长（半径按稀有度，在 rarityStats 里）
+      web: tr.web || null,
       // 装备型（饰品）：不进入轨道、无装填，固定在人物身上（Third Eye）
       accessory: !!tr.accessory,
       // 同种能否多件同时生效；false = 只有最左边那格生效，其余为暗灰未装填态
@@ -281,8 +304,10 @@ function buildPetalTypes() {
       // 【阵型多体】（Stinger 起）：整坨只占一个轨道位，子实体按卡面布局锁定成一坨，
       // 外观与卡面一致，但各子实体仍独立结算碰撞与血量
       formation: PETAL_FORMATION_SLUGS.has(slug),
-      // reach 模式免疫：轨道半径不随空格（reach）放大（见 entities.js _syncPetals）
+      // reach 模式免疫：轨道半径不随空格（reach）放大（见 sim/player.js _syncPetals）
       noReach: REACH_IMMUNE_SLUGS.has(slug),
+      // 固定轨道距离（'detect'）：无论当前模式如何，都按该模式的距离公转
+      fixedReach: tr.fixedReach || null,
       identified: true,
       wiki: p.wiki || null
     };
@@ -312,10 +337,14 @@ function petalMaxMobRarity(type, rarity) {
 // 按稀有度取花瓣数值：优先 rarityStats（整表，如 Rose），其次 rarityMultipliers（倍率表，如
 // Basic），最后退回基础 stats。dmg/hp/heal 都走这里——绝不在战斗/装填里直接读 type.dmg。
 function petalStatsFor(type, rarity) {
+  // 时长这类"与稀有度无关"的字段没有逐档表，统一从能力声明里兜底（Web: 10s）。
+  const dur = (type.web && type.web.duration) || 0;
   const pick = (o) => ({
     dmg: o.dmg || 0, hp: o.hp || 0, heal: o.heal || 0,
     // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成
-    rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0
+    rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0,
+    // 场地型花瓣（Web）：落地网的半径 + 存在时长（0 = 没有这一项）
+    radius: o.radius || 0, duration: o.duration || dur
   });
   const rs = type.rarityStats && type.rarityStats[rarity];
   if (rs) return pick(rs);
@@ -327,7 +356,9 @@ function petalStatsFor(type, rarity) {
       hp: (s.hp || 0) * (mult.hp || 1),
       heal: (s.heal || 0) * (mult.heal || 1),
       rotSpeed: (s.rotSpeed || 0) * (mult.rotSpeed || 1),
-      attackRange: (s.attackRange || 0) * (mult.attackRange || 1)
+      attackRange: (s.attackRange || 0) * (mult.attackRange || 1),
+      radius: (s.radius || 0) * (mult.radius || 1),
+      duration: s.duration || dur
     };
   }
   return pick(s);
@@ -347,6 +378,21 @@ const MOB_HOSTILITY = {
 // 这里按官方最新口径整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
 // 只覆盖列出的稀有度，其余沿用 registry。
 const MOB_RARITY_OVERRIDES = {
+  // Spider 蜘蛛（id 21）：hp/dmg/armor/exp 全部按官方最新口径整表覆盖；
+  //   poison     = 命中玩家后施加的【中毒总量】（总量固定，按 poisonRate 均摊扣完）
+  //   poisonRate = 中毒的每秒伤害（每秒掉多少，决定这次中毒持续多久 = 总量 / 速率）
+  21: {
+    common:    { hp: 60,         dmg: 15,    armor: 1,   exp: 1,        poison: 40,     poisonRate: 15 },
+    unusual:   { hp: 225,        dmg: 45,    armor: 2,   exp: 2,        poison: 120,    poisonRate: 45 },
+    rare:      { hp: 810,        dmg: 135,   armor: 7,   exp: 5,        poison: 360,    poisonRate: 135 },
+    epic:      { hp: 3240,       dmg: 405,   armor: 22,  exp: 41,       poison: 1080,   poisonRate: 405 },
+    legendary: { hp: 19440,      dmg: 1215,  armor: 65,  exp: 379,      poison: 3240,   poisonRate: 1215 },
+    mythic:    { hp: 189540,     dmg: 3645,  armor: 194, exp: 5259,     poison: 9720,   poisonRate: 3645 },
+    ultra:     { hp: 8748000,    dmg: 10935, armor: 583, exp: 219486,   poison: 29160,  poisonRate: 10935 },
+    super:     { hp: 262440000,  dmg: 32805, armor: 583, exp: 13451796, poison: 87480,  poisonRate: 32805 },
+    eternal:   { hp: 1574640000, dmg: 98415, armor: 583, exp: 13451796, poison: 262440, poisonRate: 98415 },
+    unique:    { hp: 1574640000, dmg: 98415, armor: 583, exp: 13451796, poison: 262440, poisonRate: 98415 }
+  },
   4: {   // Bee 蜜蜂
     common:    { hp: 35,        dmg: 50,     armor: 1,   exp: 1 },
     unusual:   { hp: 131.3,     dmg: 150,    armor: 2,   exp: 1 },
@@ -371,7 +417,11 @@ const MOB_RARITY_OVERRIDES = {
 const MOB_TRAITS = {
   ladybug: {},
   bee: { sPath: true, sizeScale: 1.395 * 0.9, chaseMult: 1.05, wanderFactor: 1.2 },
-  centipede: { segmented: true, sizeScale: 1.4 }
+  centipede: { segmented: true, sizeScale: 1.4 },
+  // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
+  // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
+  //   gait = 有"换帧步态"（八条腿随行进摆动，见 render/spider-gait.js）
+  spider: { sightR: 500, gait: true }
 };
 
 // ---- 生物生成播报的专属台词（i18n key，文案在 js/i18n-extra.js）----
@@ -431,6 +481,8 @@ function buildMobTypes() {
       segmented: !!mt.segmented,          // 多节生物：一次生成整条
       sizeScale: mt.sizeScale || 1,       // 视觉等比倍数（不影响碰撞半径）
       sPath: !!mt.sPath,                  // S 型游荡
+      sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
+      gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
       chaseMult: (mt.chaseMult != null) ? mt.chaseMult : null,   // null = 通用追击倍率
       wanderFactor: (mt.wanderFactor != null) ? mt.wanderFactor : 1
     };
@@ -472,7 +524,9 @@ const MOB_DROP_TABLE = {
 const MOB_DROP_ITEMS = {
   ladybug: ['light', 'rose', 'mana_orb'],      // Ladybug / 瓢虫
   bee: ['stinger', 'pollen', 'honey'],         // Bee / 蜜蜂（按此顺序展示与掷骰）
-  centipede: ['leaf', 'peas']                  // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
+  centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
+  // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
+  spider: ['faster', 'web', 'third_eye', 'magic_eye']
 };
 
 // 个别生物的每种掉落物有【各自】的稀有度分布。蜜蜂的 Stinger / Pollen / Honey 是三张不同的表：
@@ -553,6 +607,23 @@ const MOB_DROP_TABLE_ITEM = {
     super:     [['mythic', 0.814], ['ultra', 0.186]],
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
     unique:    [['mythic', 0.814], ['ultra', 0.186]]
+  },
+  // Third Eye / Magic Eye：蜘蛛专属，Legendary 及以下一档都不掉（Wiki 表只有 Mythic 起）。
+  //   Mythic 0.03% / Ultra 4.5% Mythic + 0.02% Ultra / Super+ 96% Mythic + 4% Ultra
+  third_eye: {
+    mythic:  [['mythic', 0.0003]],
+    ultra:   [['mythic', 0.045], ['ultra', 0.0002]],
+    super:   [['mythic', 0.96], ['ultra', 0.04]],
+    eternal: [['mythic', 0.96], ['ultra', 0.04]],
+    unique:  [['mythic', 0.96], ['ultra', 0.04]]
+  },
+  // Magic Eye：Third Eye 的魔法变种（隐藏），分布与 Third Eye 完全一致
+  magic_eye: {
+    mythic:  [['mythic', 0.0003]],
+    ultra:   [['mythic', 0.045], ['ultra', 0.0002]],
+    super:   [['mythic', 0.96], ['ultra', 0.04]],
+    eternal: [['mythic', 0.96], ['ultra', 0.04]],
+    unique:  [['mythic', 0.96], ['ultra', 0.04]]
   }
 };
 
@@ -567,7 +638,7 @@ function dropDistFor(slug, rarity) {
 //  · blueberries   : 蜈蚣魔法变种隐藏掉落（Peas -> Blueberries）
 //  · magic_leaf    : 蜈蚣魔法变种隐藏掉落（Leaf -> Magic Leaf）
 // 三者与 Mana Orb 同款：仅登记进掉落表"不实装"，被替换后不显示、不参与实际掷骰掉落。
-const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf']);
+const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf', 'magic_eye']);
 
 // 魔法变种替换：仅对【特定生物】生效（其他生物掉落照旧，未来由你口述扩展）。
 // 当击杀者拥有 magician 战斗属性时，把原始掉落物替换为未实装变种（见 DROP_HIDDEN_SLUGS）。
@@ -575,7 +646,8 @@ const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf']);
 //   · 蜈蚣(14)        : Leaf -> Magic Leaf，Peas -> Blueberries
 const MOB_DROP_MAGICIAN = {
   ladybug:   { rose: 'mana_orb' },
-  centipede: { leaf: 'magic_leaf', peas: 'blueberries' }
+  centipede: { leaf: 'magic_leaf', peas: 'blueberries' },
+  spider:    { third_eye: 'magic_eye' }      // 蜘蛛：Third Eye -> Magic Eye（未实装变种）
 };
 
 // 掉落表查询入口：对外仍接受「数字 id / slug / type 对象」，内部统一转 slug。
@@ -784,7 +856,7 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
 // 组内成员写成 [slug, 组内权重]；权重只在组内比较，外层 ":w" 会再乘上来。
 const MOB_GROUPS = {
-  garden: [['ladybug', 3], ['bee', 2], ['centipede', 1]]
+  garden: [['ladybug', 3], ['bee', 2], ['spider', 2], ['centipede', 1]]
 };
 
 // 兜底物种（生成区解析不出任何有效物种时使用）
@@ -813,7 +885,7 @@ function rollMobRarityByDifficulty(diff) {
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede', 'spider']);
 
 function parseSpawnMobs(str) {
   const out = [];

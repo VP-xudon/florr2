@@ -126,6 +126,50 @@
       return t && t.indexOf('<') !== 0 ? '' : '缺失键: ' + t;
     });
 
+    // ---- 动态卡面预热（异步）：渲染一张 Third Eye 卡，改朝向后再取样，
+    //      验证"卡面真的会跟着本地朝向重画"（而不是画一次就定格）。
+    const dynProbe = await (async () => {
+      if (typeof CardRenderer === 'undefined' || !PETAL_TYPES) return null;
+      const eye = PETAL_TYPES.find((x) => x && x.slug === 'third_eye');
+      if (!eye) return null;
+      // live: true = 模拟"装在主卡槽里"的卡（只有这种卡才跟随玩家朝向）；
+      // 另一张不带 live = 背包/副槽里的同款卡，必须保持静止。
+      const cv = CardRenderer.createCard({ rarity: 'common', svg: eye.svg, count: null, live: true });
+      cv.style.cssText = 'position:absolute;left:-9999px;top:0;width:96px;height:96px';
+      document.body.appendChild(cv);
+      const cv2 = CardRenderer.createCard({ rarity: 'common', svg: eye.svg, count: null });
+      cv2.style.cssText = 'position:absolute;left:-9999px;top:0;width:96px;height:96px';
+      document.body.appendChild(cv2);
+      const sampleOf = (canvas) => {
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        const d = ctx.getImageData(0, 0, W, H).data;
+        let sx = 0, n = 0;
+        for (let y = 0; y < H * 0.7; y++) {          // 只看上半部（避开白色名称文字）
+          for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            if (d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240 && d[i + 3] > 200) { sx += x; n++; }
+          }
+        }
+        return n ? sx / n : null;
+      };
+      const pl = game.player, oldF = pl.facing;
+      try {
+        await new Promise((r) => setTimeout(r, 1200));       // 等素材与首帧
+        pl.facing = 0;
+        await new Promise((r) => setTimeout(r, 200));
+        const right = sampleOf(cv), rightIdle = sampleOf(cv2);
+        pl.facing = Math.PI;
+        await new Promise((r) => setTimeout(r, 200));
+        const left = sampleOf(cv), leftIdle = sampleOf(cv2);
+        return { right, left, rightIdle, leftIdle };
+      } finally {
+        pl.facing = oldF;
+        cv.remove();
+        cv2.remove();
+      }
+    })();
+
     // 固定步长推进（覆盖服务端生成、快照镜像、花瓣轨道）
     game.stepFrames(60, 1 / 60, false);
     const p = game.player;
@@ -285,11 +329,33 @@
       game.stepFrames(2, 1 / 60, false);
       const diedOnClient = !!p.dead;
       game.respawn();
-      // 复活点若落在减速瓦片上会一直不装填，这里等到出第一片花瓣为止（上限 10s）
+      // 复活点若落在减速瓦片上会一直不装填，这里等到出第一片花瓣为止（上限 10s）。
+      // 世界里可能有敌对生物（蜘蛛会主动扑上来）把刚复活的玩家再咬死 —— 那样花瓣永远为 0，
+      // 与被测逻辑无关。这一段给两端副本临时上无敌，结束后撤销。
+      const canInv = (typeof InvulnFX !== 'undefined' && InvulnFX.add);
+      if (canInv) { InvulnFX.add(p, 'selftest', 60); InvulnFX.add(srv.player, 'selftest', 60); }
       let waited = 0;
-      while (p.petals.length === 0 && waited < 600) {
-        game.stepFrames(10, 1 / 60, false);
-        waited += 10;
+      let diag = '';
+      try {
+        while (p.petals.length === 0 && waited < 600) {
+          if (p.dead) {
+            game.respawn();
+            if (canInv) InvulnFX.add(p, 'selftest', 60);
+            // 中毒不进快照、也不被无敌帧挡（DoT 语义），会把刚复活的玩家反复咬死 —— 清掉
+            if (typeof StatusFX !== 'undefined') {
+              StatusFX.remove(p, 'poison');
+              StatusFX.remove(srv.player, 'poison');
+            }
+          }
+          game.stepFrames(10, 1 / 60, false);
+          waited += 10;
+        }
+      } finally {
+        if (canInv) { InvulnFX.remove(p, 'selftest'); InvulnFX.remove(srv.player, 'selftest'); }
+        diag = ' slots=' + p.slots.length
+          + ' reload=' + (p.reload[0] ? p.reload[0].age.toFixed(2) + '/' + p.reload[0].dur.toFixed(2) : '-')
+          + ' hold=' + (p.reloadHold && p.reloadHold[0] ? 1 : 0)
+          + ' dead=' + p.dead + ' poison=' + (typeof StatusFX !== 'undefined' ? StatusFX.has(p, 'poison') : '-');
       }
       const cg = JSON.stringify(p._petalGen || []);
       const sg = JSON.stringify(srv.player._petalGen || []);
@@ -302,7 +368,7 @@
         ok: cg === sg && miss === 0 && p.petals.length > 0,
         detail: 'clientGen=' + cg + ' serverGen=' + sg + ' petals=' + p.petals.length +
           ' unmatched=' + miss + ' diedSynced=' + diedOnClient +
-          ' slowTile=' + !!p.slowTile + ' waited=' + waited
+          ' slowTile=' + !!p.slowTile + ' waited=' + waited + diag
       };
     });
 
@@ -409,6 +475,172 @@
       return { ok, detail: ok ? '浅色眼珠已改写为眼眶色' : ('未改写：' + String(out).slice(0, 60)) };
     });
 
+    // 6b4) 可动部件真的会动：同一个 box 下，朝向不同 -> 眼珠落在不同位置
+    //      （卡面"静态"的回归防线：卡面走的就是这个函数 + 本地朝向）
+    check('engine: 卡面眼珠跟随朝向', () => {
+      if (typeof PetalFX === 'undefined' || !PetalFX.artOverlay || !PetalFX.hasOverlay) {
+        return '引擎未就绪（跳过）';
+      }
+      const pick = (slug) => (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : [])
+        .find((x) => x && x.slug === slug);
+      const eye = pick('third_eye'), basic = pick('basic');
+      if (!eye) return '缺少 third_eye（跳过）';
+      const overlayOk = PetalFX.hasOverlay(eye.svg) === true
+        && (!basic || PetalFX.hasOverlay(basic.svg) === false);
+      // 整张贴图当画布：box 覆盖完整素材坐标系（viewBox 0 0 110 110）
+      const box = { x: 0, y: 0, w: 110, h: 110, ux: 0, uy: 0, uw: 110, uh: 110 };
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 110;
+      const ctx = cv.getContext('2d');
+      const centroid = (look) => {
+        ctx.clearRect(0, 0, 110, 110);
+        PetalFX.artOverlay(ctx, eye.svg, look, box);
+        const d = ctx.getImageData(0, 0, 110, 110).data;
+        let sx = 0, sy = 0, n = 0;
+        for (let y = 0; y < 110; y++) {
+          for (let x = 0; x < 110; x++) {
+            const i = (y * 110 + x) * 4;
+            // 眼珠是纯白
+            if (d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240 && d[i + 3] > 200) { sx += x; sy += y; n++; }
+          }
+        }
+        return n ? { x: sx / n, y: sy / n, n } : null;
+      };
+      const right = centroid(0), left = centroid(Math.PI);
+      const dx = (right && left) ? (right.x - left.x) : 0;
+      const moved = !!right && !!left && Math.abs(dx) > 3;
+      // 本地朝向来源必须与玩家一致（卡面用的就是它）
+      const lookOk = (typeof PetalFX.lookAngle === 'function')
+        && (PetalFX.lookAngle() === null || Math.abs(PetalFX.lookAngle() - game.player.facing) < 1e-9);
+      return {
+        ok: overlayOk && moved && lookOk,
+        detail: `可动=${overlayOk} 朝右x=${right ? right.x.toFixed(1) : '-'}`
+          + ` 朝左x=${left ? left.x.toFixed(1) : '-'} Δ=${dx.toFixed(1)}px 本地朝向=${lookOk}`
+      };
+    });
+
+    // 6b5) 真·动态卡面：改变本地朝向后，卡面像素必须跟着变（异步探针的结果）
+    check('engine: 卡面按本地朝向实时重画', () => {
+      if (!dynProbe) return '缺少 third_eye（跳过）';
+      const { right, left, rightIdle, leftIdle } = dynProbe;
+      const moved = right != null && left != null && Math.abs(right - left) > 1.5;
+      // 未装备的同款卡必须【一动不动】（居中静态）
+      const idleStill = rightIdle != null && leftIdle != null && Math.abs(rightIdle - leftIdle) < 0.5;
+      return {
+        ok: moved && idleStill,
+        detail: `装备卡 x=${right == null ? '-' : right.toFixed(1)}→${left == null ? '-' : left.toFixed(1)}`
+          + `（${moved ? '已重画' : '没重画'}）　未装备卡 `
+          + `x=${rightIdle == null ? '-' : rightIdle.toFixed(1)}→${leftIdle == null ? '-' : leftIdle.toFixed(1)}`
+          + `（${idleStill ? '静态' : '不该动'}）`
+      };
+    });
+
+    // 6b6) Web：脱轨 -> 飞行 0.5s -> 原地成网；网给敌对生物挂"蛛网减速"（0.5x）
+    check('engine: Web 成网 + 蛛网减速', () => {
+      if (typeof StatusFX === 'undefined' || typeof PetalFX === 'undefined') return '引擎未就绪（跳过）';
+      const web = (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : []).find((t) => t && t.slug === 'web');
+      if (!web || !PetalFX.defOf(web)) return '缺少 web（跳过）';
+      const p = game.player;
+      const savedFields = p.webFields ? p.webFields.slice() : [];
+      const mkBody = () => ({
+        card: { type: web, rarity: 'rare' }, x: 40, y: 0, vx: 120, vy: 0,
+        age: 1, hp: 45, maxHp: 45, life: 0
+      });
+      let flags = {};
+      let info = '';
+      try {
+        if (p.webFields) p.webFields.length = 0;
+        // ① 飞行到期 -> 生成独立场地实体（半径/时长按稀有度）
+        const body = mkBody();
+        const plan = PetalFX.detach(body, p);
+        const flying = PetalFX.flightOf(body);
+        PetalFX.onExpire(body, p);
+        const f = p.webFields && p.webFields[0];
+        // ② 飞行途中被打碎 -> 同样立刻成网（轨道上被打碎则不成网）
+        const body2 = mkBody();
+        body2.stationary = true;
+        const popOk = PetalFX.onPop(body2, p);
+        const body3 = mkBody();                 // 还在轨道上
+        const popNo = PetalFX.onPop(body3, p);
+        // ③ 状态效果：减速倍率取自注册项本身（改数值时不用同步改断言）且会过期
+        const wantSlow = (StatusFX.defOf('web') || {}).speedMul;
+        const probe = {};
+        StatusFX.add(probe, 'web', { dur: 1 });
+        const slow = StatusFX.speedMul(probe);
+        const order = StatusFX.list(probe).map((e) => e.id).join(',');
+        StatusFX.tick(probe, 1.2);
+        flags = {
+          plan: !!plan,
+          fly: !!(flying && flying.life === 0.5),
+          field: !!f && Math.abs(f.r - 70) < 1e-9 && Math.abs(f.dur - 10) < 1e-9,
+          pop: popOk && p.webFields.length === 2,
+          orbit: !popNo && p.webFields.length === 2,     // 轨道上打碎不再生成
+          slow: typeof wantSlow === 'number' && Math.abs(slow - wantSlow) < 1e-9,
+          order: order === 'web',
+          clear: StatusFX.list(probe).length === 0
+        };
+        info = `飞行=${flying ? flying.life : '-'}s 网半径=${f ? f.r : '-'} 存活=${f ? f.dur : '-'}s`
+          + ` 场地数=${p.webFields.length}`;
+      } finally {
+        if (p.webFields) p.webFields.length = 0;
+        for (const x of savedFields) p.webFields.push(x);
+      }
+      const bad = Object.keys(flags).filter((k) => !flags[k]);
+      return {
+        ok: bad.length === 0,
+        detail: (bad.length ? '未通过: ' + bad.join(',') + '；' : '') + info
+      };
+    });
+
+    // 6b7) 服务端场地判定：网范围内的生物必须真的拿到"蛛网减速"，且移动管线会读它
+    check('sim: 蛛网减速作用于生物', () => {
+      const srv = game.net && game.net.debugServer;
+      if (!srv || !srv.player || typeof StatusFX === 'undefined') return '无本地服务端（跳过）';
+      const p = srv.player;
+      const list = srv._awake || srv.ents || [];
+      const m = list.find((e) => e && !e.dead);
+      if (!m) return '场上没有可用生物（跳过）';
+      const savedFields = p.webFields.slice();
+      const savedAwake = srv._awake;
+      const savedStatus = m.status ? m.status.slice() : null;
+      let inRange = false, outRange = false, mul = 1, applied = 1;
+      try {
+        p.webFields.length = 0;
+        const w = p.spawnWeb(m.x, m.y, 120, 10, null);
+        srv._awake = [m];
+        StatusFX.remove(m, 'web');
+        srv._fieldTick();
+        inRange = StatusFX.has(m, 'web');
+        mul = StatusFX.speedMul(m);
+        // 移动管线是否真的读了它（拦一次 speedMul 调用即可）
+        const orig = StatusFX.speedMul;
+        StatusFX.speedMul = function (ent) {
+          const v = orig.call(this, ent);
+          if (ent === m) applied = v;
+          return v;
+        };
+        try { m.update(1 / 60, p, srv.map); } finally { StatusFX.speedMul = orig; }
+        // 走出范围后不应再被施加（刷新时长只有 STATUS_FIELD_REFRESH）
+        StatusFX.remove(m, 'web');
+        if (w) { w.x = m.x + 5000; w.y = m.y + 5000; }
+        srv._fieldTick();
+        outRange = !StatusFX.has(m, 'web');
+      } finally {
+        p.webFields.length = 0;
+        for (const f of savedFields) p.webFields.push(f);
+        srv._awake = savedAwake;
+        if (savedStatus) m.status = savedStatus; else StatusFX.remove(m, 'web');
+      }
+      // 期望值直接读注册项：调数值（如 0.5 -> 0.3）时断言自动跟随，不会误报
+      const want = (StatusFX.defOf('web') || {}).speedMul;
+      const ok = inRange && outRange && typeof want === 'number'
+        && Math.abs(mul - want) < 1e-9 && Math.abs(applied - want) < 1e-9;
+      return {
+        ok,
+        detail: `范围内=${inRange} 范围外=${outRange} 乘数=${mul}（应 ${want}） 实际读取=${applied}`
+      };
+    });
+
     // 6c) 转速与 reach 互不影响：装上 Faster 后，花瓣的实际轨道半径不能变
     check('engine: 转速不影响 reach 伸距', () => {
       const srv = game.net && game.net.debugServer;
@@ -422,18 +654,23 @@
         petals: p.petals, ghosts: p.petalGhosts, reload: p.reload.slice(),
         x: p.x, y: p.y, vx: p.vx, vy: p.vy, slow: p.slowTile
       };
-      // 固定 reach 模式 + 装填完成，跑 1.5s，取花瓣到本体的平均半径
+      // 固定 reach 模式 + 装填完成，先跑 2s 让弹簧收敛，再【只统计最后 30 帧】的平均半径。
+      // （统计全程会把起步阶段的"从中心弹出去"也算进来，噪声比要找的差异还大。）
       const measure = () => {
         p.mode = 'reach'; p.modeT = 1; p.slowTile = false;
         p.petals = []; p.petalGhosts = []; p.spin = 0;
         p.reload = p.slots.map((c) => (c ? { card: c, age: 99, dur: 1 } : null));
-        for (let i = 0; i < 90; i++) {
+        for (let i = 0; i < 120; i++) {
           // 与 update() 同一节奏：先推进公转角，再同步花瓣（否则目标点不动，测的不是真实轨道）
           p.spin += (p.rotMax || PETAL_SPIN) * ROT_SCALE * (1 / 60);
           p._syncPetals(1 / 60, srv.map, []);
         }
         let sum = 0, n = 0;
-        for (const b of p.petals) { sum += Math.hypot(b.x - p.x, b.y - p.y); n++; }
+        for (let i = 0; i < 30; i++) {
+          p.spin += (p.rotMax || PETAL_SPIN) * ROT_SCALE * (1 / 60);
+          p._syncPetals(1 / 60, srv.map, []);
+          for (const b of p.petals) { sum += Math.hypot(b.x - p.x, b.y - p.y); n++; }
+        }
         return n ? sum / n : 0;
       };
       let rNoFast = 0, rFast = 0;
@@ -522,7 +759,7 @@
       const bad = [];
       let detail = '';
       // ① 分派：瓢虫走通用游走、蜜蜂走 S 型、蜈蚣走连续弧线
-      for (const [slug, key] of [['ladybug', 'wander'], ['bee', 'bee'], ['centipede', 'centipede']]) {
+      for (const [slug, key] of [['ladybug', 'wander'], ['bee', 'bee'], ['centipede', 'centipede'], ['spider', 'spider']]) {
         const t = typeOf(slug);
         if (!t) continue;                                  // 未启用的生物跳过
         const m = new Mob(t, 0, 0, 1, 'common');
@@ -553,6 +790,89 @@
           ' 限速=' + cap.toFixed(1);
       }
       return { ok: bad.length === 0, detail: (bad.length ? bad.join(' ') : '分派正确') + detail };
+    });
+
+    // 8b1) 蜘蛛：数值表 / 速度口径 / 仇恨半径 / 中毒链路
+    check('sim: 蜘蛛（数值 + 速度 + 中毒）', () => {
+      const t = (typeof MOB_TYPES !== 'undefined') ? MOB_TYPES.find((x) => x && x.slug === 'spider') : null;
+      if (!t) return '缺少 spider（跳过）';
+      const m = new Mob(t, 0, 0, 1, 'rare');
+      const rs = (t.rarityStats && t.rarityStats.rare) || {};
+      const dataOk = rs.hp === 810 && rs.dmg === 135 && rs.armor === 7
+        && rs.poison === 360 && rs.poisonRate === 135 && rs.exp === 5;
+      const speedOk = Math.abs(m.chaseSpeed - 1.10 * PLAYER_BASE_SPEED) < 1e-6
+        && Math.abs(m.wanderSpeed - m.chaseSpeed * 0.9) < 1e-6;
+      const sightOk = m.sightR === 500;
+      // 中毒：按 rare 蜘蛛的速率给玩家挂毒，跑 1s 掉血应 ≈ 每秒伤害（135）
+      const p = game.player;
+      const saved = { hp: p.hp, dead: p.dead, hurtT: p.hurtT, killedBy: p.killedBy,
+        status: p.status ? p.status.slice() : null };
+      let dmg = 0;
+      try {
+        p.dead = false; p.hp = 1e6; p.killedBy = null;
+        StatusFX.remove(p, 'poison');
+        StatusFX.add(p, 'poison', { dur: m.poison / m.poisonRate, value: m.poisonRate });
+        for (let i = 0; i < 60; i++) p._tickPoison(1 / 60);
+        dmg = 1e6 - p.hp;
+      } finally {
+        p.hp = saved.hp; p.dead = saved.dead; p.hurtT = saved.hurtT; p.killedBy = saved.killedBy;
+        if (saved.status) p.status = saved.status; else StatusFX.remove(p, 'poison');
+      }
+      const dotOk = Math.abs(dmg - m.poisonRate) < 1;
+      const faceOk = (() => {                      // 中毒时脸部会换色 / 强制哭脸
+        const before = p.status;
+        StatusFX.add(p, 'poison', { dur: 1, value: 1 });
+        const on = StatusFX.has(p, 'poison');
+        StatusFX.remove(p, 'poison');
+        const off = StatusFX.has(p, 'poison');
+        p.status = before;
+        return on && !off;
+      })();
+      return {
+        ok: dataOk && speedOk && sightOk && dotOk && faceOk,
+        detail: `rare hp=${rs.hp} dmg=${rs.dmg} armor=${rs.armor} poison=${rs.poison}/${rs.poisonRate}s`
+          + ` 追击=${m.chaseSpeed.toFixed(1)} 游荡=${m.wanderSpeed.toFixed(1)} 视野=${m.sightR}`
+          + ` 1s中毒掉血=${dmg.toFixed(1)} 状态=${faceOk ? 'ok' : 'bad'}`
+      };
+    });
+
+    // 8b2) 蜈蚣断链继承仇恨 + 敌对生物"看见即追"
+    check('sim: 断链继承仇恨 + 敌对看见即追', () => {
+      const pick = (slug) => MOB_TYPES.find((t) => t && t.slug === slug);
+      const ct = pick('centipede'), sp = pick('spider');
+      if (!ct || !sp) return '缺少生物（跳过）';
+      const srv = game.net && game.net.debugServer;
+      // ① 断链：旧段首的仇恨表要能并进新段首。
+      //    common 蜈蚣是 Passive（noteThreat 直接忽略），这条测的是"继承"而不是阵营，
+      //    所以临时把两端 hostility 改成 hostile，结束还原。
+      const head = new Mob(ct, 0, 0, 1, 'common');
+      const tail = new Mob(ct, 0, 0, 1, 'common');
+      const src = { name: 'Probe', x: 10, y: 0, dead: false };
+      const savedHost = [head.hostility, tail.hostility];
+      head.hostility = 'hostile'; tail.hostility = 'hostile';
+      head.noteThreat(src, 50);
+      const inherited = (() => {
+        tail.threat.length = 0;
+        tail.inheritThreat(head);                    // 断链那一刻做的事
+        return tail.topThreat() === src;             // topThreat 返回的就是实体本身
+      })();
+      head.hostility = savedHost[0]; tail.hostility = savedHost[1];
+      // ② 敌对（蜘蛛）只要看得见目标，不需要先挨打就该有追击目标。
+      //    自测世界里的玩家可能已经死了，这里用一只"活的假玩家"做目标，与真实链路同构。
+      const alive = { name: 'P', x: 0, y: 0, dead: false };
+      const m = new Mob(sp, alive.x + 60, alive.y, 1, 'common');
+      m._map = srv ? srv.map : { lineBlocked: () => false };
+      m.threat.length = 0;
+      m.update(1 / 60, alive, m._map);
+      const aggro = m.topThreat() === alive;
+      const diag = tail.threat.map((t2) => ('ent===src:' + (t2.ent === src) + ' dmg:' + t2.dmg)).join(';');
+      return {
+        ok: inherited && aggro && m.hostility === 'hostile',
+        detail: `继承=${inherited}（tail.threat=${tail.threat.length} [${diag}]` +
+          ` top=${String(tail.topThreat() === src)} hostility=${tail.hostility}）` +
+          ` 看见即追=${aggro}（m.threat=${m.threat.length} 可见=${m.canSee(alive)}` +
+          ` 阵营=${m.hostility}）`
+      };
     });
 
     // 8c) 花瓣能力：8 种启用花瓣全部注册；脱轨/喷射/硬碰撞/吸引由引擎统一分派
@@ -1289,18 +1609,31 @@
       const sizeOf = (el) => (el ? el.getBoundingClientRect() : { width: 0, height: 0 });
       const s = sizeOf(stick), sa = sizeOf(a), sb = sizeOf(b);
       const small = Math.min(innerWidth, innerHeight);
+      // A/B 按钮必须严格贴屏幕右下角（16px + 安全区）：它们在 body 上独立成层
+      const btns = document.getElementById('tBtns');
+      const br = btns ? btns.getBoundingClientRect() : null;
+      const anchorOk = !!br
+        && Math.abs(br.right - (innerWidth - 16)) <= 2
+        && Math.abs(br.bottom - (innerHeight - 16)) <= 2;
+      // 移动端卡槽靠左下（桌面端仍居中）
+      const qb = document.getElementById('quickbar');
+      const qr = qb ? qb.getBoundingClientRect() : null;
+      const qbOk = !qr || qr.width === 0 || qr.left <= 24;
       const ok = !!layer && s.width > 0 && sa.width > 0 && sb.width > 0 &&
         s.width >= 84 - 1 && s.width <= 160 + 1 &&                       // 自缩放区间
         sa.width === sb.width &&                                          // A/B 同尺寸
-        s.width >= sa.width;                                              // 摇杆不小于按钮
-      // 还原：删掉测试创建的元素与状态
+        s.width >= sa.width &&                                            // 摇杆不小于按钮
+        anchorOk && qbOk;
+      // 还原：删掉测试创建的元素与状态（A/B 现在挂在 body 上，要单独删）
       if (layer) layer.remove();
+      if (btns) btns.remove();
       TouchCtl.on = false; TouchCtl.refs = null; TouchCtl._stick.id = -1;
       document.body.classList.remove('touch-ui');
       return {
         ok,
         detail: 'viewport=' + Math.round(small) + ' stick=' + Math.round(s.width) +
-          ' A=' + Math.round(sa.width) + ' B=' + Math.round(sb.width)
+          ' A=' + Math.round(sa.width) + ' B=' + Math.round(sb.width) +
+          ' 按钮贴角=' + anchorOk + ' 卡槽靠左=' + qbOk
       };
     });
 
@@ -1390,11 +1723,18 @@
       if (!sb) return '服务端没有可用花瓣（跳过）';
       const slot = sb.slotIndex;
       srv._destroyPetal(sb);
-      game.stepFrames(20, 1 / 60, false);          // 0.33s：25Hz 快照足够下发多次
-      const cAlive = pc.petals.filter((b) => !b.dead).length;
-      const sAlive = ps.petals.filter((b) => !b.dead).length;
-      const cr = pc.reload[slot];
-      const okReload = !cr || cr.age < (cr.dur || 0);
+      // 世界里还有敌对生物在真实战斗（蜘蛛会咬花瓣），等待期间可能又有别的花瓣碎了 ——
+      // 所以这里轮询收敛（最多 1s）：两端"存活数一致且该槽仍在装填"即视为同步完成，
+      // 而不是掐死 20 帧后硬比（那会被环境战斗的时序噪声打成假失败）。
+      let cAlive = 0, sAlive = 0, cr = null, okReload = false;
+      for (let i = 0; i < 60; i++) {
+        game.stepFrames(1, 1 / 60, false);
+        cAlive = pc.petals.filter((b) => !b.dead).length;
+        sAlive = ps.petals.filter((b) => !b.dead).length;
+        cr = pc.reload[slot];
+        okReload = !cr || cr.age < (cr.dur || 0);
+        if (cAlive === sAlive && okReload) break;
+      }
       return {
         ok: cAlive === sAlive && okReload,
         detail: 'client=' + cAlive + ' server=' + sAlive +

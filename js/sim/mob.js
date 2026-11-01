@@ -102,6 +102,13 @@ class Mob {
       : (type.armor != null) ? type.armor : (MOB_ARMOR[this.rarity] || 0);
     this.hurtT = 0;                     // 受伤红色滤镜剩余时间（0.1s）
     this.xpVal = rs ? (rs.exp || 0) : (4 + type.tier * 4);
+    // 中毒（蜘蛛等）：命中玩家后施加【总量 poison】的中毒，按每秒 poisonRate 均摊扣完。
+    // 结算在 LocalServer._combatTick（施加）与 Player 的状态推进（扣血），这里只是携带数值。
+    this.poison = (rs && rs.poison) || 0;
+    this.poisonRate = (rs && rs.poisonRate) || 0;
+    // 换帧步态（蜘蛛）：gait 累计"走过的距离"，渲染时按它选帧（见 render/spider-gait.js）
+    this.gaitSprite = !!type.gait;
+    this.gait = 0;
     // ---- 最后一步：挂上这个物种的 AI ----
     // init 会覆盖 wanderSpeed/chaseSpeed/turnRate 等（必须放在速度算完之后），
     // create 建立运行时状态。未注册的物种自动回落到通用游走。
@@ -144,6 +151,16 @@ class Mob {
   _addThreat(src, amount) {
     const e = this.threat.find((t) => t.ent === src);
     if (e) e.dmg += amount; else this.threat.push({ ent: src, dmg: amount });
+  }
+
+  // 并入另一只生物的仇恨表（多节生物断链时，新段首继承旧段首的账本）。
+  // 同一目标的伤害相加，于是"谁打得最狠就追谁"在新的一段里同样成立。
+  inheritThreat(from) {
+    if (!from || !from.threat || !from.threat.length) return;
+    for (const t of from.threat) {
+      if (!t || !t.ent || t.ent.dead) continue;
+      this._addThreat(t.ent, t.dmg || 0);
+    }
   }
 
   // 记仇恨的唯一入口（由 hurt() 调用，amount = 本击【实际造成】的伤害）。
@@ -249,7 +266,20 @@ class Mob {
   // 调试碰撞箱(/pending crash)就会显示空或残留的旧外形。
   _ensureShape() {
     if (this.shape) return;
-    let ct = SpriteStore.contour('mob' + (this.artSvg || this.svg), this.drawSize);
+    // 换帧步态的生物（蜘蛛）：碰撞轮廓用【去掉腿的身体】——
+    // 腿只是表现，计入轮廓会让碰撞箱大出一圈、还会随步态抖动。
+    // 身体检材由 SpiderGait.bodyUrl() 现场生成（同一次素材解析），加载就绪后才用。
+    let shapeKey = 'mob' + (this.artSvg || this.svg);
+    if (this.gaitSprite && typeof SpiderGait !== 'undefined') {
+      const url = SpiderGait.bodyUrl();
+      if (url) {
+        if (!SpriteStore.ready('mob21_body') && !SpriteStore.images['mob21_body']) {
+          SpriteStore.load('mob21_body', url);
+        }
+        if (SpriteStore.ready('mob21_body')) shapeKey = 'mob21_body';
+      }
+    }
+    let ct = SpriteStore.contour(shapeKey, this.drawSize);
     // 本节贴图缺失时退回物种贴图（多节生物 = 整条外形，虽然不准，但总比没有碰撞/不可见好）
     if (!ct && this.artSvg && this.artSvg !== this.svg) {
       ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
@@ -309,6 +339,7 @@ class Mob {
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.squash = damp(this.squash, 0, 10, dt);
     tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
+    if (typeof StatusFX !== 'undefined') StatusFX.tick(this, dt);   // 状态效果时长推进
     // 碰撞外形：统一走 _ensureShape（客户端 draw 也调它）——
     // 之前这里内联复制了一份一模一样的逻辑，改一处漏一处，正是"两套碰撞"的来源之一。
     if (!this.shape) this._ensureShape();
@@ -337,10 +368,20 @@ class Mob {
     // —— 1) 问 AI：现在想怎么动。AI 只给"移动欲望"，不直接改坐标 ——
     // 这里只服务【段首】（头节）：非头节在上面的 _chainLocked 分支就已返回，
     // 位置全部由 _solveChains 沿头的真实路径解算（不是"跟随前一节"）。
+    // 敌对型（aggressive，如蜘蛛）：看见即仇 —— 不必先挨打才反击。
+    // 只记 0 伤害的"存在感"：优先级仍由真实伤害决定，不会抢走真正仇恨目标的位次。
+    if (this.hostility === 'hostile' && player && !player.dead && this.canSee(player)) {
+      this._addThreat(player, 0);
+    }
     const want = MobAI.step(this.ai, dt, this, player);
     // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
     // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
     MobAI.limitSpeed(this, want);
+    // 状态效果（蛛网减速等）：统一乘在"想走多快"上，AI 与移动之间只有这一个入口。
+    if (typeof StatusFX !== 'undefined') {
+      const k = StatusFX.speedMul(this);
+      if (k !== 1) { want.x *= k; want.y *= k; }
+    }
     // —— 2) 底层引擎响应欲望：与主角同一套指数阻尼，渐渐起步、渐渐停住 ——
     const desire = (want.x !== 0 || want.y !== 0);
     const rate = desire ? 9 : 4;        // 9 = 起步(约0.3s到位)，4 = 收尾(约0.5s停住)
@@ -416,8 +457,35 @@ class Mob {
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     let bodyAlpha = alpha;
+    // 步态（蜘蛛等）：按本帧位移累计 gait，站立不动时腿就停住。
+    // 在 draw 里算而不是 update 里，是为了让客户端视图（不走 update）也同步摆动。
+    if (this.gaitSprite && !this.dead) {
+      if (this._gaX != null) {
+        const gd = Math.hypot(this.x - this._gaX, this.y - this._gaY);
+        if (gd > 0.01 && gd < this.drawSize) this.gait += gd;   // 传送/回插不计数
+      }
+      this._gaX = this.x; this._gaY = this.y;
+      if (typeof SpiderGait !== 'undefined') SpiderGait.ensure();
+    }
+    const gaitFrame = (this.gaitSprite && typeof SpiderGait !== 'undefined' && SpiderGait.ready())
+      ? SpiderGait.frameCanvas(this.gait) : null;
     // 受击只做红色滤镜（hurtT -> 下方 artRedCanvas 红闪），不再叠加白闪剪影。
-    drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
+    if (gaitFrame) {
+      // 换帧贴图与 drawMob 完全同变换（同一 pivot、同一尺寸），只是图像来自步态帧
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      if (rot) ctx.rotate(rot);
+      if (scale && scale !== 1) ctx.scale(scale, scale);
+      if (alpha != null) ctx.globalAlpha = alpha;
+      const pv = SpriteStore.mobPivot(key);
+      ctx.drawImage(gaitFrame,
+        -this.drawSize / 2 - pv.x * this.drawSize,
+        -this.drawSize / 2 - pv.y * this.drawSize,
+        this.drawSize, this.drawSize);
+      ctx.restore();
+    } else {
+      drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
+    }
     // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。
     // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
     // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。

@@ -35,6 +35,8 @@ const MOB_ART_ROT = {
   '12': Math.PI * 3 / 4,
   '12_h': Math.PI * 3 / 4,
   '12_b': Math.PI * 3 / 4,
+  // 蜘蛛：头在图内朝右上 45°（-45°），补偿 +45° 使头始终朝向移动方向
+  '21': Math.PI / 4,
 };
 // 瓢虫描边圈独立图层（assets/entities/3_ring.svg，main.js 预加载）：
 // 渲染专用的生物素材统一放在 assets/entities/，assets/mobs/ 只存原始贴图。

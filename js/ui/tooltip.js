@@ -91,6 +91,21 @@ Object.assign(UI, {
               labelColor: bonusColor
             });
           }
+          // 场地型（Web）：半径用 Max Mob Rarity 同色，持续时间用 Rare 的稀有度色
+          if (t.radius > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/RadiusLabel', 'Radius:'),
+              value: t.radius,
+              labelColor: bonusColor
+            });
+          }
+          if (t.duration > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/DurationLabel', 'Duration:'),
+              value: fmtNum(t.duration) + 's',
+              labelColor: (typeof RARITIES !== 'undefined' && RARITIES.rare) ? RARITIES.rare.color : '#4D52E3'
+            });
+          }
         }
         // 行宽 = 标签宽 + 间距 + 数值宽（与绘制时同一字体、同一算法，不会互相压字）
         let statW = 0;
@@ -486,6 +501,8 @@ Object.assign(UI, {
         this._mmLast = now;
         this._mmTick(dt);
         this._reloadTick(dt);   // 主槽装填阴影 + 水缸阴影推进（带平滑）
+        // 状态效果条：按获得顺序刷新（内部有签名判重，没变化时零开销）
+        this.renderStatus(window.__game && window.__game.player);
         if (typeof Chat !== 'undefined') Chat.tick(dt);   // 聊天漂浮态渐隐推进
         const target = this._tipOn && this._tip ? 1 : 0;
         const cur = this._tipAlpha;

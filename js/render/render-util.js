@@ -47,6 +47,25 @@ function roundRectPath(ctx, x, y, w, h, r) {
 
 // 绘制生物贴图：用「裁剪到实际图案」的版本，使图案正好撑满 size（= 碰撞箱直径）。
 // 普通 drawSprite 按 viewBox 绘制，生物 SVG 外圈有一大片透明留白，图案会明显小一圈。
+// 场地型实体（蛛网）列表的统一绘制：生成时从中心快速渐大弹出（WEB_POP_T），
+// 到期由持有方移除（这里不渐隐 —— 移除走通用退场幽灵，避免双重动画）。
+// list 元素 = { x, y, r, t, dur, pop }；img = 蛛网贴图（PetalFX.netImage()）。
+function drawWebList(ctx, list, img) {
+  if (!list || !list.length || !img) return;
+  for (const f of list) {
+    // 0 -> 1 的弹出：三次缓出 + 一点点过冲，观感是"啪地张开"
+    const p = clamp(f.pop, 0, 1);
+    const grow = 1 - Math.pow(1 - p, 3);
+    const over = 1 + 0.16 * Math.sin(Math.PI * p);
+    const d = f.r * 2 * grow * over;
+    if (!(d > 1)) continue;
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(img, f.x - d / 2, f.y - d / 2, d, d);
+    ctx.restore();
+  }
+}
+
 function drawMob(ctx, key, size, x, y, rot, scale, alpha, white) {
   ctx.save();
   ctx.translate(x, y);
