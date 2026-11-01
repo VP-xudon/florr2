@@ -232,8 +232,10 @@
       // 把两端血量抬高，保证测的是"击退"而不是"被秒"。
       p.maxHp = p.hp = 1e6;
       srv.player.maxHp = srv.player.hp = 1e6;
-      // 必须挑一只有伤害的生物：dmg=0 的生物即使命中也不会走体伤分支
-      const view = game.mobs.find((x) => !x.dead && x.dmg > 0);
+      // 必须挑一只有伤害的生物：dmg=0 的生物即使命中也不会走体伤分支。
+      // 【多节生物（蜈蚣）不行】：它的体节位置每帧被链解算覆盖，钉在玩家身上的坐标
+      // 下一帧就被拉回原链 —— 永远碰不到玩家（表现为"命中=0"的偶发失败）。
+      const view = game.mobs.find((x) => !x.dead && x.dmg > 0 && x.segIdx == null);
       if (!view) return '场上没有可测试的生物';
       const sm = srv.ents.find((x) => x.netId === view.netId);
       if (!sm) return '服务端未找到对应生物';
