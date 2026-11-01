@@ -806,16 +806,19 @@
       // 中毒：按 rare 蜘蛛的速率给玩家挂毒，跑 1s 掉血应 ≈ 每秒伤害（135）
       const p = game.player;
       const saved = { hp: p.hp, dead: p.dead, hurtT: p.hurtT, killedBy: p.killedBy,
-        status: p.status ? p.status.slice() : null };
+        status: p.status ? p.status.slice() : null,
+        invuln: p.invuln, hurtInvuln: p.hurtInvuln, invulnSrc: p.invulnSrc };
       let dmg = 0;
       try {
         p.dead = false; p.hp = 1e6; p.killedBy = null;
+        p.invuln = 0; p.hurtInvuln = 0; p.invulnSrc = {};   // 无敌不吃毒：测 DoT 必须先摘掉无敌
         StatusFX.remove(p, 'poison');
         StatusFX.add(p, 'poison', { dur: m.poison / m.poisonRate, value: m.poisonRate });
         for (let i = 0; i < 60; i++) p._tickPoison(1 / 60);
         dmg = 1e6 - p.hp;
       } finally {
         p.hp = saved.hp; p.dead = saved.dead; p.hurtT = saved.hurtT; p.killedBy = saved.killedBy;
+        p.invuln = saved.invuln; p.hurtInvuln = saved.hurtInvuln; p.invulnSrc = saved.invulnSrc;
         if (saved.status) p.status = saved.status; else StatusFX.remove(p, 'poison');
       }
       const dotOk = Math.abs(dmg - m.poisonRate) < 1;

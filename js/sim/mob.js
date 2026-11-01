@@ -467,22 +467,39 @@ class Mob {
       this._gaX = this.x; this._gaY = this.y;
       if (typeof SpiderGait !== 'undefined') SpiderGait.ensure();
     }
-    const gaitFrame = (this.gaitSprite && typeof SpiderGait !== 'undefined' && SpiderGait.ready())
-      ? SpiderGait.frameCanvas(this.gait) : null;
+    const gait = (this.gaitSprite && typeof SpiderGait !== 'undefined' && SpiderGait.ready())
+      ? SpiderGait.legs(this.drawSize, this.gait) : null;
     // 受击只做红色滤镜（hurtT -> 下方 artRedCanvas 红闪），不再叠加白闪剪影。
-    if (gaitFrame) {
-      // 换帧贴图与 drawMob 完全同变换（同一 pivot、同一尺寸），只是图像来自步态帧
+    if (gait) {
+      // 八条腿【矢量绘制】（在身体之下）+ 无腿身体贴图：
+      // 腿的相位由 gait 连续驱动 —— 不预渲染帧，任何缩放/角度都是矢量锐边。
+      // ① 腿：与本体同一变换（pivot 平移 + 旋转 + 挤压），在 artCanvas 局部坐标系里画
+      const keyBody = 'mob21_body';
+      if (!SpriteStore.ready(keyBody)) {
+        const url = SpiderGait.bodyUrl();
+        if (url && !SpriteStore.images[keyBody]) SpriteStore.load(keyBody, url);
+      }
       ctx.save();
       ctx.translate(this.x, this.y);
       if (rot) ctx.rotate(rot);
       if (scale && scale !== 1) ctx.scale(scale, scale);
       if (alpha != null) ctx.globalAlpha = alpha;
-      const pv = SpriteStore.mobPivot(key);
-      ctx.drawImage(gaitFrame,
-        -this.drawSize / 2 - pv.x * this.drawSize,
-        -this.drawSize / 2 - pv.y * this.drawSize,
-        this.drawSize, this.drawSize);
+      const pv = SpriteStore.mobPivot(keyBody);   // 与身体贴图同一轴心，腿才压得准
+      ctx.translate(-this.drawSize / 2 - pv.x * this.drawSize,
+        -this.drawSize / 2 - pv.y * this.drawSize);
+      ctx.strokeStyle = '#333';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = gait.lw;
+      ctx.beginPath();
+      for (const l of gait.legs) {
+        ctx.moveTo(l[0], l[1]);
+        ctx.quadraticCurveTo(l[2], l[3], l[4], l[5]);
+      }
+      ctx.stroke();
       ctx.restore();
+      // ② 身体（无腿贴图，压在腿上面）
+      drawMob(ctx, keyBody, this.drawSize, this.x, this.y, rot, scale, alpha, false);
     } else {
       drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
     }

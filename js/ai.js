@@ -361,6 +361,8 @@ MobAI.register('spider', {
     mob.chaseSpeed = SPIDER_CHASE_K * PLAYER_BASE_SPEED;
     mob.wanderSpeed = mob.chaseSpeed * SPIDER_WANDER_K;
     mob.speed = mob.wanderSpeed;
+    // 单次游荡距离 ×2.0（通用是 120~280）：蜘蛛小跑着乱窜，一趟要跑得更远
+    mob.wanderRange = [120 * 2.0, 280 * 2.0];
   },
   create() {
     const ai = MobAI.defs.wander.create();

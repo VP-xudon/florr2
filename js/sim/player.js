@@ -1,6 +1,14 @@
 // sim/player.js — 玩家实体：移动/装填/花瓣轨道/无敌/死亡状态
 'use strict';
 
+// 颜色插值（中毒脸的平滑过渡用）：#rrggbb -> #rrggbb
+function lerpHex(a, b, t) {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+  return '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
 class Player {
   constructor() {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
@@ -22,6 +30,7 @@ class Player {
     this.invulnSrc = {};        // 无敌来源表：{ 'spawn'|'hurt'|'petal:xxx': 到期时刻 }
     this.invulnTotal = 0;       // 本段无敌总时长（供光晕/血条做淡入淡出包络）
     this.invulnA = 0;           // 无敌视觉强度（平滑 0..1：光晕亮度、血条金白程度）
+    this.poisonFx = 0;          // 中毒视觉强度（平滑 0..1：脸色/嘴型过渡）
     this.hurtInvuln = 0;        // 受伤无敌帧计时（只免伤、不出任何无敌特效）
     this.armor = 0;             // 花朵护甲：受击结算 = max(攻-甲, 0)
     this.bodyDmg = FLOWER_BODY_DMG;  // 花朵本体攻击（体伤）；recompute() 会再次同步
@@ -127,9 +136,11 @@ class Player {
 
   // 中毒：按 StatusFX 记录的 dps 每帧连续扣血。
   // 刻意【不走 hurt()】——它有 0.2s 受伤无敌帧，会把 DoT 吃掉大半（1 秒只剩 5 次）。
+  // 但【无敌就是无敌】：出生/召唤无敌期间不吃毒（用户口径），受伤无敌帧同样挡毒。
   // 死亡仍走同一条 die()，所以表现/复活流程完全一致。
   _tickPoison(dt) {
     if (this.dead || typeof StatusFX === 'undefined') return;
+    if (this.invuln > 0 || this.hurtInvuln > 0) return;   // 无敌不吃毒
     const rec = StatusFX.get(this, 'poison');
     if (!rec || !(rec.value > 0)) return;
     const dmg = rec.value * dt;
@@ -192,6 +203,9 @@ class Player {
     this.dead = false; this.deathTimer = 0; this.deathRot = 0;
     this.hurtT = 0; this.flash = 0; this.killedBy = null;
     this.hurtInvuln = 0;
+    // 状态效果一并清空：死亡重生不该继承毒伤（用户口径：死亡后毒伤清零）
+    if (typeof StatusFX !== 'undefined') this.status = [];
+    this.poisonFx = 0;                     // 脸色/嘴型从"中毒"平滑回到正常
     this.invuln = 0; this.invulnSrc = {}; this.invulnTotal = 0; this.invulnA = 0;
     this.age = 0;
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
@@ -267,6 +281,8 @@ class Player {
     if (typeof StatusFX !== 'undefined') {
       StatusFX.tick(this, dt);      // 状态效果时长
       this._tickPoison(dt);         // 中毒持续掉血
+      // 中毒的【视觉强度】：0..1 平滑过渡（脸色/嘴型都按它插值，不硬切）
+      this.poisonFx = damp(this.poisonFx || 0, StatusFX.has(this, 'poison') ? 1 : 0, 6, dt);
     }
     // 无敌视觉强度平滑跟随：进入/退出都是渐变，绝不硬切换（光晕亮度与血条金白共用它）。
     // 只跟随 invuln（出生/召唤/花瓣类）；受伤无敌帧走独立的 hurtInvuln，不产生任何视觉。
@@ -1018,10 +1034,10 @@ class Player {
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
     // 半径乘 spawnPop：出生/重生时 Q 弹弹出（过冲回落），五官全按 R 缩放同步跟随。
     const R = this.r * 1.2 * spawnPop(this.age);   // 脸部半径
-    // 中毒：整张脸换成淡紫（描边同步换色），嘴强制哭脸 —— 见下方 bulge。
-    const poisoned = (typeof StatusFX !== 'undefined') && StatusFX.has(this, 'poison');
-    const FACE_FILL = poisoned ? '#d9bce8' : '#fae26a';
-    const FACE_LINE = poisoned ? '#a882c6' : '#dfbc4e';
+    // 中毒：整张脸平滑过渡到淡紫（描边同步），嘴平滑过渡到哭脸 —— 见下方 mood/bulge。
+    const pf = clamp(this.poisonFx || 0, 0, 1);
+    const FACE_FILL = lerpHex('#fae26a', '#d9bce8', pf);
+    const FACE_LINE = lerpHex('#dfbc4e', '#a882c6', pf);
     ctx.save();
     // 脸
     ctx.fillStyle = FACE_FILL;            // 正常：介于改前(#f7db45)与改后(#fce98e)之间
@@ -1075,8 +1091,8 @@ class Player {
     ctx.lineWidth = R * 0.07;
     ctx.lineCap = 'round';
     const mHw = R * 0.2408, mY = this.y + R * 0.4032;
-    // 正=向下鼓(笑)，0=直线，负=向上鼓(哭)；中毒时【强制哭脸】（与模式无关）
-    const mood = poisoned ? 1 : this.modeT;
+    // 正=向下鼓(笑)，0=直线，负=向上鼓(哭)；中毒强度平滑推进哭脸（与模式取更"哭"的那个）
+    const mood = Math.min(1, Math.max(this.modeT, pf));
     const bulge = R * 0.1133 * (1 - 2 * mood);
     ctx.beginPath();
     ctx.moveTo(this.x - mHw, mY);
