@@ -169,6 +169,50 @@ class LocalServer {
     return null;
   }
 
+  // ---------------- 醒/睡分区（服务端性能的核心） ----------------
+  // 权威列表 this.ents 里是【全图人口】（要进快照给小地图看），但真正需要跑 AI/物理的
+  // 只有玩家附近的那批（MOB_ACTIVE_R = 2200px）。
+  // 以前每一步都遍历全图 4000+ 只只为判断一句"离玩家远不远"，实测占服务端步进的
+  // 4.3ms/步（总 6.5ms/步）—— 这是帧率的第一杀手。
+  // 现在拆成两张表：_act（醒着）/ _rest（睡着）。
+  //   · 每步只遍历 _act；
+  //   · _rest 每 0.2s 扫一次，把够近的叫醒（_wakeNearby）；
+  //   · 数量对不上时自动重建（_rebuildPartition）—— 兜住"外部直接往 ents 塞个体"。
+  _rebuildPartition() {
+    const act = this._act || (this._act = []);
+    const rest = this._rest || (this._rest = []);
+    act.length = 0; rest.length = 0;
+    const p = this.player;
+    if (!p) return;
+    const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
+    for (const m of this.ents) {
+      // 死掉的个体必须留在"醒着"这张表里：它的退场动画还要继续推进（ExitFX.tick）。
+      if (m.dead || dist2(m.x, m.y, p.x, p.y) <= actR2) act.push(m);
+      else rest.push(m);
+    }
+  }
+
+  _wakeNearby() {
+    const rest = this._rest, act = this._act;
+    const p = this.player;
+    if (!p || !rest) return;
+    const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
+    let n = 0;
+    for (let i = 0; i < rest.length; i++) {
+      const m = rest[i];
+      if (m.dead || dist2(m.x, m.y, p.x, p.y) <= actR2) { act.push(m); continue; }
+      rest[n++] = m;
+    }
+    rest.length = n;
+  }
+
+  // 新个体登记：同时进权威列表与醒/睡分区（否则它会一直不跑 AI，看起来像木桩）。
+  _addEnt(m) {
+    this.ents.push(m);
+    (this._act || (this._act = [])).push(m);
+    return m;
+  }
+
   // ---------------- 生物生成（按地图生成表，服务端全局管理） ----------------
   // 生成表是【地图/服务端数据】，不围绕玩家转：
   //   · 每个 spawn_mobs 区有自己的目标数量 = 面积(格) × density × SPAWN_PER_TILE（单区封顶）
@@ -278,7 +322,7 @@ class LocalServer {
       m.x = pos[0]; m.y = pos[1];
       m.spawnZone = zone || null;
       m.netId = this.nextId++;
-      this.ents.push(m);
+      this._addEnt(m);
       this._announceBossSpawn(m);          // super / eternal 才真的播（内部判）
     }
     return true;
@@ -333,7 +377,7 @@ class LocalServer {
       // 否则"跟随"和"刚性解算"两套逻辑会互相打架（表现为原地打转、左右抽搐）。
       m._chainLocked = !!prev;
       if (prev) prev._next = m;                          // 后一节（用于刚性粘合解算）
-      this.ents.push(m);
+      this._addEnt(m);
       segs.push(m);
       prev = m;
       // 沿弧推进到下一节的位置
@@ -435,7 +479,7 @@ class LocalServer {
     m.x = x; m.y = y;
     m.spawnZone = null;
     m.netId = this.nextId++;
-    this.ents.push(m);
+    this._addEnt(m);
     return true;
   }
 
@@ -444,7 +488,7 @@ class LocalServer {
     if (!type) return null;
     const m = new Mob(type, x, y, level || 1, rarity);
     m.netId = this.nextId++;
-    this.ents.push(m);
+    this._addEnt(m);
     this._announceBossSpawn(m);            // /summon 等走通用工厂的生成同样播报
     return m;
   }
@@ -738,6 +782,11 @@ class LocalServer {
 
   // 权威推进：玩家副本移动 -> 生物 AI/移动 -> 互斥 -> 战斗（固定 25Hz）
   step(dt) {
+    // ---- TEMP PROFILE ----
+    const _pr = this._prof || (this._prof = { t: {}, n: 0 });
+    let _t0 = performance.now();
+    const _mk = (k) => { const n = performance.now(); _pr.t[k] = (_pr.t[k] || 0) + (n - _t0); _t0 = n; };
+    // ---- END TEMP PROFILE ----
     this.t += dt;
     const p = this.player;
     if (!p || !this.map) return;
@@ -749,9 +798,13 @@ class LocalServer {
     const _sup = PetalFX._suppress;
     PetalFX._suppress = true;
     try {
-      if (!p.dead) p.update(dt, { x: this._input.dx, y: this._input.dy }, this.map, this.ents);
-      else p.update(dt, { x: 0, y: 0 }, this.map, this.ents);
+      // 只把"醒着的"生物交给玩家：花瓣能碰到的生物一定在 MOB_ACTIVE_R 内，
+      // 而全量 ents（4000+）每帧扫一遍纯属浪费（这一项曾占 1.5ms/步）。
+      const near = this._act || this.ents;
+      if (!p.dead) p.update(dt, { x: this._input.dx, y: this._input.dy }, this.map, near);
+      else p.update(dt, { x: 0, y: 0 }, this.map, near);
     } finally { PetalFX._suppress = _sup; }
+    _mk('player');
 
     // 1.2) 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
     this.cpAcc = (this.cpAcc || 0) + dt;
@@ -777,18 +830,38 @@ class LocalServer {
     // 2) 生物：AI + 移动 + 退场回收
     //    远处生物【休眠】：全图人口按生成表铺开，但只有近距离的才跑 AI/物理，
     //    所以"全图 100+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
+    //
+    //    【醒/睡分区】= 把 this.ents 拆成 _act（醒着的，跑 AI/物理）与 _rest（睡着的，什么都不做）。
+    //    以前每一步都要遍历全部 4000+ 只，只为判断一句"离玩家远不远" ——
+    //    那一次全量扫描实测占服务端步进的 4.3ms/步（总 6.5ms），是帧率第一杀手。
+    //    现在：每步只遍历 _act；_rest 每 0.2s 扫一次，把够近的叫醒。
+    //    代价：醒/睡边界最多 0.2s 延迟（MOB_ACTIVE_R = 2200px，玩家 0.2s 走不到 150px），体感零影响。
     const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
+    const act = this._act || (this._act = []);
+    const rest = this._rest || (this._rest = []);
     // 【醒着的个体收进一个复用数组】：下面"玩家推挤 / 两两推挤 / 战斗"三步直接遍历它，
-    // 不再每步把全图 4000+ 只各扫一遍（每一步 4 次全量扫描是 17ms/步里最大的一块）。
     // 数组本体复用（length = 0），不产生垃圾。
     const awake = this._awake || (this._awake = []);
     awake.length = 0;
+    // 分区自愈：外部代码（/summon、生成器）若直接往 this.ents 塞了个体，分区会缺人 ——
+    // 数量对不上就重建一次（否则新个体永远不跑 AI，看起来像"召唤出来是木桩"）。
+    if (act.length + rest.length !== this.ents.length) this._rebuildPartition();
+    // 周期性唤醒：玩家会走动，睡着的个体里够近的要叫醒。
+    this._sleepAcc = (this._sleepAcc || 0) + dt;
+    if (this._sleepAcc >= 0.2) { this._sleepAcc = 0; this._wakeNearby(); }
     let needCompact = false;
-    for (const m of this.ents) {
+    let actN = 0;
+    for (let i = 0; i < act.length; i++) {
+      const m = act[i];
       if (m.dead) {
-        if (m.deathTimer > FADE_T) needCompact = true;   // 退场播完：本步末尾才真正移除
+        // 退场播完（ExitFX.done）才回收：实体离场必须先播完通用退场动画，
+        // 不允许在这里直接 splice —— 那会让生物"凭空消失"。
+        if (ExitFX.done(m)) { needCompact = true; continue; }
       } else if (dist2(m.x, m.y, p.x, p.y) > actR2) {
-        m.sleeping = true; continue;
+        // 走远了 -> 转休眠（进 _rest，本步不再更新；它仍然留在 this.ents 里参与快照/小地图）
+        m.sleeping = true;
+        rest.push(m);
+        continue;
       }
       m.sleeping = false;
       // 多节生物：前节已死 -> 本节升为"头"（重新跑自己的 AI 驱动它后面那整段）
@@ -808,10 +881,14 @@ class LocalServer {
       m._followPt = null;
       m.update(dt, p, this.map);
       if (!m.dead) awake.push(m);
+      act[actN++] = m;
     }
+    act.length = actN;
     // 只在真有"退场播完"的个体时才重建数组（filter 会分配 4000+ 元素的新数组，
     // 每步都做就是纯 GC 压力）。
-    if (needCompact) this.ents = this.ents.filter((m) => !(m.dead && m.deathTimer > FADE_T));
+    // 【回收口径】只摘"退场动画已播完"的个体（ExitFX.done）—— 退场没播完就还在场。
+    if (needCompact) this.ents = this.ents.filter((m) => !ExitFX.done(m));
+    _mk('mobs');
 
     // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
     this.spawnT = (this.spawnT || 0) + dt;
@@ -826,6 +903,9 @@ class LocalServer {
       for (let i = 0; i < awake.length; i++) {
         const m = awake[i];
         if (m.dead) continue;                    // 休眠生物离玩家很远，不可能接触
+        // 大招期间"定在原地"的生物（蜘蛛自转）：不参与推挤 —— 推了它也推不动，
+        // 反过来还会把它的锚点拉偏（它必须严格原地自转）。
+        if (m.ultHold) continue;
         // 与伤害结算 / F3 碰撞箱同一套几何：生物的 SVG 轮廓（physicsPushMob 内部按轮廓推挤）。
         // 被粘合的链节【只推玩家】：节的位置每帧末由轨迹刚性解算，推它会被覆盖并撕开整条。
         if (m._chainLocked) physicsPushPlayerOnly(p, m);
@@ -866,6 +946,8 @@ class LocalServer {
           for (let i = 0; i < arr.length; i++) {
             const b = arr[i];
             if (b._pseq <= a._pseq) continue;         // 同一对只算一次
+            // 大招期间定在原地的生物不参与推挤（见上面玩家 vs 生物那段）
+            if (a.ultHold || b.ultHold) continue;
             // 多节生物【直接相连的两节】之间不做推挤：
             // 它们本来就是故意重叠的（见 _solveChains 的 GLUE），
             // 推挤会把链硬生生推开 -> 错位、拉伸、尾节脱节、并给速度顶出巨大冲量。
@@ -882,6 +964,7 @@ class LocalServer {
       this._combatAcc -= 1 / 25;
       this._combatTick();
     }
+    _mk('push+combat');
 
     // 6) 多节生物【刚性粘合】—— 必须放在【最后】。
     // 前面所有会改坐标的步骤（AI 移动、玩家推挤、生物两两推挤、战斗击退）都跑完之后
@@ -893,6 +976,26 @@ class LocalServer {
     // 7) 场地型实体（玩家的 Web 网 / Legend+ 蜘蛛自铺网）：状态施加 + 网的寿命推进。
     // 放在坐标全部定稿之后 —— 否则算出来的是"上一步的位置"。
     this._fieldTick(dt);
+    _mk('chain+field');
+    _pr.n++;
+  }
+
+  // 场地实体产出用的"原语"：MobFX 认识要什么（蛛网 / 倍率），服务器只管怎么造。
+  // 建一次复用（每帧 new 对象是纯浪费）。
+  _fieldCtx() {
+    if (!this._fctx) {
+      const self = this;
+      this._fctx = {
+        webType() {
+          self._webType = self._webType
+            || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
+          return self._webType;
+        },
+        webDur() { return SPIDER_WEB_DUR; },
+        addWeb(ent) { self.mobWebs.add(ent); },
+      };
+    }
+    return this._fctx;
   }
 
   // 场地型实体的判定：与放置者敌对的生物进入半径 -> 获得对应状态效果。
@@ -911,6 +1014,7 @@ class LocalServer {
         // 并不代表它是玩家这边的）。之前按 hostility==='passive' 跳过，
         // 而 common/unusual 的瓢虫恰好都是 Passive —— 于是"网好像完全不起作用"。
         for (const w of webs) {
+          if (w.exiting) continue;              // 正在退场的网不再生效
           const r = w.r || 0;
           if (!(r > 0)) continue;
           const dx = m.x - w.x, dy = m.y - w.y;
@@ -921,30 +1025,40 @@ class LocalServer {
       }
     }
 
-    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺）：给踩进去的【玩家】挂减速 ----
-    // 蜘蛛自己铺的网不会减自己的速（它根本不在这个判定里）。
-    this.mobWebs = this.mobWebs || [];
-    for (let i = this.mobWebs.length - 1; i >= 0; i--) {
-      const w = this.mobWebs[i];
+    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）----
+    // 给踩进去的【玩家】挂减速。蜘蛛自己铺的网不会减自己的速（它根本不在这个判定里）。
+    // 【退场强绑定】网到期不是凭空消失，而是进入通用退场（放大 + 渐隐），
+    // 退场播完才由 ExitFX 回收（受控实体表拿不到原始数组，外部无法直接删）。
+    this.mobWebs = this.mobWebs || createExitList();
+    for (const w of this.mobWebs) {
+      if (w.exiting) continue;                 // 正在退场：不再计时，也不再施加效果
       w.t += dt;
       w.pop = Math.min(1, w.pop + dt / WEB_POP_T);
-      if (w.t >= w.dur) this.mobWebs.splice(i, 1);
+      if (w.t >= w.dur) ExitFX.begin(w);
     }
+    this.mobWebs.sweep(dt);                     // 唯一的回收点
     for (const m of src) {
-      if (m.dead || m.sleeping || !m.gaitSprite) continue;
+      if (m.dead || m.sleeping) continue;
+      // ---- 大招产出（引擎驱动）：MobFX 认识"蜘蛛要一张 2 倍半径的蛛网"，
+      //      服务器只提供"怎么造一张网"的原语（ctx），物种知识留在 MobFX 里。
+      if (m.ultFieldReq) {
+        const req = m.ultFieldReq; m.ultFieldReq = null;
+        MobFX.produceField(m, req, this._fieldCtx());
+      }
+      // ---- 常规自铺网（Legend+ 蜘蛛）----
+      if (!m.gaitSprite) continue;
       if (RARITY_ORDER.indexOf(m.rarity) < RARITY_ORDER.indexOf('legendary')) continue;
+      if (m.ultActive) continue;                // 大招期间不铺普通网（正在放大招）
       m.webT = (m.webT || 0) + dt;
       if (m.webT >= SPIDER_WEB_EVERY) {
         m.webT = 0;
         // 网的大小 = 该蜘蛛稀有度对应的 Web 花瓣半径（数据表，不硬编码）
-        this._webType = this._webType
-          || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
-        const r = this._webType ? (petalStatsFor(this._webType, m.rarity).radius || 120) : 120;
-        this.mobWebs.push({ x: m.x, y: m.y, r, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
+        MobFX.produceField(m, { kind: 'web', mul: 1 }, this._fieldCtx());
       }
     }
     if (this.mobWebs.length && !p.dead) {
       for (const w of this.mobWebs) {
+        if (w.exiting) continue;                 // 正在退场的网不再生效
         const dx = p.x - w.x, dy = p.y - w.y;
         if (dx * dx + dy * dy <= w.r * w.r) {
           StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
@@ -1564,6 +1678,10 @@ class LocalServer {
       //   deathTimer / deathRot = 死亡放大渐隐 / 尸体旋转角
       o.hurtT = m.hurtT || 0; o.flash = m.flash || 0; o.squash = m.squash || 0;
       o.deathTimer = m.deathTimer || 0; o.deathRot = m.deathRot || 0;
+      // 大招状态（Super / Eternal 专属）：服务端权威，客户端据此做表现镜像
+      // （自转朝向本来就下发；这里补的是"大招进行中"这个开关：
+      //   腿要继续摆、客户端要在大招结束时补一张超大蛛网）。
+      o.ultActive = m.ultActive ? 1 : 0;
       n++;
     }
     buf.length = n;

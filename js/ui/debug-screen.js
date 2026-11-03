@@ -123,13 +123,23 @@ const DebugScreen = {
       this._set('inv', inv > 0 ? inv.toFixed(1) + ' s' : '—');
     }
 
-    this._set('mobs', String(g.mobs.length));
+    // 生物总数 = 近处视图 + 远端点（远端个体客户端不建视图，只留坐标给小地图）
+    const farN = g._farN || 0;
+    this._set('mobs', String(g._mobTotal || (g.mobs.length + farN)));
     this._set('visible', String((g._visibleMobs || []).length));
     let asleep = 0;
     const R2 = (typeof MOB_ACTIVE_R !== 'undefined' ? MOB_ACTIVE_R : 2200) ** 2;
-    if (p) for (const m of g.mobs) {
-      const dx = m.x - p.x, dy = m.y - p.y;
-      if (dx * dx + dy * dy > R2) asleep++;
+    if (p) {
+      for (const m of g.mobs) {
+        const dx = m.x - p.x, dy = m.y - p.y;
+        if (dx * dx + dy * dy > R2) asleep++;
+      }
+      // 远端点也要算进去（近处半径可能小于 MOB_ACTIVE_R，它们未必都在休眠区）
+      const fx = g._farX, fy = g._farY;
+      for (let i = 0; i < farN; i++) {
+        const dx = fx[i] - p.x, dy = fy[i] - p.y;
+        if (dx * dx + dy * dy > R2) asleep++;
+      }
     }
     this._set('asleep', String(asleep));
     this._set('drops', String((g.drops || []).length));

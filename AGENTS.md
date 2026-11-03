@@ -1,7 +1,7 @@
 # florr2 项目记忆
 
 > 给后续开发者 / AI 的项目上下文。改代码前先读本文件；结构、约定或玩法有明显变化时同步更新。
-> 最后核对：2026-10（对应 `Commit 13 fix5`，main 分支）
+> 最后核对：2026-11（通用退场通道 ExitFX + 生物大招系统 + 悬浮框属性口径）
 
 ## 1. 项目定位
 
@@ -37,7 +37,9 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 ```
 
 - 页面自检只在 `?selftest=1` 时由 `main.js` 动态加载 `js/selftest.js`，正常运行零成本。
-- 断言覆盖：引导就绪、移动、快照同步、击退守恒、装填暂停跨端一致、预测偏差、重生后花瓣世代号、Leaf 持续回血、多体数量数据化、复活点区域内随机且可站人、多节生物用本节轮廓与贴图、F3 屏幕开关（含碰撞箱联动）、触控层在桌面不出现、触控层自缩放尺寸合法。
+- 断言覆盖：引导就绪、移动、快照同步、击退守恒、装填暂停跨端一致、预测偏差、重生后花瓣世代号、Leaf 持续回血、多体数量数据化、复活点区域内随机且可站人、多节生物用本节轮廓与贴图、F3 屏幕开关（含碰撞箱联动）、触控层在桌面不出现、触控层自缩放尺寸合法、**实体退场强绑定通用退场动效**、**Super 蜘蛛大招（定住自转 + 超大蛛网）**、**生物悬浮框属性行按数据取舍（含 Poison）**。
+- 自测里的"玩家已死"防护：自检接管前游戏已经跑了几秒（素材加载），玩家可能已被生物咬死；
+  `ensureAlive()` 会在需要活玩家的断言前复活，避免靠前的断言连环假失败（这是历史遗留的偶发失败源）。
 - 性能数据来自 `Game.stepFrames` 固定步长回放，多轮取中位数；headless 噪声较大，只用于相对比较。
 - `?selftest=1` 也可直接在真浏览器打开，控制台/页面底部会留下 `#selftest-result`（JSON）。
 
@@ -63,7 +65,9 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `js/map.js` | 读取 `garden.tmj` + `.tsj`、Tiled 瓦片/翻转/对象层解析、碰撞（瓦片遮罩 + 多边形）、检查点、生成区、瓦片渲染、小地图位图 |
 | `js/ai.js` | **`MobAI`：注册式生物 AI 引擎**。按 `type.slug` 分派，每个物种一套独立 AI（`register/init/create/step/notifyMoved/facing/speedLimit`）；内置 `wander`（瓢虫等）、`bee`（S 型）、`centipede`（连续弧线） |
 | `js/petal-effects.js` | **`PetalFX`：花瓣能力 + 特效注册引擎**。按 `card.type.slug` 匹配，负责主动/被动特效，以及脱轨（`detach`）、飞行（`flightOf`）、硬碰撞（`onHit`）、仇恨吸引（`canAttract`）等物理能力；能力字段仍由 `data.js` 的 `PETAL_TRAITS` 声明，统一走 `trait()` 读取 |
-| `js/sim/constants.js` | 模拟层常量与纯规则（`InvulnFX`、击退份额、花瓣/花朵数值），无 DOM |
+| `js/mob-fx.js` | **`MobFX`：生物通用特性注册引擎**（与 `PetalFX` 对称）。物种只在这里声明一次（如蜘蛛大招），`ai.js`/`sim/mob.js`/`net/server.js`/`game.js` 四层全部"向引擎问"，不再各写一份物种参数；场地实体种类也走 `registerField` |
+| `js/sim/constants.js` | 模拟层常量与纯规则（`InvulnFX`、击退份额、花瓣/花朵数值、大招节奏常量），无 DOM |
+| `js/sim/exit.js` | **实体退场的唯一通道**：`ExitFX`（begin/tick/alpha/scale/done/sweep）+ `createExitList()` 受控实体表（内部数组封在闭包里，外部拿不到 -> 无法绕过退场动画直接删元素） |
 | `js/sim/physics.js` | `physicsPush`、`moveEntity`、击退冲量与衰减，无 DOM |
 | `js/sim/mob-shape.js` | 生物视觉尺寸表与 SVG 轮廓碰撞数学（`mobHitTest` / `mobShapeNearest`） |
 | `js/sim/player.js` | `Player`：移动、装填、花瓣轨道、无敌、死亡与 `resetForSpawn` 唯一重置入口 |
@@ -103,7 +107,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 → mob-shapes.js → registry.js → data.js → petal-metrics.js → cards.js
 → ui.js → ui/tooltip.js → ui/drag.js → ui/minimap.js
 → map.js → ai.js → petal-effects.js
-→ sim/constants.js → render/render-util.js → sim/physics.js → sim/mob-shape.js
+→ sim/constants.js → sim/exit.js → mob-fx.js → render/render-util.js → sim/physics.js → sim/mob-shape.js
 → sim/player.js → sim/mob.js → sim/drops.js → render/fx.js → entities.js(空壳)
 → net/protocol.js → net/server.js → net/client.js → net.js(空壳)
 → chat.js → i18n-extra.js → ui/touch.js → ui/debug-screen.js → ui/bossbar.js → game.js → main.js
@@ -118,7 +122,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `ui/touch.js`、`ui/debug-screen.js`、`ui/bossbar.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用（`?selftest=1` 时才由自测驱动）。
 - `main.js` 最后执行 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 后台加载素材。
 - 素材全部加载完才 `UI.hideLoading()`；20 秒未完成显示慢加载提示但继续等。
-- 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`MobAI`、`Chat`、`Settings`。
+- 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`ExitFX`、`MobAI`、`Chat`、`Settings`。
 
 ## 5. 核心架构
 
@@ -158,9 +162,36 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 ### 5.3 实体层（`entities.js`）
 
+> **【硬规则】实体退场强绑定通用退场动效（`js/sim/exit.js`）**
+>
+> 任何实体（生物 / 蛛网 / 场地型实体 / 以后的召唤物）"消失"都必须走同一条路：
+> **放大一点 + 渐隐**（`FADE_T = 0.1s`，与生物死亡同一套曲线 `deathFade`）。
+> 唯一允许的写法：
+>
+> ```js
+> ExitFX.begin(ent);        // 1) 打退场标记（此后不许直接删）
+> // 2) 渲染层读 ExitFX.alpha(ent) / ExitFX.scale(ent) 画退场过程
+> list.sweep(dt);           // 3) 唯一的回收点：退场播完才真正移除
+> ```
+>
+> - **严禁** `splice / pop / filter / length = 0` 直接删实体 —— 那是"实体凭空消失"，
+>   没有退场动画，而且以后每多一种实体就多一种消失表现（观感立刻分裂）。
+> - 场地型实体用 `createExitList()`（受控实体表）：内部数组封在闭包里，
+>   **外部连语法上都拿不到**，`push/splice/pop/clear` 一律不提供 —— 结构性地堵死绕过退场的路。
+> - 已经踩过的坑：蜘蛛吐的网原来是 `splice` 直接删（凭空消失）；玩家蛛网走"退场幽灵"；
+>   生物走 `deathTimer` —— 三套消失方式。现在统一成一套。
+> - 客户端的生物视图**屏外也必须推进退场计时**，否则退场永远播不完、那只生物永远回收不掉。
+> - 服务端从快照里消失的生物（可能死在两次快照之间）也必须补一个退场，不能硬删。
+
 - `Player`：位置/朝向/血量/等级、`slots`（主槽）/`subSlots`（副槽）/`invBar`（临时物品栏）/`backpack`、`reload` 装填状态、花瓣实体 `petals`、`recompute()` 重算属性。
 - `Mob`：按稀有度取 hp/dmg/armor/exp；视觉直径决定碰撞半径；`shape/hull` 是 SVG 轮廓；`weight` 按直径²（障碍型 ×5）；`threat` 仇恨表；`topThreat()` 中 Honey 强制优先。
 - **碰撞轮廓只认 `Mob._ensureShape()`**：键 = `'mob' + (artSvg || svg)`。多节生物（蜈蚣）头节 `12_h` / 身体节 `12_b` 各用本节贴图，**绝不回落到整条 `12.svg`**（整条外形套在单节上又长又大、还会把触角算进判定）；客户端视图与权威副本走同一个方法，`r` 也由同一份轮廓的等面积圆算出。
+- **物种可以【手写碰撞箱】**（`MOB_TRAITS[slug].collider = { type:'circle', k }`）：**可选覆盖，默认不走**。
+- **蜘蛛的碰撞箱走【从原 SVG 提取、忽略腿】**（默认路径）：
+  `SpiderGait.bodyUrl()` 先把 8 条腿的 path 从 SVG 文本里删掉，生成"无腿身体"素材，
+  `SpriteStore.contour('mob21_body', drawSize)` 再从它提取轮廓 —— 腿只是表现，计入轮廓会让碰撞箱大出近 3 倍
+  （`assets/mobs/21.svg`：身体 = 两个同心圆 r≈10.31 / 7.37，圆心 (55,55)；8 条腿却伸到 ~30）。
+  刻意**不手写系数**：手写要跟着"视觉直径 ↔ viewBox ↔ 固定裁剪框"换算，很容易差 2 倍（试过 `k=0.36`，实测偏大）。
 - `Card`、`DropCard`：地面/背包卡；`DropCard` 支持堆叠、飞向玩家拾取；持续冒粒子的时长按**掉落概率**分级（`chance` 由 `rollMobDrops` 带上，`fxDur` 决定：≤5% 3s、<1% 6s、<0.3% 15s、<0.1% 与 Ultra+ 永久；其余只在落地炸一次）。
 - `DamageText`：Q 弹飘字，颜色区分伤害/治疗（`HEAL_TEXT_COLOR = #ff94c9`）。
 - `InvulnFX`：多来源无敌（绝对到期时间），出生 3 秒；白晕 + 金色血条；无敌期完全免伤。
@@ -208,9 +239,33 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 - `RARITIES` 共 9 档：`common → unusual → rare → epic → legendary → mythic → ultra → super → eternal`（无 `unique`；个别覆盖表里会出现但不在主序列）。
 - `registry.js` 里 **花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实、84+ 忽略**。二创/缺名项不进入游戏，登记到 `NEEDS_MANUAL`。
-- **当前真正启用的花瓣 10 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye`。其余 registry 数据保留但不加载。
+- **当前真正启用的花瓣 11 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye, web, antennae`。
+- **Antennae（触角，id 17，utility）= 视野扩大**：装备型饰品（同 Third Eye 形态：不进轨道、无战斗、不可堆叠）。
+  数值 `PETAL_RARITY_OVERRIDES.antennae.sight` = **官方视野扩大比例**：
+  common 11.1% / unusual 17.6% / rare 25% / epic 33.3% / legendary 42.9% / mythic 100% / ultra 185.7% / super 400% / eternal 900%；
+  相机缩放 = `1/(1+sight)` → 依次 0.9 / 0.85 / 0.8 / 0.75 / 0.7 / 0.5 / 0.35 / 0.2 / 0.1（官方相机缩放值，不设上限）；
+  链路 = 数据表 → `PetalFX.bonus().sight` → `Player.recompute()` 求和进 `player.sightBonus` → `Game.camZoomTarget = 1/(1+sight)`。
+  **相机缩放是全局的**：`render()` 里 `translate(W/2 - camX*z, H/2 - camY*z) + scale(z)`（z<1 = 镜头拉远 = 看得更远），
+  并且**所有以屏幕尺寸算视口的地方都要除以 z**：地图瓦片视口、可见性裁剪矩形、屏外剔除半径、鼠标→世界反变换、相机边缘夹紧。
+  漏改任何一处都会出现"地图没跟着拉远 / 鼠标瞄不准 / 远处生物突然弹出"这类半截 bug。
+  缩放**平滑过渡**（指数阻尼 `damp`，约 0.2s）：瞬变会让人眩晕，也会让世界坐标换算突然错位。
+  悬浮框里显示 `Vision: +X%`（`UI/Petal/SightLabel`，标签色与 Rotation Speed / Attack Range 同一支）。
+- **一卡多体的【数值显示口径】要显式登记**（`PETAL_STAT_DISPLAY`，data.js）：
+  官方模板里有些花瓣是**合并显示**的 —— 卡面/悬浮框上写的是"整张卡合计"的数值，不是单个实体的数值。
+  Peas 就是这种特例：4 个绿色小球合计一份伤害/血量（显示 4× 单体值）。
+  口径只有两种：`'each'`（显示单体值，默认）/ `'total'`（显示合计 = 单体 × 实体数）。
+  **只影响显示**（悬浮框、卡面数值、卡槽水缸分母 —— 三处都走 `petalDisplayStats()` 这一个入口）；
+  **实体结算永远用数据表里的单体值**（每个实体各拿一份），两者严格分开。
+  没有这个登记就会踩两个坑：① 每个小球拿到合计值 → 伤害翻 4 倍；
+  ② 卡槽水缸分母用单体值 → 4 个实体的血量总和除以单体值 = 永远满阴影。其余 registry 数据保留但不加载。
 - **可自然生成的生物 4 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider`。
   蜘蛛是 aggressive：`MOB_TRAITS.spider.sightR = 500`，AI `spider` 把追击压成 1.10×（游荡 = 追击 × 0.9）。
+- **生物特性走 `MobFX` 引擎**（`js/mob-fx.js`，与 `PetalFX` 对称）：
+  大招这类特性天然横跨 4 层（`ai.js` 调度 / `sim/mob.js` 状态 / `net/server.js` 产出 / `game.js` 表现），
+  以前每层都写死蜘蛛参数，加第二个物种的大招要同时改 4 处、漏一层就是"服务端招放了、客户端没反应"。
+  现在物种只在 `MobFX.register('slug', {...})` 里**声明**一次（`ultimate: { minRarity, cooldownTicks, duration, hold, spin, gaitRate, field }`），
+  四层改成向引擎问；场地实体种类也走 `MobFX.registerField('web', {...})`，服务器只提供 `ctx` 原语（`webType/addWeb/webDur`）。
+  产出走【服务端权威】：引擎只写 `mob.ultFieldReq`，由 `LocalServer` 消费生成（谁被减速必须服务端说了算）。
 - **中毒（Poison）**：数值在 `MOB_RARITY_OVERRIDES[id].{poison,poisonRate}`（总量 / 每秒），
   命中花朵时由 `_combatTick` 施加到 `StatusFX`，扣血在 `Player._tickPoison`（**不走 `hurt()`**，
   否则 0.2s 受伤无敌帧会吃掉大半 DoT）。状态效果**不进快照**，客户端靠 `hurt` 事件里的 `poison` 字段自挂。
@@ -258,6 +313,14 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   **`/show-coord` 与 `/pending crash` 已移除**，调试信息统一走 F3 调试屏幕。
 - `/summon <mob_id> <rarity>[<k=v,...>] <count>`：参数用方括号追加在稀有度后，目前只有多节生物支持 `type=normal|long`，
   例：`/summon 3 common[type=long] 1` 生成一条超长蜈蚣；不写参数走自然规则（只有 common 有 0.3% 概率超长）。
+- **悬浮框的属性行口径 = 和卡牌一样：有的属性才显示，没有就不显示**。
+  生物悬浮框不要再死板地固定画 Health / Damage —— 值是 0 的属性整行不画
+  （血量 0 的生物就没有 Health 行，没有伤害就没有 Damage 行）。
+  目前生物可显示的属性：Health / Damage / Armor / **Poison（中毒总量 + 每秒速率）**。
+  - 中毒那一行用**官方模板** `Mob/Attribute/Poison`（`<c …>Poison:</c> {0:tooltip} ({1:tooltip}/s)`）：
+    `statParts()` 把它拆成"标签 + 数值"两段（数值模板里的占位符换成本地化数字），
+    所以中文显示的是「剧毒：360（135/秒）」，单位跟着语言走，不写死英文 `/s`。
+  - 数值来源是生物的 `rarityStats[rarity]`（`MOB_RARITY_OVERRIDES` 合并进来的 `poison / poisonRate`）。
 
 ### 5.7 花瓣能力 / 特效引擎（`petal-effects.js`）
 
@@ -300,6 +363,22 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `MobAI._util.walkR(mob)` 是所有"能不能走过去"判断的唯一半径来源；`centipede._wallProbe` 也用它。
 - 新增生物：`MOB_TRAITS` 声明体型/速度倍率，需要行为时在 `ai.js` 里 `MobAI.register('slug', {...})`；不注册就自动用 `wander`。
 - 休眠（`MOB_ACTIVE_R`）由服务端按距离控制，AI 不需要关心。
+
+#### 大招（Super / Eternal 专属，`ai.js` 的 `MobAI` 调度 + 物种自己实现行为）
+
+- **口径**：只有 **Super 及以上**（Super / Eternal）稀有度、且物种在 `MobAI.register` 里声明了 `ultimate` 的生物
+  才会放大招；**每隔 1000~1500 tick 一次**（1 秒 = 25 tick，即 **40~60 秒**），放完**立刻恢复正常 AI**。
+- 引擎只管调度：`MobAI._ultimateOf`（稀有度门槛）→ `_ultimateStep`（冷却 / 起手 / 收尾 / 重新武装），
+  物种只管行为：`ultimate = { minRarity, cooldownTicks, duration(), start(), during(), end() }`。
+  冷却只按"生物醒着的时间"走（休眠的生物不跑 AI，也就不计时）。
+- **蜘蛛大招**（`js/ai.js` 的 `spider` 注册项）：
+  定在原地原地自转（**3 秒 2 圈** = `TAU × 2/3` rad/s），自转期间**八条腿一起摆动**
+  （它不走位，步态不会自然推进，所以按 `MOB_ULT_GAIT_RATE` 补步态），**自转满 3 圈**（约 4.5 秒）后
+  在原地生成一张**半径 = 同等级蛛网 × 2** 的超大蛛网（Super 250→500，Eternal 300→600），然后恢复正常 AI。
+- 落地方式：`start()` 锁位（`mob.ultHold = {x,y}`，引擎把它按回锚点，且不参与任何推挤）、
+  `during()` 改朝向（`mob.facing`，此时不能被"朝向跟随移动方向"覆盖）、
+  `end()` 置 `mob.ultWebReq = { mul: 2 }` —— **服务端**在 `_fieldTick` 里消费这个请求并生成真正的网（权威）。
+- 客户端只做表现镜像：快照多带一个 `ultActive`（服务端权威）→ 腿继续摆；观察到 `1→0` 时补一张超大网（纯画面）。
 
 ### 5.9 调试屏幕（`ui/debug-screen.js`）与移动端触控（`ui/touch.js`）
 
@@ -428,6 +507,9 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 6. **资源来源**：素材来自官方 CDN；地图/tileset 官方 403，使用仓库内快照。不要重复抓取覆盖。
 7. **调参位置**：模拟层常量集中在 `js/sim/constants.js`（击退/花朵/步长）与 `js/net/protocol.js`（快照/生成参数）；数据规则在 `data.js`；UI 动画在 `ui.js/cards.js`。
 8. **临时文件**：`.codebuddy/`、根目录 `_tmp_*.py`、参考图不属于运行代码，不要随意删除用户内容；新临时文件不要提交。
+9. **实体离场只走 `ExitFX`**（`js/sim/exit.js`）：想让任何实体消失，就 `ExitFX.begin(ent)` + 列表 `sweep(dt)`；
+   **绝不**直接 `splice / pop / filter / length = 0`。场地型实体用 `createExitList()`（受控实体表，删元素的入口被刻意封死）。
+   理由与踩过的坑见 5.3 的硬规则框 —— 退场表现分裂过一次（蛛网凭空消失 / 花瓣走幽灵 / 生物走 deathTimer），不要再造第四种。
 
 ## 8. 资源与数据管线
 

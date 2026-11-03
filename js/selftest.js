@@ -33,6 +33,24 @@
 
   function assert(name, cond, detail) { push(name, cond, detail); }
 
+  // 受控实体表（sim/exit.js 的 createExitList）刻意【不提供】clear / length setter ——
+  // 那是"绕过退场动画直接删实体"的入口。所以测试里要复位场上实体就换一张新表。
+  function resetWebFields(p, saved) {
+    if (!p) return;
+    p.webFields = createExitList();
+    if (saved) for (const x of saved) p.webFields.add(x);
+  }
+
+  // 自检期间世界照常推进（stepFrames 会真的跑战斗），玩家可能已经被生物咬死。
+  // 需要"活着的玩家"的断言先复活 —— 否则会连环假失败（与被测逻辑无关）。
+  function ensureAlive(game) {
+    const p = game.player;
+    if (!p || !p.dead) return false;
+    game.respawn();
+    game.stepFrames(2, 1 / 60, false);
+    return true;
+  }
+
   function emit() {
     report.errors = (window.__selftestErrors || []).slice();
     if (!report.ok) report.ok = report.errors.length === 0;
@@ -107,6 +125,13 @@
     // 让已排队的 rAF 回调先跑掉，再接管推进
     game.stop();
     await new Promise((r) => setTimeout(r, 0));
+
+    // 自检接管前游戏已经跑了几秒（素材加载），玩家可能已经被生物咬死。
+    // 那时后面靠前的断言（击退守恒 / Leaf 回血…）会连环假失败 —— 统一从"活的玩家"开始。
+    if (game.player && game.player.dead) {
+      game.respawn();
+      game.stepFrames(2, 1 / 60, false);
+    }
 
     check('boot: game/map/player 就绪', () => !!(game.map && game.player));
     report.env = {
@@ -222,6 +247,8 @@
     check('fix: 击退总位移守恒', () => {
       const p = game.player, srv = game.net.debugServer;
       if (!srv || !srv.player) return '无本地服务端（跳过）';
+      // 玩家可能已死（自检期间被生物咬死）：先复活，否则体伤分支根本不会触发
+      ensureAlive(game);
       // 出生无敌会挡掉伤害，两端都要清（否则快照会把无敌又加回来）。
       // 受伤无敌帧也要清：周围生物可能刚好在这几帧咬了玩家一口，那样下面的人造接触会被
       // hurtInvuln 直接免伤，断言就变成"看运气"（这条曾经偶发 FAIL 就是这个原因）。
@@ -279,7 +306,8 @@
           ok: false,
           detail: '未触发 hurt（命中=' + hitCount + ' dmg=' + sm.dmg + ' armor=' +
             (srv.player.armor || 0) + ' invuln=' + srv.player.invuln.toFixed(2) +
-            ' hurtInvuln=' + (srv.player.hurtInvuln || 0).toFixed(2) + '）'
+            ' hurtInvuln=' + (srv.player.hurtInvuln || 0).toFixed(2) +
+            ' 玩家dead=' + (srv.player.dead ? 'Y' : 'N') + '）'
         };
       }
       const sh = KNOCKBACK_SHARE[sm.rarity] || KNOCKBACK_SHARE.common;
@@ -391,6 +419,7 @@
       const leaf = (typeof PETAL_TYPES !== 'undefined' ? PETAL_TYPES : [])
         .find((x) => x && x.slug === 'leaf');
       if (!leaf || typeof makePetal !== 'function') return '未启用 leaf（跳过）';
+      ensureAlive(game);            // 玩家死了就没法验证回血了
       // 测试期间长无敌，避免被怪咬死后误判
       InvulnFX.add(p, 'selftest', 60);
       InvulnFX.add(srv.player, 'selftest', 60);
@@ -560,13 +589,13 @@
       let flags = {};
       let info = '';
       try {
-        if (p.webFields) p.webFields.length = 0;
+        resetWebFields(p, null);
         // ① 飞行到期 -> 生成独立场地实体（半径/时长按稀有度）
         const body = mkBody();
         const plan = PetalFX.detach(body, p);
         const flying = PetalFX.flightOf(body);
         PetalFX.onExpire(body, p);
-        const f = p.webFields && p.webFields[0];
+        const f = p.webFields && p.webFields.get(0);
         // ② 飞行途中被打碎 -> 同样立刻成网（轨道上被打碎则不成网）
         const body2 = mkBody();
         body2.stationary = true;
@@ -593,8 +622,7 @@
         info = `飞行=${flying ? flying.life : '-'}s 网半径=${f ? f.r : '-'} 存活=${f ? f.dur : '-'}s`
           + ` 场地数=${p.webFields.length}`;
       } finally {
-        if (p.webFields) p.webFields.length = 0;
-        for (const x of savedFields) p.webFields.push(x);
+        resetWebFields(p, savedFields);
       }
       const bad = Object.keys(flags).filter((k) => !flags[k]);
       return {
@@ -609,14 +637,17 @@
       if (!srv || !srv.player || typeof StatusFX === 'undefined') return '无本地服务端（跳过）';
       const p = srv.player;
       const list = srv._awake || srv.ents || [];
-      const m = list.find((e) => e && !e.dead);
+      // 挑一只【段首】生物：被刚性粘合的节会在 update 里提前 return（不读状态倍率），
+      // 拿它测"移动管线读不读蛛网减速"会假失败。
+      const m = list.find((e) => e && !e.dead && !e._chainLocked)
+        || list.find((e) => e && !e.dead);
       if (!m) return '场上没有可用生物（跳过）';
       const savedFields = p.webFields.slice();
       const savedAwake = srv._awake;
       const savedStatus = m.status ? m.status.slice() : null;
       let inRange = false, outRange = false, mul = 1, applied = 1;
       try {
-        p.webFields.length = 0;
+        resetWebFields(p, null);
         const w = p.spawnWeb(m.x, m.y, 120, 10, null);
         srv._awake = [m];
         StatusFX.remove(m, 'web');
@@ -637,8 +668,7 @@
         srv._fieldTick();
         outRange = !StatusFX.has(m, 'web');
       } finally {
-        p.webFields.length = 0;
-        for (const f of savedFields) p.webFields.push(f);
+        resetWebFields(p, savedFields);
         srv._awake = savedAwake;
         if (savedStatus) m.status = savedStatus; else StatusFX.remove(m, 'web');
       }
@@ -873,6 +903,182 @@
         detail: `Web(common 档)=${JSON.stringify(webC)} Faster 有 common=${fasterOk}`
           + ` ThirdEye legendary 掉=${!!dropDistFor('third_eye', 'legendary')}`
           + ` 400 次掷骰出现 Common Web=${badRoll}`
+      };
+    });
+
+    // 8b1c) 通用退场：实体离场【只能】走 ExitFX（放大 + 渐隐），不许凭空消失
+    check('fix: 实体退场强绑定通用退场动效', () => {
+      if (typeof ExitFX === 'undefined' || typeof createExitList !== 'function') return '退场通道未就绪（跳过）';
+      const bad = [];
+      // ① 通道本身：begin -> 渐隐放大 -> sweep 才回收
+      const list = createExitList();
+      const e = list.add({ x: 0, y: 0, r: 10, t: 0, dur: 0.05, pop: 1 });
+      list.sweep(0.02);
+      if (list.length !== 1) bad.push('未到期的实体被提前回收');
+      ExitFX.begin(e, 0.05);
+      if (!e.exiting) bad.push('begin 没有打上退场标记');
+      const a0 = ExitFX.alpha(e);
+      list.sweep(0.02);
+      if (!(ExitFX.alpha(e) < a0)) bad.push('退场没有渐隐');
+      if (!(ExitFX.scale(e) > 1)) bad.push('退场没有放大');
+      if (list.length !== 1) bad.push('退场未播完就被回收');
+      list.sweep(0.2);
+      if (list.length !== 0) bad.push('退场播完仍未回收');
+      // ② 受控实体表：外部拿不到原始数组（想直接删元素连语法都没有）
+      if (typeof list.splice === 'function' || typeof list.push === 'function'
+        || typeof list.pop === 'function' || typeof list.clear === 'function') {
+        bad.push('受控实体表暴露了删除入口');
+      }
+      // ③ 蜘蛛自铺的网：到期进入退场，退场播完才被回收（不许凭空消失）
+      const srv = game.net && game.net.debugServer;
+      let webDetail = '';
+      if (srv) {
+        const MARK = 987654;
+        const savedWebs = srv.mobWebs.slice();
+        try {
+          srv.mobWebs.add({ x: 1e6, y: 1e6, r: MARK, t: 0, dur: 0.05, pop: 1 });
+          srv._fieldTick(0.06);
+          const w = srv.mobWebs.find((x) => x && x.r === MARK);
+          if (!w) bad.push('蜘蛛网到期后凭空消失（没进退场）');
+          else if (!w.exiting) bad.push('蜘蛛网到期没有进入退场');
+          srv._fieldTick(0.3);
+          if (srv.mobWebs.find((x) => x && x.r === MARK)) bad.push('蜘蛛网退场播完仍未回收');
+          webDetail = ' 到期->退场->回收 正常';
+        } finally {
+          srv.mobWebs = createExitList();
+          for (const x of savedWebs) srv.mobWebs.add(x);
+        }
+      } else webDetail = ' （无本地服务端，跳过蛛网部分）';
+      return { ok: bad.length === 0, detail: (bad.length ? '未通过: ' + bad.join(',') + '；' : '退场通道正常') + webDetail };
+    });
+
+    // 8b1d) 蜘蛛大招（Super / Eternal 专属）：定在原地自转 + 摆腿 + 转满 3 圈产出超大蛛网
+    check('ai: Super 蜘蛛大招（定住自转 + 超大蛛网）', () => {
+      const t = (typeof MOB_TYPES !== 'undefined') ? MOB_TYPES.find((x) => x && x.slug === 'spider') : null;
+      if (!t) return '缺少 spider（跳过）';
+      const uDef = MobFX.defs.spider && MobFX.defs.spider.ultimate;
+      if (!uDef) return '蜘蛛没有大招定义（跳过）';
+      const p = game.player;
+      const bad = [];
+      const DT = 1 / 25;
+      // ① 稀有度门槛：只有 Super 及以上才有大招
+      for (const r of ['common', 'rare', 'legendary', 'ultra']) {
+        const mr = new Mob(t, p.x, p.y, 1, r);
+        mr.ai.ultCd = 0;
+        mr.update(DT, p, game.map);
+        if (mr.ultActive) bad.push(r + ' 蜘蛛也有大招');
+      }
+      // ② Super 蜘蛛：起手 -> 定在原地自转（3 秒 2 圈）-> 腿摆动 -> 转满 3 圈产出请求
+      const m = new Mob(t, p.x, p.y, 1, 'super');
+      m.ai.ultCd = 0;
+      const x0 = m.x, y0 = m.y;
+      m.update(DT, p, game.map);
+      if (!m.ultActive) bad.push('大招没有起手');
+      let steps = 0, spin = 0, drift = 0, prev = m.facing;
+      const gait0 = m.gait;
+      while (m.ultActive && steps < 600) {
+        // 此刻大招仍在进行：位置必须严格等于锚点（"定在原地"是字面意思）。
+        // 最后一帧（大招刚结束、恢复正常 AI）不计入 —— 那帧允许它重新走位。
+        if (m.ultHold) {
+          const d = Math.hypot(m.x - m.ultHold.x, m.y - m.ultHold.y);
+          if (d > drift) drift = d;
+        }
+        m.update(DT, p, game.map);
+        spin += MobAI._util.angNorm(m.facing - prev);
+        prev = m.facing;
+        steps++;
+      }
+      const wantSpin = TAU * SPIDER_ULT_TURNS;                 // 3 圈
+      if (m.ultActive) bad.push('大招没有结束');
+      if (Math.abs(spin - wantSpin) > 0.4) bad.push('自转圈数不对 ' + (spin / TAU).toFixed(2) + ' 圈');
+      if (drift > 1e-6) bad.push('大招期间没有定在原地（漂移 ' + drift.toFixed(2) + '）');
+      if (!(m.gait > gait0)) bad.push('大招期间腿没有摆动');
+      const req = m.ultFieldReq;
+      if (!req || req.kind !== 'web' || Math.abs((req.mul || 0) - SPIDER_ULT_WEB_MUL) > 1e-9) bad.push('大招没有产出超大蛛网请求');
+      // ③ 服务端消费请求 -> 半径 = 同等级蛛网 × 2
+      const srv = game.net && game.net.debugServer;
+      let webDetail = '';
+      if (srv) {
+        const webType = (typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((x) => x && x.slug === 'web') : null;
+        const wantR = Math.round(((webType && petalStatsFor(webType, 'super').radius) || 120) * SPIDER_ULT_WEB_MUL);
+        const sp = new Mob(t, p.x + 5000, p.y + 5000, 1, 'super');
+        sp.ultFieldReq = { kind: 'web', mul: SPIDER_ULT_WEB_MUL };
+        const savedAwake = srv._awake;
+        const savedWebs = srv.mobWebs.slice();
+        try {
+          srv._awake = [sp];
+          srv._fieldTick(0.04);
+          const w = srv.mobWebs.find((x) => x && x.r === wantR);
+          if (!w) bad.push('服务端没有产出超大蛛网（半径应为 ' + wantR + '）');
+          webDetail = ` 超大网半径=${w ? w.r : '-'}`;
+        } finally {
+          srv._awake = savedAwake;
+          srv.mobWebs = createExitList();
+          for (const x of savedWebs) srv.mobWebs.add(x);
+        }
+      } else webDetail = ' （无本地服务端，跳过产出部分）';
+      // ④ 客户端镜像：快照带 ultActive -> 客户端视图同步 + 腿继续摆 + 结束时补超大网
+      let mirrorDetail = '';
+      if (srv) {
+        const sp2 = new Mob(t, p.x + 320, p.y, 1, 'super');
+        sp2.netId = 990077;
+        sp2.ai.ultCd = 0;
+        const savedEnts = srv.ents;
+        const canInv = (typeof InvulnFX !== 'undefined' && InvulnFX.add);
+        if (canInv) InvulnFX.add(p, 'selftest', 60);
+        try {
+          srv.ents = savedEnts.concat([sp2]);
+          game.stepFrames(20, 1 / 25, false);
+          const view = game.mobs.find((x) => x && x.netId === 990077);
+          if (!view) bad.push('客户端没有生成该生物的视图');
+          else if (!view.ultActive) bad.push('客户端没有收到大招状态（ultActive）');
+          else {
+            const g0 = view.gait;
+            game.stepFrames(8, 1 / 25, false);
+            if (!(view.gait > g0)) bad.push('客户端大招期间腿没有摆动');
+            mirrorDetail = ` 镜像 ultActive=true 步态+${(view.gait - g0).toFixed(1)}`;
+          }
+        } finally {
+          srv.ents = savedEnts;
+          if (canInv && typeof InvulnFX !== 'undefined' && InvulnFX.remove) InvulnFX.remove(p, 'selftest');
+        }
+      }
+      return {
+        ok: bad.length === 0,
+        detail: (bad.length ? '未通过: ' + bad.join(',') + '；' : '')
+          + `自转=${(spin / TAU).toFixed(2)}圈 漂移=${drift.toFixed(3)} 步态=${(m.gait - gait0).toFixed(1)}` + webDetail + mirrorDetail
+      };
+    });
+
+    // 8b1e) 生物悬浮框：和卡牌一样【有的属性就显示，没有就不显示】（蜘蛛必须有 Poison）
+    check('ui: 生物悬浮框属性行按数据取舍（含 Poison）', () => {
+      const cv = document.getElementById('uiOverlay');
+      if (!cv || !UI._tipLayout) return '悬浮框未就绪（跳过）';
+      const ctx = cv.getContext('2d');
+      const t = (typeof MOB_TYPES !== 'undefined') ? MOB_TYPES.find((x) => x && x.slug === 'spider') : null;
+      if (!t) return '缺少 spider（跳过）';
+      const rs = (t.rarityStats && t.rarityStats.rare) || {};
+      const L = UI._tipLayout(ctx, {
+        mob: true, name: 'Spider', rarityName: 'Rare', rarityColor: '#fff', desc: '', xp: 5,
+        hp: rs.hp, dmg: rs.dmg, armor: rs.armor, poison: rs.poison, poisonRate: rs.poisonRate, drops: []
+      });
+      const labels = L.rows.map((r) => String(r.label));
+      const values = L.rows.map((r) => String(r.value));
+      const poisonRow = labels.findIndex((l) => /poison|剧毒/i.test(l));
+      const bad = [];
+      if (poisonRow < 0) bad.push('蜘蛛悬浮框没有 Poison 行');
+      else if (!new RegExp(String(rs.poison)).test(values[poisonRow]) || !new RegExp(String(rs.poisonRate)).test(values[poisonRow])) {
+        bad.push('Poison 行的数值不对：' + values[poisonRow]);
+      }
+      // 没有的属性整行不画（只有血量的生物 -> 只剩 Health 一行）
+      const L2 = UI._tipLayout(ctx, {
+        mob: true, name: 'X', rarityName: 'Common', rarityColor: '#fff', desc: '', xp: 0,
+        hp: 10, dmg: 0, armor: 0, poison: 0, poisonRate: 0, drops: []
+      });
+      if (L2.rows.length !== 1) bad.push('没有属性的生物仍画了多行：' + L2.rows.length);
+      return {
+        ok: bad.length === 0,
+        detail: (bad.length ? bad.join(',') + '；' : '') + `行=${JSON.stringify(labels)} 值=${JSON.stringify(values)}`
       };
     });
 
@@ -1781,6 +1987,159 @@
           ' reload=' + (cr ? cr.age.toFixed(2) + '/' + (cr.dur || 0).toFixed(2) : '-')
       };
     });
+
+    // ===== TEMP PERF PROBE（放在所有断言之后：它会改变世界状态）=====
+    {
+      const srv = game.net && game.net.debugServer;
+      if (srv) {
+        const N = 40;
+        const t0 = performance.now();
+        for (let i = 0; i < N; i++) srv.step(1 / 60);
+        const baseSrv = (performance.now() - t0) / N;
+        const awakeN = (srv._awake || []).length;
+        const st = MOB_TYPES.find((x) => x && x.slug === 'spider');
+        let withSrv = -1, rInfo = '';
+        if (st) {
+          const mm = new Mob(st, game.player.x + 300, game.player.y, 1, 'eternal');
+          srv.ents.push(mm);
+          const t1 = performance.now();
+          for (let i = 0; i < N; i++) srv.step(1 / 60);
+          withSrv = (performance.now() - t1) / N;
+          rInfo = `r=${mm.r.toFixed(1)} visualD=${mm.visualD.toFixed(1)}`;
+        }
+        const t2 = performance.now();
+        for (let i = 0; i < 10; i++) srv._fillEnts();
+        const fill = (performance.now() - t2) / 10;
+        const t3 = performance.now();
+        for (let i = 0; i < 20; i++) game.update(1 / 60);
+        const upd = (performance.now() - t3) / 20;
+        const t4 = performance.now();
+        for (let i = 0; i < 20; i++) game.render();
+        const rnd = (performance.now() - t4) / 20;
+        report.checks.push({
+          name: 'PROBE', ok: true,
+          detail: `服务端步=${baseSrv.toFixed(2)}ms(永恒蜘蛛后 ${withSrv.toFixed(2)}ms ${rInfo}) `
+            + `awake=${awakeN} ents=${srv.ents.length} 快照填充=${fill.toFixed(2)}ms `
+            + `客户端update=${upd.toFixed(2)}ms render=${rnd.toFixed(2)}ms 视图数=${game.mobs.length}`
+        });
+        const pr = srv._prof;
+        if (pr && pr.n) {
+          const parts = Object.keys(pr.t).map((k) => `${k}=${(pr.t[k] / pr.n).toFixed(2)}`).join(' ');
+          report.checks.push({ name: 'PROBE2', ok: true, detail: `服务端分项(ms/步): ${parts} n=${pr.n}` });
+          pr.t = {}; pr.n = 0;
+        }
+        // 召唤永恒蜘蛛后连跑 10 秒，逐帧计时（找"卡死"）
+        {
+          const st2 = MOB_TYPES.find((x) => x && x.slug === 'spider');
+          if (st2) {
+            const em = new Mob(st2, game.player.x + 200, game.player.y, 1, 'eternal');
+            srv.ents.push(em);
+            const times = [];
+            const t5 = performance.now();
+            for (let i = 0; i < 600; i++) {
+              const a = performance.now();
+              game.update(1 / 60);
+              game.render();
+              times.push(performance.now() - a);
+            }
+            const tot = (performance.now() - t5) / 600;
+            times.sort((x, y) => x - y);
+            report.checks.push({
+              name: 'PROBE3', ok: true,
+              detail: `永恒蜘蛛 10 秒: 平均=${tot.toFixed(2)}ms p50=${times[300].toFixed(2)} `
+                + `p95=${times[570].toFixed(2)} max=${times[599].toFixed(2)} `
+                + `服务端网=${srv.mobWebs.length} 客户端网=${(game.mobWebs && game.mobWebs.length) || 0} `
+                + `awake=${(srv._awake || []).length} 玩家hp=${game.player.hp.toFixed(0)}`
+            });
+          }
+        }
+      }
+    }
+    // 蜘蛛碰撞箱 = 从【原 SVG 提取】的"身体"（忽略 8 条腿）
+    {
+      const st = MOB_TYPES.find((x) => x && x.slug === 'spider');
+      let detail = '没有蜘蛛类型';
+      let ok = false;
+      if (st) {
+        const sm = new Mob(st, 0, 0, 1, 'common');
+        sm._ensureShape();
+        const pts = (sm.shape && sm.shape.pts) || null;
+        const k = sm.drawSize > 0 ? sm.r / sm.drawSize : 0;
+        // 对照组：无腿身体素材（mob21_body）与含腿素材（mob21）的外接半径
+        const bodyCt = SpriteStore.contour('mob21_body', sm.drawSize);
+        const fullCt = SpriteStore.contour('mob21', sm.drawSize);
+        const bodyR = bodyCt ? bodyCt.r : 0, fullR = fullCt ? fullCt.r : 0;
+        if (bodyR > 0) {
+          // 去腿素材已就绪：碰撞箱必须等于"身体"口径，且明显小于含腿轮廓
+          ok = !!pts && Math.abs(k - bodyR) < 0.03 && (fullR <= 0 || k < fullR * 0.6);
+          detail = `r/视觉直径=${k.toFixed(3)}（无腿身体=${bodyR.toFixed(3)} 含腿=${fullR.toFixed(3)}）`;
+        } else {
+          // 去腿素材还没就绪：绝不能把"含腿轮廓"提前定死（碰撞箱会大一圈）
+          ok = !pts || k < 0.25;
+          detail = pts
+            ? `去腿素材未就绪却已缓存 r=${k.toFixed(3)}（应 <0.25）`
+            : '去腿素材未就绪、尚未提取（等待素材，OK）';
+        }
+      }
+      report.checks.push({ name: 'sim: 蜘蛛碰撞箱从 SVG 提取（忽略腿）', ok, detail });
+    }
+    // Antennae（触角）：视野扩大 -> 相机拉远（zoom < 1），且【平滑过渡】不是瞬变
+    check('petal: 触角扩大视野且相机平滑缩放', () => {
+      const p = game.player;
+      const ant = (typeof PETAL_TYPES !== 'undefined')
+        ? PETAL_TYPES.find((x) => x && x.slug === 'antennae') : null;
+      if (!ant || typeof makePetal !== 'function') return '未启用 antennae（跳过）';
+      const saved = p.slots[0];
+      p.slots[0] = makePetal(ant.key, 'common');
+      p.recompute();
+      const bonus = p.sightBonus || 0;
+      if (!(bonus > 0)) return { ok: false, detail: 'sightBonus 未生效（=0）' };
+      // 数值链路：数据表 -> PetalFX.bonus -> Player.recompute
+      const b = PetalFX.bonus(ant, 'common');
+      if (!(b.sight > 0)) return { ok: false, detail: 'PetalFX.bonus 未给出 sight' };
+      // 官方数值表：common 视野 +11.1% -> 相机缩放 1/1.111 ≈ 0.9
+      const stAnt = petalStatsFor(ant, 'common');
+      if (Math.abs(stAnt.sight - 0.111) > 1e-9) {
+        return { ok: false, detail: `common sight=${stAnt.sight}（应 0.111）` };
+      }
+      const zCommon = 1 / (1 + stAnt.sight);
+      if (Math.abs(zCommon - 0.9) > 0.002) {
+        return { ok: false, detail: `common 相机缩放应 ≈0.9，实际 ${zCommon.toFixed(4)}` };
+      }
+      game.stepFrames(1, 1 / 60, false);
+      const target = game.camZoomTarget, z0 = game.camZoom;
+      if (!(target < 1)) return { ok: false, detail: `camZoomTarget=${target}（应 < 1）` };
+      if (!(z0 > target)) {
+        return { ok: false, detail: `第一帧就瞬变：z0=${z0.toFixed(4)} target=${target.toFixed(4)}（应平滑逼近）` };
+      }
+      game.stepFrames(180, 1 / 60, false);
+      const z1 = game.camZoom;
+      if (!(Math.abs(z1 - target) < 0.01)) {
+        return { ok: false, detail: `未趋近目标：z=${z1.toFixed(4)} target=${target.toFixed(4)}` };
+      }
+      // 还原装备，避免影响后续断言
+      p.slots[0] = saved; p.recompute();
+      game.stepFrames(120, 1 / 60, false);
+      return `视野 +${(bonus * 100).toFixed(0)}%  zoom ${z0.toFixed(3)} -> ${z1.toFixed(3)}（目标 ${target.toFixed(3)}）`;
+    });
+    // Peas：合并显示口径（官方模板特例）—— 显示 4 合 1，实体结算仍是单体值
+    check('petal: Peas 合并显示（4 合 1）且实体仍按单体结算', () => {
+      const peas = (typeof PETAL_TYPES !== 'undefined')
+        ? PETAL_TYPES.find((x) => x && x.slug === 'peas') : null;
+      if (!peas || typeof petalDisplayStats !== 'function') return '未启用 peas（跳过）';
+      const st = petalStatsFor(peas, 'common');
+      const ds = petalDisplayStats(peas, 'common');
+      const cnt = CardRenderer.lightSubCount(peas, 'common');
+      if (cnt !== 4) return { ok: false, detail: `实体数应为 4，实际 ${cnt}` };
+      if (Math.abs(ds.dmg - st.dmg * 4) > 1e-9) {
+        return { ok: false, detail: `显示伤害应=4×单体（${st.dmg * 4}），实际 ${ds.dmg}` };
+      }
+      if (Math.abs(ds.hp - st.hp * 4) > 1e-9) {
+        return { ok: false, detail: `显示血量应=4×单体（${st.hp * 4}），实际 ${ds.hp}` };
+      }
+      return `common 单体 ${st.dmg}/${st.hp} -> 显示 ${ds.dmg}/${ds.hp}（${cnt} 个实体各 ${st.dmg}/${st.hp}）`;
+    });
+    // ===== END TEMP PERF PROBE =====
 
     emit();
   }

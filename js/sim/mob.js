@@ -95,6 +95,18 @@ class Mob {
     // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
     this.dispHp = null; this.ghostHp = null; this.ghostV = 0;
     this.dead = false; this.deathTimer = 0;
+    // 退场状态（统一由 sim/exit.js 的 ExitFX 维护）：
+    //   exiting / exitT / exitAlpha / exitScale —— 死亡后必须先播完退场动画才被回收。
+    // 【不许绕过】：任何地方想"让这只生物消失"，唯一入口是 ExitFX.begin(this)，
+    // 回收只由 ExitFX.sweep / ExitFX.done 判定（见 server.js 的 ents 清理）。
+    this.exiting = false; this.exitT = 0; this.exitDur = 0;
+    this.exitAlpha = 1; this.exitScale = 1;
+    // 大招（Super / Eternal 专属）：【状态由 MobFX 引擎维护】（js/mob-fx.js）
+    //   ultActive    = 大招进行中（服务端权威，客户端只做表现镜像）
+    //   ultHold      = 大招期间"定在原地"的锚点（null = 不锁位置）
+    //   ultFieldReq  = 大招结束时的【产出请求】（由 LocalServer 消费，例如超大蛛网）
+    // 这一层只"读"这些状态（锁位 / 不参与推挤），不自己发明大招规则。
+    this.ultActive = false; this.ultHold = null; this.ultFieldReq = null;
     this.age = 0;                       // 出场计时（渐隐用）
     this.aggro = false;                 // 仇恨：暂不启用（还没有伤害）
     // 护甲（armor）：registry 有就整表取用，否则按稀有度默认表；攻击结算 = max(攻-甲, 0)
@@ -141,7 +153,11 @@ class Mob {
     // AI 受击通知（预留接口）：物种可以据此换阶段/召唤/暴走，默认实现什么都不做。
     if (applied > 0) MobAI.onHurt(this, src, applied);
     if (this.hp <= 0) {
-      this.hp = 0; this.dead = true; this.deathTimer = 0;
+      this.hp = 0;
+      this.dead = true; this.deathTimer = 0;
+      // 【退场的唯一入口】生物死亡 = 进入通用退场（放大 + 渐隐）。
+      // 之后由 ExitFX.sweep 回收；直接改 dead 或从数组里删掉都是违规写法。
+      ExitFX.begin(this);
       return { applied, killed: true };
     }
     return { applied, killed: false };
@@ -266,23 +282,54 @@ class Mob {
   // 调试碰撞箱(/pending crash)就会显示空或残留的旧外形。
   _ensureShape() {
     if (this.shape) return;
-    // 换帧步态的生物（蜘蛛）：碰撞轮廓用【去掉腿的身体】——
-    // 腿只是表现，计入轮廓会让碰撞箱大出一圈、还会随步态抖动。
-    // 身体检材由 SpiderGait.bodyUrl() 现场生成（同一次素材解析），加载就绪后才用。
-    let shapeKey = 'mob' + (this.artSvg || this.svg);
-    if (this.gaitSprite && typeof SpiderGait !== 'undefined') {
-      const url = SpiderGait.bodyUrl();
-      if (url) {
-        if (!SpriteStore.ready('mob21_body') && !SpriteStore.images['mob21_body']) {
-          SpriteStore.load('mob21_body', url);
-        }
-        if (SpriteStore.ready('mob21_body')) shapeKey = 'mob21_body';
+    let ct = null;
+    // ---- 手写碰撞箱（可选覆盖，默认【不走】）----
+    // 默认口径 = 从【素材】提取轮廓（蜘蛛走"去掉腿的身体"素材，见下）。
+    // 只有物种显式声明 MOB_TRAITS[slug].collider = { type:'circle', k } 时才手写：
+    // k = 圆半径 / 视觉直径，现场合成正多边形当轮廓，后面 r / hull / walkHull
+    // 全部照常从它算出来 —— 不存在第二套几何口径。
+    const tr = (typeof MOB_TRAITS !== 'undefined' && MOB_TRAITS[this.type.slug]) || {};
+    const col = tr.collider;
+    if (col && col.type === 'circle' && col.k > 0) {
+      const k = col.k;
+      const pts = [];
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * TAU;
+        pts.push([Math.cos(a) * k, Math.sin(a) * k]);
       }
+      ct = { pts, r: k };
     }
-    let ct = SpriteStore.contour(shapeKey, this.drawSize);
-    // 本节贴图缺失时退回物种贴图（多节生物 = 整条外形，虽然不准，但总比没有碰撞/不可见好）
-    if (!ct && this.artSvg && this.artSvg !== this.svg) {
-      ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
+    if (!ct) {
+      // 换帧步态的生物（蜘蛛）：碰撞轮廓用【去掉腿的身体】——
+      // 腿只是表现，计入轮廓会让碰撞箱大出近 3 倍、还会随步态抖动。
+      // 身体检材由 SpiderGait.bodyUrl() 现场生成（同一次素材解析），加载就绪后才用。
+      let shapeKey = 'mob' + (this.artSvg || this.svg);
+      if (this.gaitSprite && typeof SpiderGait !== 'undefined') {
+        const url = SpiderGait.bodyUrl();
+        if (url) {
+          if (!SpriteStore.ready('mob21_body') && !SpriteStore.images['mob21_body']) {
+            SpriteStore.load('mob21_body', url);
+          }
+          if (SpriteStore.ready('mob21_body')) {
+            shapeKey = 'mob21_body';
+          } else {
+            // 去腿素材还没就绪：【不缓存】含腿轮廓（那会让碰撞箱大一大圈），
+            // 下一帧素材就绪了再来提取。
+            this._shapeWait = (this._shapeWait || 0) + 1;
+            if (this._shapeWait < 180) return;      // 等素材（最多等 ~3 秒）
+            // 素材迟迟不来（SVG 加载失败）：降级用含腿轮廓，宁可偏大也不能没有碰撞。
+          }
+        } else {
+          // SpiderGait 还没拿到 SVG 文本：同样先等，别急着把含腿轮廓定死。
+          this._shapeWait = (this._shapeWait || 0) + 1;
+          if (this._shapeWait < 180) return;
+        }
+      }
+      ct = SpriteStore.contour(shapeKey, this.drawSize);
+      // 本节贴图缺失时退回物种贴图（多节生物 = 整条外形，虽然不准，但总比没有碰撞/不可见好）
+      if (!ct && this.artSvg && this.artSvg !== this.svg) {
+        ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
+      }
     }
     if (!ct) return;                       // 素材未就绪：不缓存失败，下一帧再试
     this.shape = ct;
@@ -331,7 +378,8 @@ class Mob {
   }
 
   update(dt, player, map) {
-    if (this.dead) { this.deathTimer += dt; return; }
+    // 死亡：只推进退场动画（放大渐隐），退场播完才由 ExitFX.sweep 回收。
+    if (this.dead) { ExitFX.tick(this, dt); return; }
     this.age += dt;
     this._map = map || this._map;      // canSee 的视线检测要用（每帧刷新引用，成本为零）
     this._tickHpSmooth(dt);
@@ -377,6 +425,13 @@ class Mob {
     // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
     // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
     MobAI.limitSpeed(this, want);
+    // 大招期间"定在原地"（蜘蛛大招自转）：位置锁死、速度清零，
+    // AI 给的移动欲望一律忽略；连击退冲量也不能把它推走（见下方 ultHold 归位）。
+    if (this.ultHold) {
+      want.x = 0; want.y = 0;
+      this.vx = 0; this.vy = 0;
+      this.kbX = 0; this.kbY = 0;
+    }
     // 状态效果（蛛网减速等）：统一乘在"想走多快"上，AI 与移动之间只有这一个入口。
     if (typeof StatusFX !== 'undefined') {
       const k = StatusFX.speedMul(this);
@@ -393,6 +448,12 @@ class Mob {
     const px = this.x, py = this.y;
     const preVx = this.vx, preVy = this.vy;
     moveEntity(this, dt, map);
+    // 大招期间归位：moveEntity 可能因为墙体推出/击退冲量挪动它，
+    // 这里把它按回锚点，保证"定在原地"是字面意思（自转但不位移）。
+    if (this.ultHold) {
+      this.x = this.ultHold.x; this.y = this.ultHold.y;
+      this.vx = 0; this.vy = 0;
+    }
     // —— 3.2) 减速瓦片 = 生物的墙 ——
     // 玩家能走进去（只是减速 + 花瓣停摆），生物不行：不生成、也进不去。
     // 撞上时按单轴滑动绕开（只允许一条轴通过），两条都不行就原地停住，
@@ -429,8 +490,9 @@ class Mob {
     // —— 4) 把实际位移回馈给 AI，它靠这个判断"这趟走完了" ——
     MobAI.notifyMoved(this.ai, moved, this);
     // —— 5) 朝向跟随真实移动方向；停下来就保持当前朝向（下一趟再转）——
+    // 【大招期间例外】：自转的朝向由大招自己驱动（蜘蛛自转），这里绝不能覆盖。
     const sp = Math.hypot(this.vx, this.vy);
-    if (sp > this.speed * 0.12) {
+    if (!this.ultHold && sp > this.speed * 0.12) {
       // wrapAngle：绕圈追击时朝向会无限累加（AI 的 heading 也是），写回时归一
       this.facing = wrapAngle(lerpAngle(this.facing, Math.atan2(this.vy, this.vx), clamp(dt * 7, 0, 1)));
     }
@@ -441,9 +503,10 @@ class Mob {
     let scale = 1 + this.squash * 0.4;
     let alpha = spawnFade(this.age);        // 出场：0.1s 渐显
     if (this.dead) {
-      const d = deathFade(clamp(this.deathTimer / FADE_T, 0, 1));   // 退场：0.1s 放大 + 渐隐
-      scale *= d.scale;
-      alpha = d.alpha;
+      // 退场：统一走 ExitFX（放大 + 渐隐）。生物 / 蛛网 / 场地实体同一套曲线，
+      // 不允许任何一种实体自己发明第二种"消失方式"。
+      scale *= ExitFX.scale(this);
+      alpha = ExitFX.alpha(this);
     } else {
       scale *= spawnPop(this.age);          // Q 弹出场（过冲回落）
     }

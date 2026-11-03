@@ -66,7 +66,24 @@ const MobAI = {
     // 撞墙/禁行标记统一在这里衰减：各 AI 只管「看到 >0 就换方向」，
     // 不必自己计时（旧实现里只要有一个分支忘了清零，标记就永远挂着）。
     if (ai.blockedT > 0) ai.blockedT = Math.max(0, ai.blockedT - dt);
+    // ---- 大招接管（Super / Eternal 专属）----
+    // 调度与通用表现全部在【MobFX 引擎】里（js/mob-fx.js）：
+    // 物种只声明"要不要大招 / 什么参数"，这里只负责把控制权交出去。
+    // 一旦开始，期间由物种声明里的 during/通用表现决定行为，结束后自动恢复普通 AI。
+    const r = MobFX.stepUltimate(mob, dt);
+    if (r) return r;                     // 大招接管中（返回移动欲望）
     return def.step(ai, dt, mob, player) || { x: 0, y: 0 };
+  },
+
+  // ---------------- 大招的调度已移入 MobFX ----------------
+  // 原来这里有一整套 _ultimateOf / _ultDelay / _ultimateStep，
+  // 加上"蜘蛛专属参数"散落在 mob.js / server.js / game.js 三层。
+  // 现在统一由 js/mob-fx.js 承担：新增物种的大招只要加一条 MobFX.register。
+  // 保留这两个薄封装只为兼容旧调用点（自测里还在用 MobAI._util / MobAI.defs）。
+  _ultimateOf(def, mob) {
+    if (!def || !def.ultimate) return null;
+    const probe = { type: { slug: mob && mob.type && mob.type.slug }, rarity: mob && mob.rarity };
+    return MobFX.ultimateOf(probe);
   },
 
   // 位移回馈：AI 靠它判断「这一趟走完了」
@@ -372,6 +389,14 @@ MobAI.register('spider', {
   step(ai, dt, mob, player) { return MobAI.defs.wander.step(ai, dt, mob, player); },
   notifyMoved(ai, d) { MobAI.defs.wander.notifyMoved(ai, d); },
   facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
+
+  // ---- 大招（Super / Eternal 专属）----
+  // 【已移入 MobFX 引擎】js/mob-fx.js 里：
+  //   MobFX.register('spider', { ultimate: { minRarity, cooldownTicks, duration,
+  //     hold, spin, gaitRate, field } })
+  // 以前这一整套（调度 + 蜘蛛的参数 + 服务端产出 + 客户端镜像）分散在 4 个文件里，
+  // 加第二个物种的大招要同时改 4 处；现在只加一条 register。
+  // 这里的 AI 只负责"平时的游荡/追击"，大招期间引擎接管。
 });
 
 // ============================================================================

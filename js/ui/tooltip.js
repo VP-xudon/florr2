@@ -55,9 +55,19 @@ Object.assign(UI, {
         const STAT_GAP = 6;                                     // 标签与数值的间距（参考空间）
         const rows = [];
         if (t.mob) {
-          rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp });
+          // 生物悬浮框 = 和卡牌同一套口径：【有的属性才显示，没有就不显示】。
+          // 不再死板地固定画 Health / Damage（血量 0 的生物就不该有 Health 行），
+          // 也不再漏掉中毒（蜘蛛有 Poison 却不显示）。
+          if (t.hp > 0) rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp });
           if (t.dmg > 0) rows.push({ label: statLabel('Mob/Attribute/Damage', 'Damage:'), value: t.dmg });
           if (t.armor > 0) rows.push({ label: statLabel('Mob/Attribute/Armor', 'Armor:'), value: t.armor });
+          // 中毒（Poison）：官方模板是 "Poison: {0:tooltip} ({1:tooltip}/s)" ——
+          // 标签与数值一起拆出来，单位（/s 还是 /秒）跟着语言走。
+          if (t.poison > 0) {
+            const ps = statParts('Mob/Attribute/Poison', 'Poison: {0:tooltip} ({1:tooltip}/s)',
+              [fmtNum(t.poison), fmtNum(t.poisonRate || 0)]);
+            rows.push({ label: ps.label, value: ps.value, labelColor: MOB_POISON_COLOR });
+          }
         } else {
           if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp });
           if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg });
@@ -88,6 +98,14 @@ Object.assign(UI, {
             rows.push({
               label: statLabel('UI/Petal/AttackRangeLabel', 'Attack Range:'),
               value: '+' + fmtNum(t.attackRange),
+              labelColor: bonusColor
+            });
+          }
+          // 视野扩大（Antennae）：相机拉远，能看到的世界范围变大
+          if (t.sight > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/SightLabel', 'Vision:'),
+              value: '+' + fmtNum(Math.round(t.sight * 1000) / 10) + '%',
               labelColor: bonusColor
             });
           }

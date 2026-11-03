@@ -57,6 +57,7 @@
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': 'Rotation Speed:',
     'UI/Petal/AttackRangeLabel': 'Attack Range:',
+    'UI/Petal/SightLabel': 'Vision:',
     // ---- 花瓣属性：场地型（Web）----
     'UI/Petal/RadiusLabel': 'Radius:',
     'UI/Petal/DurationLabel': 'Duration:',
@@ -128,6 +129,7 @@
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': '旋转速度：',
     'UI/Petal/AttackRangeLabel': '攻击距离：',
+    'UI/Petal/SightLabel': '视野：',
     // ---- 花瓣属性：场地型（Web）----
     'UI/Petal/RadiusLabel': '半径：',
     'UI/Petal/DurationLabel': '持续时间：',

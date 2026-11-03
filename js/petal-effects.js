@@ -72,7 +72,7 @@ const PetalFX = {
   },
 
   // ---- 给主角的【装备加成】（装上就生效，与是否装填好无关；同类可叠加）----
-  // 返回 { rotSpeed: 最大转速加成(rad/s), reach: reach 模式额外伸出距离(px) }。
+  // 返回 { rotSpeed: 最大转速加成(rad/s), reach: reach 模式额外伸出距离(px), sight: 视野放大比例 }。
   // 数值默认来自数据表（PETAL_RARITY_OVERRIDES -> rarityStats），注册项可用 bonus() 追加，
   // Player.recompute() 只做求和，绝不按 slug 判断。
   bonus(type, rarity) {
@@ -81,10 +81,14 @@ const PetalFX = {
     // 没有注册项时退回数据表 —— 两处都以"该稀有度的实际数值"为准，绝不相加，避免翻倍。
     if (def && def.bonus) {
       const o = def.bonus(type, rarity) || {};
-      return { rotSpeed: o.rotSpeed || 0, reach: o.reach || 0 };
+      return { rotSpeed: o.rotSpeed || 0, reach: o.reach || 0, sight: o.sight || 0 };
     }
     const st = (typeof petalStatsFor === 'function') ? petalStatsFor(type, rarity) : null;
-    return { rotSpeed: (st && st.rotSpeed) || 0, reach: (st && st.attackRange) || 0 };
+    return {
+      rotSpeed: (st && st.rotSpeed) || 0,
+      reach: (st && st.attackRange) || 0,
+      sight: (st && st.sight) || 0
+    };
   },
 
   // ---- 装备型饰品（accessory）的绘制（可选）----
@@ -483,6 +487,18 @@ const EYE_PUPIL = {
   oy: 0.159,          // 朝向偏移（× 眼眶高）
   clip: 0.98          // 裁剪 = 眼眶椭圆 × 0.98：眼珠永远不溢出眼眶（视觉上"在眼皮下面"）
 };
+// —— 内置特效 8：触角（Antennae）——
+// 装备型（accessory）：不进入轨道、没有装填、不参与战斗（与 Third Eye 同款形态）。
+//   · 效果 = 视野扩大：bonus.sight（0.10 = 看得远 10%）。
+//     相机缩放系数 = 1 / (1 + sight) —— 世界里能看到的范围变大，屏幕上看起来是"镜头拉远"。
+//     缩放由 Game 的相机实现，并且是【平滑过渡】的（装备/卸下都不会瞬变）。
+//   · 同种不可堆叠：视野是全局能力，重复装没有意义（只有最左边那格生效）。
+PetalFX.register('antennae', {
+  bonus(type, rarity) {
+    return { sight: (petalStatsFor(type, rarity).sight || 0) };
+  },
+});
+
 // 这里显式登记，让"饰品"这一形态和其它花瓣能力一样由引擎声明，而不是散落在渲染/逻辑里。
 PetalFX.register('third_eye', {
   bonus(type, rarity) {

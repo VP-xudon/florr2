@@ -50,6 +50,26 @@ function statLabel(key, fallback) {
   return s.trim();
 }
 
+// 属性行（标签 + 数值）：官方模板形如
+//   "<c val=\"{#Colors/poison}\">Poison:</c> {0:tooltip} ({1:tooltip}/s)"
+// 悬浮框里标签与数值是分开绘制的（标签彩色、数值白色），所以这里把模板拆成两段：
+//   标签 = 第一个 { 之前的纯文本；数值 = 剩下的模板把占位符换成本地化数字。
+// 这样"数值自带单位/副数值"的属性（中毒 = 总量 + 每秒速率）也能完整本地化
+// （中文官方模板写的是「/秒」，不能写死英文 "/s"）。
+function statParts(key, fallback, values) {
+  let s = String(I18N.t(key, fallback) || '');
+  s = s.replace(/<c\b[^>]*>/gi, '').replace(/<\/c>/gi, '');
+  s = s.replace(/\{#[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '');
+  const i = s.indexOf('{');
+  if (i < 0) return { label: s.trim(), value: '' };
+  const label = s.slice(0, i).trim();
+  const value = s.slice(i).replace(/\{(\d+)(?::[^}]*)?\}/g, (m, n) => {
+    const v = values[parseInt(n, 10)];
+    return (v == null) ? '' : String(v);
+  }).trim();
+  return { label, value };
+}
+
 // 掉落概率文本：显示【绝对掉率】，精度到 0.001%（如 0.003% 的隐藏掉率也能看清）。
 //   0.598  -> "59.8%"      整数补 .0（用户要求：整数也要带一位小数）
 //   0.00003-> "0.003%"
@@ -967,7 +987,10 @@ const UI = {
         const arr = p.petals ? p.petals.filter((x) => x.slotIndex === i) : null;
         if (arr && arr.length) {
           const card = p.slots[i];
-          const st = (typeof petalStatsFor === 'function' && card) ? petalStatsFor(card.type, card.rarity) : null;
+          // 卡面总 hp：走显示口径（合并显示的花瓣按合计算分母，见 petalDisplayStats）
+          const st = (typeof petalDisplayStats === 'function' && card)
+            ? petalDisplayStats(card.type, card.rarity)
+            : ((typeof petalStatsFor === 'function' && card) ? petalStatsFor(card.type, card.rarity) : null);
           const total = (st && st.hp > 0) ? st.hp : arr.reduce((s, b) => s + b.maxHp, 0);
           let hpSum = 0;
           for (const b of arr) if (!b.dead) hpSum += Math.max(0, b.hp);
@@ -1037,7 +1060,11 @@ const UI = {
         if (el && el.closest && el.closest('.window.hidden')) return;
         // 数值随稀有度换算：直接走 petalStatsFor（与装备、战斗、引擎加成完全同源，
         // 不再在这里手写一套倍率/整表分支，避免悬停框和实际效果对不上）
-        const st = petalStatsFor(type, rarity);
+        // 显示口径再过一层 petalDisplayStats：合并显示的花瓣（Peas）显示整张卡合计，
+        // 实体结算仍用数据表里的单体值 —— 显示与结算严格分开。
+        const st = (typeof petalDisplayStats === 'function')
+          ? petalDisplayStats(type, rarity)
+          : petalStatsFor(type, rarity);
         const dmg = st.dmg, hp = st.hp, heal = st.heal;
         const slug = type.slug || String(type.name || '').toLowerCase().replace(/ /g, '_');
         // 从"刚离开的另一张卡"快速移来（120ms 宽限）：不做「上一个渐隐 + 下一个渐显」，
@@ -1062,6 +1089,8 @@ const UI = {
           //   转速加成（Faster）、reach 额外伸距（Third Eye）—— 标签色同 Max Mob Rarity
           rotSpeed: st.rotSpeed || 0,
           attackRange: st.attackRange || 0,
+          // 视野放大（Antennae）：0 = 没有这一项，整行不显示
+          sight: st.sight || 0,
           // 场地型（Web）：网半径 + 存在时长
           radius: st.radius || 0,
           duration: st.duration || 0,
@@ -1107,10 +1136,14 @@ const UI = {
         // 简介可能缺条目：用 opt（缺失不显示 <键名>）
         desc: I18N.opt('Mobs/' + slug + '/Description', ''),
         xp: rs.exp || 0,
-        // 数值：与花瓣悬浮框同款式（Health / Damage / Armor）
+        // 数值：与花瓣悬浮框同款式（Health / Damage / Armor / Poison）
+        // 口径：和卡牌一样 ——【有的属性才显示，没有就不显示】，不固定画 Health/Damage。
         hp: rs.hp || 0,
         dmg: rs.dmg || 0,
         armor: rs.armor || 0,
+        // 中毒（蜘蛛等）：poison = 总量，poisonRate = 每秒伤害（0 = 没有这一项）
+        poison: rs.poison || 0,
+        poisonRate: rs.poisonRate || 0,
         // 掉落物：一种花瓣一行，行内是该花瓣各掉落稀有度（卡面 + 下方概率）
         drops: (typeof mobDropRows === 'function') ? mobDropRows(mob.id, rarity) : [],
         anchor: el

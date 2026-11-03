@@ -28,6 +28,10 @@ const MOB_ARMOR = { common: 0, unusual: 0, rare: 1, epic: 2, legendary: 3, mythi
 const HEAL_TEXT_COLOR = '#ff94c9';
 // 伤害飘字色（花朵/花瓣对生物造成的伤害），与 Heal 区分开。
 const DAMAGE_TEXT_COLOR = '#ff4040';
+// 中毒（Poison）专用色：生物悬浮框的 Poison 属性行用。
+// 官方只给了 {#Colors/poison} 引用（颜色表在游戏本体里，不在语言包里），
+// 这里定一支自己的：紫罗兰 —— 与生命绿(#7fe08a)/伤害红(#ff6b6b)/护甲灰蓝都区分得开。
+const MOB_POISON_COLOR = '#c58cff';
 
 // ---------------- 可用花瓣白名单 ----------------
 // 只有列在这里的花瓣会真正进入游戏（按 slug，slug = 英文名小写、空格转下划线）。
@@ -37,7 +41,7 @@ const DAMAGE_TEXT_COLOR = '#ff4040';
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
-  'faster', 'third_eye', 'web'
+  'faster', 'third_eye', 'web', 'antennae'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -89,7 +93,9 @@ const PETAL_RARITY_OVERRIDES = {
     eternal:   { dmg: 0, hp: 328050 },
     unique:    { dmg: 0, hp: 328050 }
   },
-  // Peas：4 个绿色小球实体（阵型型），数值为【每个小球】的 dmg/hp（card 总 hp = 4×，见 entities.js 阵型不分均）。
+  // Peas：4 个绿色小球实体（阵型型），数值表里是【单个小球】的 dmg/hp。
+  //   对外显示走【合并口径】（statDisplay='total'）：卡面/悬浮框显示 4 个小球合计的一份数值，
+  //   每个小球实体仍是各拿一份（结算不变）。详见 PETAL_STAT_DISPLAY。
   peas: {
     common:    { dmg: 15,    hp: 5 },
     unusual:   { dmg: 45,    hp: 15 },
@@ -127,6 +133,25 @@ const PETAL_RARITY_OVERRIDES = {
     super:     { dmg: 26244, hp: 10935, rotSpeed: 1.9 },
     eternal:   { dmg: 78732, hp: 32805, rotSpeed: 2.1 },
     unique:    { dmg: 78732, hp: 32805, rotSpeed: 2.1 }
+  },
+  // Antennae（触角）：装备型饰品，无伤害/血量。
+  //   sight = 【视野放大比例】（0.10 = 看得远 10%）：相机缩放系数 = 1 / (1 + sight)，
+  //   即"世界里能看到的范围变大"，由 Game 的相机缩放实现（平滑过渡，不瞬变）。
+  // Antennae（触角）：装备型饰品，无伤害/血量。
+  //   sight = 【视野扩大比例】（0.111 = 看得远 11.1%）。
+  //   相机缩放系数 = 1 / (1 + sight) —— 视野放大 N% 就是"能看到的范围 ×(1+N)"。
+  //   数值表对应官方相机缩放：0.9 / 0.85 / 0.8 / 0.75 / 0.7 / 0.5 / 0.35 / 0.2 / 0.1。
+  antennae: {
+    common:    { dmg: 0, hp: 0, sight: 0.111 },
+    unusual:   { dmg: 0, hp: 0, sight: 0.176 },
+    rare:      { dmg: 0, hp: 0, sight: 0.25 },
+    epic:      { dmg: 0, hp: 0, sight: 0.333 },
+    legendary: { dmg: 0, hp: 0, sight: 0.429 },
+    mythic:    { dmg: 0, hp: 0, sight: 1.0 },
+    ultra:     { dmg: 0, hp: 0, sight: 1.857 },
+    super:     { dmg: 0, hp: 0, sight: 4.0 },
+    eternal:   { dmg: 0, hp: 0, sight: 9.0 },
+    unique:    { dmg: 0, hp: 0, sight: 9.0 }
   },
   // Web：从 Unusual 起才有；dmg/hp 逐级 ×3；radius = 落地后那张网的半径（px）
   web: {
@@ -184,6 +209,40 @@ const PETAL_SUB_COUNT = {
 //                                             // rot = 相对"单体朝向"的额外旋转（弧度）
 const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas']);
 
+// ---------------- 一卡多体的【数值显示口径】----------------
+// 有些花瓣的官方模板是【合并显示】的：卡面/悬浮框上写的是"这一整张卡合计"的数值，
+// 而不是单个实体的数值（Peas：4 个绿色小球合计一份伤害/血量，官方就是这么写的）。
+// 这类花瓣必须【显式登记】，否则很容易把"合并值"当成"单体值"用 ——
+// 表现就是每个小球都拿到了合计值（伤害翻 4 倍），或者卡面水缸永远是满的。
+//   'each'  = 显示【单个实体】的数值（Light / Stinger / Pollen：默认口径）
+//   'total' = 显示【整张卡合计】的数值（= 单体值 × 实体数；目前只有 Peas）
+// 注意：这只影响【显示】（悬浮框 / 卡面数值 / 卡槽水缸分母）；
+// 【实体结算】永远用数据表里的单体值（每个实体各拿一份），两者严格分开。
+const PETAL_STAT_DISPLAY = {
+  peas: 'total',
+};
+
+// 把"数据表里的单体数值"换算成【对外显示的数值】。
+// 返回 { dmg, hp, heal, count, mul }：mul = 显示倍数（'total' 口径下 = 实体数）。
+// 悬浮框、卡面数值、卡槽水缸分母都走这一个入口，避免三处各写一遍换算而对不上。
+function petalDisplayStats(type, rarity) {
+  const st = petalStatsFor(type, rarity);
+  const n = (type && type.subCount) ? (type.subCount[rarity] || 1) : 1;
+  const total = !!(type && type.statDisplay === 'total') && n > 1;
+  const mul = total ? n : 1;
+  return {
+    // 先【原样透传】数据表里的其余字段（rotSpeed / attackRange / sight / radius / duration …），
+    // 只覆盖"会随显示口径换算"的三项。
+    // 少透传一项，那个属性就会在悬浮框里整行消失（Third Eye / Antennae / Faster 都栽过这里）。
+    ...st,
+    dmg: (st.dmg || 0) * mul,
+    hp: (st.hp || 0) * mul,
+    heal: (st.heal || 0) * mul,
+    count: n,
+    mul: mul
+  };
+}
+
 // Honey 的「Max Mob Rarity」：只能吸引到这一档及以下的生物（颜色 #d2eb34）
 //   · common  【没有这项属性】-> 什么都吸引不了（缺失 = 无吸引，绝不能当成"不限"）
 //   · unusual 起才生效：unusual 最高只能吸引 common，之后每档高一档
@@ -236,6 +295,10 @@ const PETAL_TRAITS = {
   //   · 效果 = reach 模式下把花瓣再向外伸 attackRange 像素（见 PETAL_RARITY_OVERRIDES）。
   // sticky 必须显式声明（特性表完整性断言要求每张启用花瓣都有 boolean）
   third_eye: { accessory: true, stackable: false, noDamage: true, sticky: false, reload: 0 },
+  // Antennae（触角）：装备型饰品（同 Third Eye 的形态：不进轨道、无战斗、固定在人物身上）。
+  //   效果 = 视野扩大：bonus.sight（0.10 = 看得远 10%），由相机缩放实现（平滑过渡）。
+  //   同种不可堆叠：视野是全局能力，重复装备没有意义（只有最左边那格生效）。
+  antennae: { accessory: true, stackable: false, noDamage: true, sticky: false, reload: 0 },
   // Web：reach 模式下脱轨、顺惯性飞出，0.5s 后自毁并原地张开一张网（由 PetalFX 接管）。
   //   web.duration = 网的存在时长（秒）；web.radius 按稀有度在 PETAL_RARITY_OVERRIDES 里。
   //   装填立刻开始（不像 Honey 那样等实体消失），与 Pollen 同款"放下就走"。
@@ -301,6 +364,9 @@ function buildPetalTypes() {
       maxMobRarity: tr.maxMobRarity || null,
       // 一卡多体（Pollen / Stinger）：每个实体各占一个轨道位、各自结算
       subCount: PETAL_SUB_COUNT[slug] || null,
+      // 数值显示口径（'each' 单体 / 'total' 合并）：见 PETAL_STAT_DISPLAY。
+      // 只影响显示（悬浮框 / 卡面数值 / 卡槽水缸分母），不改实体结算。
+      statDisplay: PETAL_STAT_DISPLAY[slug] || 'each',
       // 【阵型多体】（Stinger 起）：整坨只占一个轨道位，子实体按卡面布局锁定成一坨，
       // 外观与卡面一致，但各子实体仍独立结算碰撞与血量
       formation: PETAL_FORMATION_SLUGS.has(slug),
@@ -341,8 +407,9 @@ function petalStatsFor(type, rarity) {
   const dur = (type.web && type.web.duration) || 0;
   const pick = (o) => ({
     dmg: o.dmg || 0, hp: o.hp || 0, heal: o.heal || 0,
-    // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成
+    // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成 / 视野放大
     rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0,
+    sight: o.sight || 0,
     // 场地型花瓣（Web）：落地网的半径 + 存在时长（0 = 没有这一项）
     radius: o.radius || 0, duration: o.duration || dur
   });
@@ -357,6 +424,7 @@ function petalStatsFor(type, rarity) {
       heal: (s.heal || 0) * (mult.heal || 1),
       rotSpeed: (s.rotSpeed || 0) * (mult.rotSpeed || 1),
       attackRange: (s.attackRange || 0) * (mult.attackRange || 1),
+      sight: (s.sight || 0) * (mult.sight || 1),
       radius: (s.radius || 0) * (mult.radius || 1),
       duration: s.duration || dur
     };
@@ -421,7 +489,19 @@ const MOB_TRAITS = {
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
   //   gait = 有"换帧步态"（八条腿随行进摆动，见 render/spider-gait.js）
-  spider: { sightR: 500, gait: true }
+  //   collider = 碰撞箱【手写】：只有中间那一个圆（身体），周边摆动的腿不算。
+  //     k = 圆半径 / 视觉直径。实测身体外接半径 ≈ 0.36 × 视觉直径
+  //     （assets/mobs/21.svg 的身体是一个以 (55,55) 为心、半径 ≈10.3 的圆，
+  //       相对 61.1 宽的 viewBox + 固定裁剪框换算过来正好是这个比例）。
+  //     刻意【不走脚本提取】：脚本提取出来的是"带描边的身体轮廓多边形"，
+  //     会随描边宽度和采样精度漂；这里要的是"身体那个圆"，手写一个系数最稳。
+  spider: {
+    sightR: 500, gait: true,
+    // 碰撞箱【不手写】：默认从【原 SVG 提取】，且只取"去掉腿的身体"
+    // （SpiderGait.bodyUrl() 把 8 条腿的 path 从 SVG 文本里删掉后再提取）。
+    // assets/mobs/21.svg：身体 = 两个同心圆（外圈 r≈10.31 / 内圈 r≈7.37 SVG 单位，圆心 55,55），
+    // 8 条腿却伸到 ~30 —— 用含腿的轮廓会让碰撞箱大出近 3 倍。
+  }
 };
 
 // ---- 生物生成播报的专属台词（i18n key，文案在 js/i18n-extra.js）----

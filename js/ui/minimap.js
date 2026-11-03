@@ -146,7 +146,7 @@ Object.assign(UI, {
   },
 
   // 画在游戏主画布上（位置/尺寸/缩放均由 _mmTick 动画驱动）
-  drawMinimap(ctx, viewW, viewH, map, player, mobs, tp) {
+  drawMinimap(ctx, viewW, viewH, map, player, mobs, tp, far) {
     const half = map.R || (map.width * (map.tile || 1)) / 2;
     const m = this._mm;
     if (!(half > 0) || !m || !(m.size > 0)) return;
@@ -217,6 +217,17 @@ Object.assign(UI, {
         const mx = x0 + (mb.x - vx) / span * S, my = y0 + (mb.y - vy) / span * S;
         if (mx < x0 - dotR || mx > x0 + S + dotR || my < y0 - dotR || my > y0 + S + dotR) continue;
         ctx.beginPath(); ctx.arc(mx, my, Math.max(1.1, dotR * 0.62), 0, TAU); ctx.fill();
+      }
+    }
+    // 远端生物点：客户端不给远处个体建视图（省内存/GC），这里用坐标数组补上，
+    // 保证 F3 小地图上仍然能看到全图人口。
+    if (far && far.n) {
+      ctx.fillStyle = '#ff6b6b';
+      const r2 = Math.max(1.1, dotR * 0.62);
+      for (let i = 0; i < far.n; i++) {
+        const mx = x0 + (far.x[i] - vx) / span * S, my = y0 + (far.y[i] - vy) / span * S;
+        if (mx < x0 - dotR || mx > x0 + S + dotR || my < y0 - dotR || my > y0 + S + dotR) continue;
+        ctx.beginPath(); ctx.arc(mx, my, r2, 0, TAU); ctx.fill();
       }
     }
     // /tp 目标红点：在小地图视野内 -> 实心红点；在视野外 -> 贴边画空心环（不会"看不见"）

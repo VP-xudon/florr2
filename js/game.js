@@ -75,7 +75,15 @@ class Game {
     this.player = null;
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
     this.mobViews = new Map();   // netId -> 视图 Mob（快照差分创建/销毁用）
-    this.mobWebs = [];       // 敌方蛛网（Legend+ 蜘蛛原地自铺）：客户端镜像，纯表现
+    // 远端生物【只留坐标】：屏幕外的个体不建视图（视图对象很重，全图 4000+ 只各建一个
+    // 会把内存与 GC 拖垮），只有小地图/F3 需要知道它们在哪。
+    this._farX = new Float32Array(1024);
+    this._farY = new Float32Array(1024);
+    this._farN = 0;
+    this._mobTotal = 0;      // 快照里的生物总数（视图 + 远端点）
+    this._nearR = 0;         // 近处半径（视口外接圆 + 余量），随窗口大小变化
+    this.mobWebs = createExitList();   // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 大招超大网）：客户端镜像，纯表现
+                                  // 受控实体表：外部拿不到原始数组 -> 只能走通用退场后被回收
     this.cards = [];
     this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
 
@@ -256,6 +264,12 @@ class Game {
     // 客户端代码不该知道自己连的是进程内服务端还是真服务器。
     this.net.connect({ map: this.map, playerTemplate: this.player });
     this.camera.x = this.player.x; this.camera.y = this.player.y;
+    // 相机缩放（1 = 正常；<1 = 看得更远）。由 Antennae（触角）的视野加成驱动，平滑过渡。
+    this.camZoom = 1; this.camZoomTarget = 1;
+    // 预取蜘蛛的步态素材（8 条腿曲线 + 无腿身体图）：与场上有没有蜘蛛无关。
+    // 早点拿到，蜘蛛的碰撞轮廓才能第一时间就是"去掉腿的身体"（见 Mob._ensureShape），
+    // 否则要等第一只蜘蛛出现后才会开始加载，那之前它的碰撞箱会一直是含腿的大圈。
+    if (typeof SpiderGait !== 'undefined') SpiderGait.ensure();
     // 注意：生物一律由服务端按【地图自带的生成区】生成（tmj 的 mobs/mobs2 对象层），
     // 客户端只在快照里按 id 镜像出视图实体（见 _applySnap）。
 
@@ -397,7 +411,31 @@ class Game {
     // 复用同一个 Set：每次快照 new 一个 4000+ 项的 Set 是纯 GC 压力。
     const seen = this._seen || (this._seen = new Set());
     seen.clear();
+    // ---- 远端生物只留坐标，不建视图 ----
+    // 全图 4000+ 只若每一只都在客户端建一个 Mob 视图（视图对象很重：几十个字段 + 轮廓），
+    // 内存与 GC 压力会把帧率拖垮（"莫名其妙卡死"多半就是 GC 尖峰）。
+    // 远处的个体屏幕上根本看不见，只有小地图/F3 需要知道它们在哪 —— 那就只记坐标。
+    // 近处半径 = 视口外接圆 + 余量（够画 + 够做花瓣碰撞/推挤）。
+    const nearR = this._nearR || (this._nearR = Math.hypot(this.W * 0.5, this.H * 0.5) + 300);
+    const nearR2 = nearR * nearR;
+    const px = p.x, py = p.y;
+    let farN = 0;
+    let farX = this._farX, farY = this._farY;
+    this._mobTotal = snap.ents.length;
     for (const e of snap.ents) {
+      const dx = e.x - px, dy = e.y - py;
+      // Super / Eternal 永远建视图：Boss 血条要按稀有度挑它们（哪怕在视野边缘外）。
+      const boss = e.rarity === 'super' || e.rarity === 'eternal';
+      if (!boss && dx * dx + dy * dy > nearR2) {
+        if (farN >= farX.length) {           // 容量不够就翻倍（远端个体可能有几千只）
+          const nx = new Float32Array(farX.length * 2);
+          const ny = new Float32Array(farY.length * 2);
+          nx.set(farX); ny.set(farY);
+          farX = this._farX = nx; farY = this._farY = ny;
+        }
+        farX[farN] = e.x; farY[farN] = e.y; farN++;
+        continue;
+      }
       seen.add(e.id);
       let v = this.mobViews.get(e.id);
       if (!v) {
@@ -425,16 +463,31 @@ class Game {
       if (e.flash > (v.flash || 0)) v.flash = e.flash;
       if (e.squash > (v.squash || 0)) v.squash = e.squash;
       // 死亡：旋转角 + 计时（服务端生成随机角，客户端只演绎）
+      // 【退场强绑定】死亡 = 进入通用退场（放大 + 渐隐），退场播完才被回收。
+      // 服务端的退场进度取较大值回填，避免客户端"重新开始"播一遍。
       if (e.dead) {
         if (e.deathRot != null) v.deathRot = e.deathRot;
-        v.deathTimer = Math.max(v.deathTimer || 0, e.deathTimer || 0);
+        if (!v.exiting) ExitFX.begin(v);
+        if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
       }
+      // 大招（Super / Eternal 专属）：服务端权威，客户端只做表现镜像
+      //   · 大招进行中腿要继续摆（蜘蛛原地自转，不走位）
+      //   · 由 1 变 0 = 大招结束 -> 补一张超大蛛网（服务端已权威生成，这里只是画面镜像）
+      // 具体参数/规则一律向 MobFX 引擎问（js/mob-fx.js），客户端不写死物种。
+      const wasUlt = !!v.ultActive;
+      v.ultActive = !!e.ultActive;
+      if (wasUlt && !v.ultActive) MobFX.clientEnd(v, this._fieldCtx());
       // 朝向平滑跟随（服务端每帧给值，这里做一次短插值，转向更顺）
       if (e.facing != null) v.facing = lerpAngle(v.facing, e.facing, 0.35);
     }
     // 消失：服务端已回收的个体 -> 播放完退场渐隐再移除
+    this._farN = farN;
     for (const v of this.mobs) {
+      // 【退场强绑定】"从快照里消失"也必须走通用退场：不能凭空消失。
+      // 服务端可能刚好在两次快照之间把生物打死并回收（那 0.1s 的死亡窗口很短），
+      // 客户端压根没看见 dead —— 这时也要补一个退场动画。
       if (!v.gone && !seen.has(v.netId)) { v.gone = true; this._goneDirty = true; }
+      if (v.gone && !v.exiting) ExitFX.begin(v);
     }
   }
 
@@ -484,15 +537,18 @@ class Game {
 
   // 视图生物每帧推进：插值坐标 + 自身动画计时（AI/移动/战斗都在服务端）
   _tickMobViews(dt) {
-    // 敌方蛛网（Legend+ 蜘蛛原地自铺）：客户端镜像一份用于绘制。
+    // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：客户端镜像一份用于绘制。
     // 服务端另有权威判定（谁被减速），这里只负责"网在哪、什么时候消失"。
+    // 【退场强绑定】网到期不是凭空消失，而是走通用退场（放大 + 渐隐），播完才回收。
     const webs = this.mobWebs;
-    for (let i = webs.length - 1; i >= 0; i--) {
-      const f = webs[i];
+    for (let i = 0; i < webs.length; i++) {
+      const f = webs.get(i);
+      if (f.exiting) continue;                 // 正在退场：不再计时
       f.t += dt;
       f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      if (f.t >= f.dur) webs.splice(i, 1);
+      if (f.t >= f.dur) ExitFX.begin(f);
     }
+    webs.sweep(dt);                             // 唯一的回收点
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
     // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
     const k = dt / (this._snapDt || SNAP_DT);
@@ -503,8 +559,14 @@ class Game {
     // 旧写法用半径 max(W,H)*0.85+260 ≈ 1350px 的圆，差不多覆盖半张地图 ——
     // 4000+ 只里绝大多数都在"近处"，每只都跑一遍插值/血条平滑/动画计时，白烧 1.4ms/步。
     // 屏幕外的个体这一帧根本不会被画，贴位置就够；进屏后 blend 从 1 开始，不会跳。
-    const hw = this.W * 0.5 + 200, hh = this.H * 0.5 + 200;
+    // 可见范围随相机缩放变化（Antennae 拉远镜头）：屏幕尺寸 / z 才是世界里的可见宽度，
+    // 剔除矩形必须跟着放大，否则"看得更远"却只给近处的生物做动画（远处的会闪一下才出现）。
+    const _vz = this.camZoom || 1;
+    const hw = this.W / (2 * _vz) + 200, hh = this.H / (2 * _vz) + 200;
     for (const m of this.mobs) {
+      // 【退场必须推进】屏外的生物也要走退场计时 ——
+      // 否则退场永远播不完，那只生物就永远回收不掉（实体泄漏 + 屏幕外突然消失）。
+      if (m.exiting) ExitFX.tick(m, dt);
       const dxc = m.tx - cx, dyc = m.ty - cy;
       if (dxc > hw || dxc < -hw || dyc > hh || dyc < -hh) {
         m.blend = 1;
@@ -528,14 +590,16 @@ class Game {
       m.flash = Math.max(0, m.flash - dt);
       m.squash = damp(m.squash, 0, 10, dt);
       m._tickHpSmooth(dt);          // 血条双层平滑（主条 + 缓冲条），与花朵血条同款
-      if (m.dead) m.deathTimer += dt;
+      // 大招进行中（蜘蛛原地自转）：它不走位，步态不会自然推进 ——
+      // 腿要摆动就得补步态。补多少由 MobFX 引擎按物种声明给（与服务端口径一致）。
+      MobFX.clientTick(m, dt);
       // 碰撞外形贴图就绪后提取一次（与绘制同源）
       // 必须走 Mob._ensureShape：它会按【本节实际贴图】(artSvg) 取轮廓。
       // 早期这里手写了一份 'mob' + m.svg，多节生物（蜈蚣）就变成了整条 12.svg 的轮廓，
       // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
       if (!m.shape && !m.gone) m._ensureShape();
       // Legend+ 蜘蛛原地铺网（表现层镜像；服务端另有权威判定与减速）
-      if (m.gaitSprite && !m.dead
+      if (m.gaitSprite && !m.dead && !m.ultActive
         && RARITY_ORDER.indexOf(m.rarity) >= RARITY_ORDER.indexOf('legendary')) {
         m.webT = (m.webT || 0) + dt;
         if (m.webT >= SPIDER_WEB_EVERY) {
@@ -543,21 +607,48 @@ class Game {
           this._webType = this._webType
             || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
           const wr = this._webType ? (petalStatsFor(this._webType, m.rarity).radius || 120) : 120;
-          webs.push({ x: m.x, y: m.y, r: wr, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
+          webs.add({ x: m.x, y: m.y, r: wr, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
         }
       }
     }
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
     // 【不要每步都 filter】：它会分配一个 4000+ 元素的新数组，每步一次就是纯 GC 压力。
     // 只在确实标记过 gone 时、且最多 0.25s 清一次。
+    // 【回收口径】ExitFX.done = 退场动画已播完；没播完的还在场（不许凭空消失）。
     if (this._goneDirty) {
       this._cleanAcc = (this._cleanAcc || 0) + dt;
       if (this._cleanAcc >= 0.25) {
         this._cleanAcc = 0;
-        this.mobs = this.mobs.filter((m) => !(m.gone && m.deathTimer > FADE_T));
+        const keep = [];
+        for (const m of this.mobs) {
+          if (m.gone && ExitFX.done(m)) {
+            // 回收时把视图映射一起清掉（否则 mobViews 一直涨，netId 复用会串）
+            this.mobViews.delete(m.netId);
+            continue;
+          }
+          keep.push(m);
+        }
+        this.mobs = keep;
         this._goneDirty = this.mobs.some((m) => m.gone);
       }
     }
+  }
+
+  // 场地实体产出用的"原语"（客户端版）：MobFX 认识要什么，客户端只管怎么造画面。
+  _fieldCtx() {
+    if (!this._fctx) {
+      const self = this;
+      this._fctx = {
+        webType() {
+          self._webType = self._webType
+            || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
+          return self._webType;
+        },
+        webDur() { return SPIDER_WEB_DUR; },
+        addWeb(ent) { self.mobWebs.add(ent); },
+      };
+    }
+    return this._fctx;
   }
 
   buildBackground() {
@@ -577,6 +668,8 @@ class Game {
     this.canvas.height = this.H * this.dpr;
     this.canvas.style.width = this.W + 'px';
     this.canvas.style.height = this.H + 'px';
+    // 近处半径跟着窗口变：视口外接圆 + 余量（够画 + 够做花瓣碰撞/推挤）。
+    this._nearR = Math.hypot(this.W * 0.5, this.H * 0.5) + 300;
   }
 
   toggleBag() {
@@ -652,14 +745,33 @@ class Game {
     // 鼠标移动模式：平滑地把朝向转向指针。停住/开窗口时 Player.update 不再更新朝向，
     // 这里补上——做到"眼睛跟随鼠标但不走动"（玩家 facing 不在快照里，纯客户端表现）。
     if (this.moveMode === 'mouse' && this.mouse && !this.touchDir) {
-      const mx = this.mouse.x + this.camera.x - this.W / 2;
-      const my = this.mouse.y + this.camera.y - this.H / 2;
+      const _mz2 = this.camZoom || 1;
+      const mx = (this.mouse.x - this.W / 2) / _mz2 + this.camera.x;
+      const my = (this.mouse.y - this.H / 2) / _mz2 + this.camera.y;
       p.facing = wrapAngle(lerpAngle(p.facing, Math.atan2(my - p.y, mx - p.x), clamp(dt * 12, 0, 1)));
+    }
+
+    // —— 近处生物视图清单（一次扫描，三处复用）——
+    // 花瓣分离 / 玩家推挤都只需要"够近"的个体；全图 4000+ 只每帧各扫一遍是纯浪费
+    // （这三遍曾占 ~1ms/帧）。这里按玩家周围的固定半径扫一次，后面全部复用。
+    const near = this._nearViews || (this._nearViews = []);
+    near.length = 0;
+    {
+      // 半径要盖住"最远可能接触"的那只：击退预筛用 (collSize×0.78 + 玩家半径 + 24)，
+      // 最大的生物（永恒蜘蛛 collSize≈617）约 530px；花瓣吸附范围约 150px。
+      // 取 1100px 留足余量，同时把名单控制在几百只的量级。
+      const R2 = 1100 * 1100;
+      for (const m of this.mobs) {
+        if (m.dead) continue;
+        const dx = m.x - p.x, dy = m.y - p.y;
+        if (dx * dx + dy * dy > R2) continue;
+        near.push(m);
+      }
     }
 
     // —— 本地玩家：客户端预测（沿用原有 damp + moveEntity，手感与视觉零变化）——
     const hpBefore = p.hp;
-    p.update(dt, dir, this.map, this.mobs);   // 传入生物视图：花瓣会与生物碰撞
+    p.update(dt, dir, this.map, near);   // 传入近处生物视图：花瓣会与生物碰撞
     // 掉血就抖屏：与掉血量挂钩（比例越大抖得越狠，上限 = 一次普通受击）。
     // 放在这里而不是只在 hurt 事件里，是为了覆盖【一切】掉血来源 ——
     // 中毒（每帧连续扣血）、未来任何 DoT、环境伤害都不需要各自记得发抖动。
@@ -686,7 +798,8 @@ class Game {
       // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个做轮廓判定是纯浪费，
       // 预筛半径必须按【外接尺寸】算（collSize×0.75 ≈ 轮廓最远点），
       // 用等面积圆 r 会漏掉"外形比 r 大得多"的大型生物 —— 那正是玩家钻进怪身体里的原因。
-      for (const m of this.mobs) {
+      // （名单来自上面那一次"近处扫描"，这里不再全量遍历。）
+      for (const m of near) {
         if (m.dead) continue;
         const dx = m.x - p.x, dy = m.y - p.y;
         const rr = (m.collSize || (m.r || 0) * 2) * 0.78 + p.r + 24;
@@ -781,9 +894,18 @@ class Game {
     // 这样屏幕上永远不会出现地图之外的部分（与一档小地图贴边时的行为一致）。
     // 视图比整张地图还大时（窗口很大 / 地图很小）夹紧区间退化为一个点，相机停在地图中心。
     const half = this.map.R || (this.map.width * (this.map.tile || 1)) / 2;
-    const hw = Math.min(this.W / 2, half), hh = Math.min(this.H / 2, half);
+    // 相机缩放：可见的世界范围随 z 变大（z < 1 = 看得更远），夹紧范围跟着放大，
+    // 否则拉远后相机会被死死夹在地图中间、边缘反而看不到。
+    const _cz = this.camZoom || 1;
+    const hw = Math.min(this.W / (2 * _cz), half), hh = Math.min(this.H / (2 * _cz), half);
     this.camera.x = clamp(p.x, -half + hw, half - hw);
     this.camera.y = clamp(p.y, -half + hh, half - hh);
+    // 【相机缩放平滑过渡】：目标 = 1/(1+视野加成)，当前值按指数阻尼逼近 ——
+    // 装备/卸下触角时镜头是平滑拉远/拉近，瞬变会让人眩晕（也会让世界坐标换算突然错位）。
+    // 视野加成【不设上限】：官方 Eternal 触角 = 900% 视野 = 相机缩放 0.1（能看到全图）。
+    const sight = Math.max(0, (this.player && this.player.sightBonus) || 0);
+    this.camZoomTarget = 1 / (1 + sight);
+    this.camZoom = damp(this.camZoom || 1, this.camZoomTarget, 4.5, dt);
     this.shake = Math.max(0, this.shake - dt * 30);
     // F3 调试屏幕：只在打开时更新（内部再限频 5Hz）
     if (typeof DebugScreen !== 'undefined' && DebugScreen.on) DebugScreen.update(dt);
@@ -836,9 +958,10 @@ class Game {
   _readMouseDir() {
     const p = this.player;
     if (!this.mouse || !p) return { x: 0, y: 0 };
-    // 屏幕 -> 世界（渲染 translate(W/2-camX, H/2-camY) 的逆变换）
-    const mx = this.mouse.x + this.camera.x - this.W / 2;
-    const my = this.mouse.y + this.camera.y - this.H / 2;
+    // 屏幕 -> 世界（渲染 translate(W/2-camX*z, H/2-camY*z) + scale(z) 的逆变换）
+    const _mz = this.camZoom || 1;
+    const mx = (this.mouse.x - this.W / 2) / _mz + this.camera.x;
+    const my = (this.mouse.y - this.H / 2) / _mz + this.camera.y;
     const dx = mx - p.x, dy = my - p.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1e-3) return { x: 0, y: 0 };
@@ -978,6 +1101,12 @@ class Game {
     ctx.clearRect(0, 0, this.W, this.H);
 
     const camX = this.camera.x, camY = this.camera.y;
+    // 【相机缩放】z = 1 正常；z < 1 = 镜头拉远 = 能看到的世界范围变大（Antennae 的视野扩大）。
+    // 世界 -> 屏幕：sx = (wx - camX) * z + W/2  ⇒  translate 要乘 z，再整体 scale(z)。
+    // z 是【平滑过渡】的（见 update 里的阻尼），装备/卸下触角时不会瞬变。
+    const z = this.camZoom || 1;
+    // 可见范围（世界单位）：屏幕 W/H 对应 W/z、H/z 的世界长度。
+    const vw = this.W / z, vh = this.H / z;
     let shx = 0, shy = 0;
     if (this.shake > 0) { shx = rand(-this.shake, this.shake); shy = rand(-this.shake, this.shake); }
 
@@ -986,11 +1115,12 @@ class Game {
     ctx.fillRect(0, 0, this.W, this.H);
 
     ctx.save();
-    ctx.translate(this.W / 2 - camX + shx, this.H / 2 - camY + shy);
+    ctx.translate(this.W / 2 - camX * z + shx, this.H / 2 - camY * z + shy);
+    ctx.scale(z, z);
 
     // 真实花园瓦片（实时、仅可见区域）
     if (this.gardenData && this.gardenData.layers.length) {
-      try { drawGardenTiles(ctx, this.gardenData, camX, camY, this.W, this.H); }
+      try { drawGardenTiles(ctx, this.gardenData, camX, camY, vw, vh); }
       catch (e) { console.error('[drawGardenTiles]', e); }
     }
 
@@ -1016,9 +1146,9 @@ class Game {
     // 余量取半屏：足够覆盖一帧最大位移（约 4px）与最大生物半径（约 105px），
     // 又不至于像旧的 2 屏余量那样把 95% 的绘制留在屏幕外白做。
     // 判定用「圆心 ± 半径」而不是只测圆心：大生物贴边时必须照常绘制。
-    const padX = this.W * 0.5, padY = this.H * 0.5;
-    const mx0 = camX - this.W / 2 - padX, mx1 = camX + this.W / 2 + padX;
-    const my0 = camY - this.H / 2 - padY, my1 = camY + this.H / 2 + padY;
+    const padX = this.W * 0.5 / z, padY = this.H * 0.5 / z;
+    const mx0 = camX - vw / 2 - padX, mx1 = camX + vw / 2 + padX;
+    const my0 = camY - vh / 2 - padY, my1 = camY + vh / 2 + padY;
     const visible = this._visibleMobs || (this._visibleMobs = []);
     visible.length = 0;
     for (const m of this.mobs) {
@@ -1069,10 +1199,12 @@ class Game {
     let fallback = false;
     const camX = this.camera.x, camY = this.camera.y;
     const _px = this.W * 2, _py = this.H * 2;
-    const _x0 = camX - this.W / 2 - _px, _x1 = camX + this.W / 2 + _px;
-    const _y0 = camY - this.H / 2 - _py, _y1 = camY + this.H / 2 + _py;
+    const _vw = this.W / (this.camZoom || 1), _vh = this.H / (this.camZoom || 1);
+    const _x0 = camX - _vw / 2 - _px, _x1 = camX + _vw / 2 + _px;
+    const _y0 = camY - _vh / 2 - _py, _y1 = camY + _vh / 2 + _py;
     for (const m of mobs || []) {
-      if (m.dead && m.deathTimer > 0.2) continue;
+      // 退场播完后不再画碰撞箱（口径与实体渲染一致：ExitFX）
+      if (m.dead && ExitFX.done(m)) continue;
       const mr = (m.r || 0) + 4;
       if (m.x + mr < _x0 || m.x - mr > _x1 || m.y + mr < _y0 || m.y - mr > _y1) continue;  // 视口剔除：与实体渲染同源
       const sh = m.shape;
@@ -1160,10 +1292,13 @@ class Game {
     const t = this.tpTarget;
     if (!t) return;
     const dx = t.x - camX, dy = t.y - camY;
-    const hw = this.W / 2 - 20, hh = this.H / 2 - 20;
+    // 【相机缩放】本函数画在【屏幕空间】（世界层之外），而世界->屏幕要乘 z：
+    // "在屏幕内"的判据是世界偏移 × z，所以边界先换算成世界单位（除 z），画的时候再乘回来。
+    const z = this.camZoom || 1;
+    const hw = (this.W / 2 - 20) / z, hh = (this.H / 2 - 20) / z;
     if (Math.abs(dx) <= hw && Math.abs(dy) <= hh) return;   // 屏幕内：世界里的红点已经画了
     const k = Math.min(hw / Math.max(1, Math.abs(dx)), hh / Math.max(1, Math.abs(dy)));
-    const px = this.W / 2 + dx * k, py = this.H / 2 + dy * k;
+    const px = this.W / 2 + dx * k * z, py = this.H / 2 + dy * k * z;
     ctx.save();
     ctx.beginPath();
     ctx.arc(px, py, 7, 0, TAU);
@@ -1189,8 +1324,11 @@ class Game {
   _drawMinimap() {
     // 生物点（粉色）只在 F3 调试屏幕打开时显示：常规游玩只看地形与玩家，信息更干净。
     // 把 /tp 标记一起传进去（小地图是独立绘制的，不能靠全局变量取）
-    const dots = (typeof DebugScreen !== 'undefined' && DebugScreen.on) ? this.mobs : null;
-    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, dots, this.tpTarget);
+    const dbg = (typeof DebugScreen !== 'undefined' && DebugScreen.on);
+    const dots = dbg ? this.mobs : null;
+    // 远端个体不在 this.mobs 里（只留了坐标），单独交给小地图补画。
+    const far = dbg && this._farN ? { x: this._farX, y: this._farY, n: this._farN } : null;
+    UI.drawMinimap(this.ctx, this.W, this.H, this.map, this.player, dots, this.tpTarget, far);
   }
 
   // ---------- 图鉴 ----------

@@ -47,7 +47,8 @@ class Player {
     this.petalWorld = [];
     // 场地型实体（Web 落地后的那张大网）：独立于花瓣实体表 —— 没有碰撞箱、不占轨道位、
     // 不参与伤害结算；{ x, y, r, t, dur, pop, spin }。
-    this.webFields = [];
+    // 受控实体表（sim/exit.js）：移除只能走通用退场后由 sweep 回收，外部无法直接删。
+    this.webFields = createExitList();
     // 一卡多批（Pollen / Honey）：每个槽一个"世代号"。脱轨的实体【继续留在 this.petals】
     // 里（stationary），新一批实体用递增的世代号区分 —— 花瓣实体始终是同一套东西，
     // 不区分"跟着玩家的"和"放在地上的"，绘制/碰撞/战斗/仇恨全部复用同一条路径。
@@ -69,8 +70,9 @@ class Player {
     // ---- 装备加成（装上就生效，与是否装填完成无关；同类可叠加）----
     //   rotSpeed：Faster  → 加最大转速
     //   reach   ：Third Eye → reach 模式下花瓣再向外伸的距离
+    //   sight   ：Antennae → 视野放大比例（相机缩放，1/(1+sight)）
     // 数值由 PetalFX.bonus 统一给出（数据表 + 注册项），这里只求和，不认 slug。
-    let rotBonus = 0, reachBonus = 0;
+    let rotBonus = 0, reachBonus = 0, sightBonus = 0;
     const seenType = Object.create(null);
     this.slotActive = [];        // 每格是否"生效"（不可堆叠花瓣的重复件 = false）
     this.accessories = [];       // 装备型饰品（不进入轨道，直接画在人物身上）
@@ -90,6 +92,7 @@ class Player {
         const b = PetalFX.bonus(p.type, p.rarity);
         rotBonus += b.rotSpeed || 0;
         reachBonus += b.reach || 0;
+        sightBonus += b.sight || 0;
       }
       if (p.type.accessory) this.accessories.push({ card: p, slot: i });
     }
@@ -103,6 +106,8 @@ class Player {
     // 所以转速上限是【动态】的，绝不硬编码在别处。
     this.rotMax = PETAL_SPIN + rotBonus;
     this.reachBonus = reachBonus;
+    // 视野放大（Antennae）：0 = 正常视野。相机缩放 = 1/(1+sight)（看得更远）。
+    this.sightBonus = sightBonus;
   }
 
   // 受击结算：返回【本击是否真正扣到了血】（护甲已在调用方扣减）。
@@ -159,7 +164,8 @@ class Player {
 
   // ---- 场地型实体（Web 落地后的那张大网）----
   // 独立于花瓣实体表：没有碰撞箱、不占轨道位、不参与伤害；只按半径挂状态效果。
-  // 生成时从中心【快速渐大弹出】（pop 0->1），到点直接移除（渲染侧自己渐隐）。
+  // 生成时从中心【快速渐大弹出】（pop 0->1）；到期【不是凭空消失】：
+  // 进入通用退场（sim/exit.js 的 ExitFX：放大 + 渐隐），播完才被回收。
   spawnWeb(x, y, radius, duration, card) {
     if (!(radius > 0)) return null;
     const f = {
@@ -167,28 +173,23 @@ class Player {
       dur: (duration > 0) ? duration : 10,
       pop: 0, spin: 0, card: card || null
     };
-    this.webFields.push(f);
+    this.webFields.add(f);
     return f;
   }
 
   _tickWebs(dt) {
     const arr = this.webFields;
     if (!arr || !arr.length) return;
-    for (let i = arr.length - 1; i >= 0; i--) {
-      const f = arr[i];
+    for (let i = 0; i < arr.length; i++) {
+      const f = arr.get(i);
+      if (f.exiting) continue;                // 正在退场：不再计时，也不再挂效果
       f.t += dt;
       f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      if (f.t >= f.dur) {
-        // 移除走【通用退场接口】：与生物死亡一模一样的"一瞬间渐大 + 渐隐"
-        const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
-        if (img) {
-          this.petalGhosts.push({
-            img, x: f.x, y: f.y, size: f.r * 2, alpha: 0.9, age: 0
-          });
-        }
-        arr.splice(i, 1);
-      }
+      // 到期 -> 进入通用退场（放大 + 渐隐，与生物死亡同一套曲线）
+      if (f.t >= f.dur) ExitFX.begin(f);
     }
+    // 唯一的回收点：退场播完才移除（受控实体表，外部拿不到原始数组）
+    arr.sweep(dt);
   }
 
   // 出生 / 重生的【唯一】重置入口：客户端预测副本与服务端权威副本都必须走这里。
@@ -211,7 +212,8 @@ class Player {
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
     // 花瓣实体、世代号、退场幽灵是同一份状态，必须一起清
     this.petals = []; this.petalWorld = []; this._petalGen = []; this.petalGhosts = [];
-    this.webFields = [];                   // 场上的网属于"这一条命"，重生即清空
+    // 场上的网属于"这一条命"：重生时【走通用退场】淡出，而不是凭空消失
+    for (const f of this.webFields) ExitFX.begin(f);
     this.netPetals = null;                 // 旧快照键映射作废，避免重生瞬间串状态
     this.reload = this.slots.map((c) => c ? {
       card: c, age: 0,
@@ -228,6 +230,8 @@ class Player {
       // 死亡瞬间放出的花瓣退场幽灵继续播完渐隐（0.2s）
       for (const g of this.petalGhosts) g.age += dt;
       this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
+      // 退场中的网也要播完（否则会一直挂到下次重生才被回收）
+      if (this.webFields && this.webFields.length) this.webFields.sweep(dt);
       return;
     }
     // 地形减速：站在 foliage / seaweed / vine 这类瓦片上时——
@@ -597,7 +601,8 @@ class Player {
       // 血量按【卡面总 hp】均分：一张卡有 N 个实体，每个实体占卡面 hp 的 1/N。
       // 卡槽的"水缸"阴影则按存活实体的血量总和 / 卡面总 hp 计算（见 ui.js _reloadTick）。
       // 例外：【阵型型】（Stinger / Peas）不均分 —— 每个子实体就是给出的"单个体"数值
-      // （如 Peas 单球 5 血、卡面也显示 5），否则会被除以 N 变成 1.25，完全失真。
+      // （如 Peas 单球 5 血；卡面按【合并口径】显示合计 20，见 PETAL_STAT_DISPLAY），
+      // 否则会被除以 N 变成 1.25，完全失真。
       const cardHp = st.hp || 30;
       const maxHp = (cnt > 1 && !card.type.formation) ? cardHp / cnt : cardHp;
       const gen = this._petalGen[slotIndex] | 0;

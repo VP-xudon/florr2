@@ -99,9 +99,23 @@ const STATUS_FIELD_REFRESH = 0.25;
 // 场地型实体（网）从生成中心"快速渐大弹出"的时长（秒）：0 -> 1 的缩放过渡
 const WEB_POP_T = 0.18;
 // Legend+ 蜘蛛的自铺蛛网：每 SPIDER_WEB_EVERY 秒在原地铺一张，SPIDER_WEB_DUR 秒后消失。
+// 网的存在时间到了【不是凭空消失】，而是走通用退场（见 sim/exit.js 的 ExitFX）。
 // 网的半径按蜘蛛稀有度取 Web 花瓣同档的 radius（见 LocalServer._fieldTick）。
 const SPIDER_WEB_EVERY = 1.5;
 const SPIDER_WEB_DUR = 5;
+// ---- 大招（Super / Eternal 专属）----
+// 战斗 tick 频率：25 tick/s（与快照频率一致），所以"1000 tick" = 40 秒。
+const MOB_TICK_S = 1 / 25;
+// 大招冷却（tick）：每隔 1000~1500 tick 放一次大招（= 40~60 秒）。
+const MOB_ULT_COOLDOWN_TICKS = [1000, 1500];
+// 大招期间腿的摆动速率（步态 px/s）：蜘蛛原地自转时腿也要摆，
+// 但它不走位（步态不会自然推进），所以按固定速率补。
+const MOB_ULT_GAIT_RATE = 120;
+// 蜘蛛大招：自转速度 = 3 秒 2 圈 -> rad/s；一共转 3 圈（因此整个大招约 4.5 秒）。
+const SPIDER_ULT_TURNS_PER_SEC = 2 / 3;
+const SPIDER_ULT_TURNS = 3;
+// 蜘蛛大招产出的网：半径 = 同等级蛛网 × 2（Super 250 -> 500，Eternal 300 -> 600）。
+const SPIDER_ULT_WEB_MUL = 2;
 // 碰撞反弹：被非己方实体打伤时，本体沿远离方向位移的距离（占主角直径的比例）。
 const FLOWER_KNOCKBACK = 0.3;
 // 反弹总位移在双方之间的分配比例 [玩家份额, 生物份额]（按稀有度查表，份额和恒为 1）。
@@ -293,9 +307,11 @@ const PETAL_JELLY_IMPACT_MAX = 2.4;
 // 默认速度的 40%；同时所有花瓣被打回"待加载"（见 Player._tickReload / reloadDone）。
 const SLOW_TILE_SPEED = 0.4;
 
-// 通用出场 / 退场动画（所有实体统一遵守，时长 0.5s）
+// 通用出场 / 退场动画（所有实体统一遵守，时长 0.1s）
 //   出场：大小不变，仅渐显
 //   退场（死亡 / 被删除 / 卸下）：平滑放大到 1.5 倍，同时渐隐
+// 【退场的唯一通道是 sim/exit.js 的 ExitFX】：任何实体离场都必须先 ExitFX.begin()
+// 再由 ExitFX.sweep() 回收，绝不允许直接 splice/pop（那会让实体凭空消失）。
 const FADE_T      = 0.1;
 const DEATH_SCALE = 1.5;
 // 卸下/被打碎的花瓣退场时长：与全体实体统一的 0.1s 快速渐隐。
