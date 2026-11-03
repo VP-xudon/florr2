@@ -2117,6 +2117,15 @@
       if (!(Math.abs(z1 - target) < 0.01)) {
         return { ok: false, detail: `未趋近目标：z=${z1.toFixed(4)} target=${target.toFixed(4)}` };
       }
+      const viewRadius = Math.hypot(
+        Math.abs(game.camera.x - p.x) + game.W / (2 * z1),
+        Math.abs(game.camera.y - p.y) + game.H / (2 * z1)
+      ) + 300;
+      if (game._nearR < viewRadius) {
+        p.slots[0] = saved; p.recompute();
+        game.stepFrames(120, 1 / 60, false);
+        return { ok: false, detail: `生物视图半径 ${game._nearR.toFixed(1)} 小于视口覆盖需求 ${viewRadius.toFixed(1)}` };
+      }
       // 还原装备，避免影响后续断言
       p.slots[0] = saved; p.recompute();
       game.stepFrames(120, 1 / 60, false);

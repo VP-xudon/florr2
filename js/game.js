@@ -415,10 +415,17 @@ class Game {
     // 全图 4000+ 只若每一只都在客户端建一个 Mob 视图（视图对象很重：几十个字段 + 轮廓），
     // 内存与 GC 压力会把帧率拖垮（"莫名其妙卡死"多半就是 GC 尖峰）。
     // 远处的个体屏幕上根本看不见，只有小地图/F3 需要知道它们在哪 —— 那就只记坐标。
-    // 近处半径 = 视口外接圆 + 余量（够画 + 够做花瓣碰撞/推挤）。
-    const nearR = this._nearR || (this._nearR = Math.hypot(this.W * 0.5, this.H * 0.5) + 300);
-    const nearR2 = nearR * nearR;
     const px = p.x, py = p.y;
+    // 近处半径覆盖实际相机视口（含相机与玩家的偏移）+ 交互余量。
+    // 相机缩放会平滑变化，因此每份快照都重算；不能缓存未缩放时的半径。
+    const zoom = Math.max(0.01, this.camZoom || 1);
+    const camera = this.camera || p;
+    const viewX = this.W / (2 * zoom), viewY = this.H / (2 * zoom);
+    const nearR = this._nearR = Math.hypot(
+      Math.abs(camera.x - px) + viewX,
+      Math.abs(camera.y - py) + viewY
+    ) + 300;
+    const nearR2 = nearR * nearR;
     let farN = 0;
     let farX = this._farX, farY = this._farY;
     this._mobTotal = snap.ents.length;
