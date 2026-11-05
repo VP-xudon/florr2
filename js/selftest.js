@@ -455,6 +455,118 @@
       };
     });
 
+    check('engine: Orange 与 Missile 数据/能力', () => {
+      const pick = (slug) => PETAL_TYPES.find((x) => x && x.slug === slug);
+      const orange = pick('orange'), missile = pick('missile');
+      if (!orange || !missile) return { ok: false, detail: 'Orange 或 Missile 未启用' };
+      const layout = CardRenderer.multiLayout(orange.svg, 'common');
+      const rotations = layout.map((part) => part.rot);
+      const equalTurn = rotations.length === 3
+        && rotations.every((angle, i) => i === 0 || Math.abs((angle - rotations[i - 1]) - TAU / 3) < 1e-9);
+      const entityLayout = CardRenderer.entityFormationLayout(orange.svg, 'common');
+      const sizeOk = Math.abs(layout[0].k - 0.936) < 1e-9
+        && entityLayout.every((part) => part.k === 1);
+      const missileStats = [
+        ['unusual', 105, 6], ['rare', 315, 18], ['epic', 945, 54],
+        ['legendary', 2835, 162], ['mythic', 8505, 486],
+        ['ultra', 25515, 1458], ['super', 76545, 4374],
+        ['eternal', 229635, 13122], ['unique', 229635, 13122]
+      ];
+      const statsOk = missileStats.every(([rarity, dmg, hp]) => {
+        const stats = petalStatsFor(missile, rarity);
+        return stats.dmg === dmg && stats.hp === hp;
+      });
+      const targetAngle = Math.PI / 36;
+      const missileBody = { x: 0, y: 0, card: { type: missile } };
+      const launch = PetalFX.defs.missile.detach({
+        petal: missileBody, type: missile, player: { facing: 0 },
+        mobs: [{ x: Math.cos(targetAngle) * 200, y: Math.sin(targetAngle) * 200, dead: false }]
+      });
+      const launchAngle = Math.atan2(launch.vy, launch.vx);
+      const speedOk = Math.abs(Math.hypot(launch.vx, launch.vy) - 1.3 * PLAYER_BASE_SPEED) < 1e-9;
+      const aimOk = Math.abs(launchAngle - targetAngle) < 1e-9
+        && Math.abs(missileBody.flightRot - (targetAngle - MISSILE_TIP_ANGLE)) < 1e-9;
+      const outsideBody = { x: 0, y: 0, card: { type: missile } };
+      const outsideLaunch = PetalFX.defs.missile.detach({
+        petal: outsideBody, type: missile, player: { facing: 0 },
+        mobs: [{ x: Math.cos(Math.PI / 12) * 200, y: Math.sin(Math.PI / 12) * 200, dead: false }]
+      });
+      const noTrackOk = Math.abs(Math.atan2(outsideLaunch.vy, outsideLaunch.vx)) < 1e-9;
+      const ok = orange.reload === 1.5 && equalTurn && sizeOk && statsOk && speedOk && aimOk && noTrackOk
+        && missile.reload === 1.5 && missile.launchMode === 'reach'
+        && missile.launchDelay === 0
+        && missile.launch.speedK === 1.3 && missile.launch.life === 2;
+      return {
+        ok,
+        detail: `Orange reload=${orange.reload} rotation=${rotations.join(',')} size=${sizeOk}; `
+          + `Missile stats=${statsOk} aim=${aimOk} straight=${noTrackOk} speed=${speedOk}`
+      };
+    });
+
+    check('engine: Hornet 属性/附庸导弹与隐藏掉落', () => {
+      const hornet = MOB_TYPES.find((mob) => mob && mob.slug === 'hornet');
+      const missile = PETAL_TYPES.find((petal) => petal && petal.slug === 'missile');
+      const pairs = [
+        ['common', 60, 50, 1, 1, 5, 10, 2],
+        ['unusual', 225, 150, 2, 2, 25, 30, 3],
+        ['rare', 810, 450, 7, 6, 125, 90, 4],
+        ['epic', 3240, 1350, 22, 53, 625, 270, 5],
+        ['legendary', 19440, 4050, 65, 486, 3125, 810, 6],
+        ['mythic', 189540, 12150, 194, 6856, 15625, 2430, 7],
+        ['ultra', 8748000, 36450, 583, 266727, 78125, 7290, 8],
+        ['super', 262440000, 109350, 583, 16401473, 390625, 21870, 9],
+        ['eternal', 1574640000, 328050, 583, 16401473, 1953125, 65610, 10],
+        ['unique', 1574640000, 328050, 583, 16401473, 1953125, 65610, 10]
+      ];
+      if (!hornet || !missile) return { ok: false, detail: 'Hornet/Missile 缺失' };
+      const valuesOk = pairs.every(([rarity, hp, dmg, armor, exp, mhp, mdmg, dur]) => {
+        const stats = hornet.rarityStats[rarity];
+        return stats.hp === hp && stats.dmg === dmg && stats.armor === armor && stats.exp === exp
+          && stats.missileHp === mhp && stats.missileDmg === mdmg && stats.missileDur === dur;
+      });
+      const drops = mobDropRows(hornet.id, 'common');
+      const visibleMissile = drops.some((row) => row.slug === 'missile');
+      const magicHidden = DROP_HIDDEN_SLUGS.has('magic_missile');
+      const magicianReplacement = MOB_DROP_MAGICIAN.hornet.missile === 'magic_missile';
+      const spawned = parseSpawnMobs('hornet:1').some((entry) => entry.type.slug === 'hornet');
+      return {
+        ok: valuesOk && visibleMissile && magicHidden && magicianReplacement && spawned,
+        detail: `values=${valuesOk} missileDrop=${visibleMissile} magicHidden=${magicHidden}`
+          + ` replacement=${magicianReplacement} spawnable=${spawned}`
+      };
+    });
+
+    check('ai: Hornet 发射/回转固定完成', () => {
+      const hornetType = MOB_TYPES.find((mob) => mob && mob.slug === 'hornet');
+      if (!hornetType) return 'Hornet 未启用（跳过）';
+      const player = { x: 220, y: 0, vx: 0, vy: 0, dead: false };
+      const mob = new Mob(hornetType, 0, 0, 1, 'common');
+      mob._map = { lineBlocked: () => false };
+      mob.threat = [{ ent: player, dmg: 1 }];
+      mob.facing = 0;
+      mob.hornet.missile.x = 0; mob.hornet.missile.y = 0;
+      mob.ai.hornetMode = 'approach';
+      const first = MobFX.stepMob(mob, 1 / 60, player);
+      const immediateAim = mob.hornet.spinPhase === 'aim' && first.x === 0 && first.y === 0;
+      const snapshotAngle = mob.hornet.launchAngle;
+      player.x = 5000;
+      let projectile = null;
+      for (let i = 0; i < 200; i++) {
+        MobFX.stepMob(mob, 1 / 60, player);
+        if (mob.hornet.missile && mob.hornet.missile.flight) { projectile = mob.hornet.missile; break; }
+      }
+      const launched = !!projectile && Math.abs(Math.atan2(projectile.vy, projectile.vx) - snapshotAngle) < 1e-9;
+      let returned = false;
+      for (let i = 0; i < 200; i++) {
+        MobFX.stepMob(mob, 1 / 60, player);
+        if (!mob.hornet.spinPhase) { returned = true; break; }
+      }
+      return {
+        ok: immediateAim && launched && returned,
+        detail: `immediate=${immediateAim} straightLaunch=${launched} returnComplete=${returned}`
+      };
+    });
+
     // 6b) 装备型花瓣：Faster 加最大转速、Third Eye 加 reach，且同种只认最左一格
     check('engine: 装备加成（转速 / reach / 不可堆叠）', () => {
       const p = game && game.player;
@@ -483,22 +595,18 @@
       }
     });
 
-    // 6b2) 击退引擎的花瓣重量：同等级生物重量 × 递减份额（common 0.5 -> eternal 0.05）
-    check('sim: 花瓣击退重量份额递减', () => {
+    // 6b2) 所有花瓣使用旧版 Legendary 花瓣的固定击退质量
+    check('sim: 花瓣击退质量固定为 Legendary', () => {
       if (typeof petalKnockbackWeight !== 'function' || typeof rarityWeight !== 'function') {
         return '缺少重量函数（跳过）';
       }
-      // 份额（相对同等级生物重量）必须逐档递减；重量本身当然是逐档递增的。
-      const share = (r) => petalKnockbackWeight(r) / rarityWeight(r);
-      const c = share('common'), e = share('eternal');
-      const mono = RARITY_ORDER.every((r, i) => i === 0
-        || share(r) < share(RARITY_ORDER[i - 1]) + 1e-12);
-      const ok = Math.abs(c - 0.5) < 1e-9 && Math.abs(e - 0.05) < 1e-9 && mono;
+      const expected = rarityWeight('legendary') * 0.5 * Math.pow(0.1, 0.5);
+      const same = RARITY_ORDER.every((r) => Math.abs(petalKnockbackWeight(r) - expected) < 1e-9);
+      const ok = same;
       return {
         ok,
-        detail: `common=${c.toFixed(3)}× eternal=${e.toFixed(3)}× 单调=${mono}`
-          + `（eternal 击退重量=${petalKnockbackWeight('eternal').toFixed(1)}，`
-          + `生物=${rarityWeight('eternal').toFixed(1)}）`
+        detail: `所有花瓣=${petalKnockbackWeight('common').toFixed(3)}，`
+          + `旧 Legendary=${expected.toFixed(3)}，生物 Legendary=${rarityWeight('legendary').toFixed(3)}`
       };
     });
 

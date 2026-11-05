@@ -1080,6 +1080,7 @@ const UI = {
           dmg: Math.round(dmg * 10) / 10,
           hp: Math.round(hp * 10) / 10,
           heal: Math.round(heal * 10) / 10,
+          maxDamage: st.maxDamage || 0,
           // 持续回血的花瓣（healOverTime）治疗量是【每秒】计数单位，显示成 "3/s"；
           // Rose 等一次性治疗不显示 /s。
           healPerSec: !!type.healOverTime,
@@ -1144,6 +1145,8 @@ const UI = {
         // 中毒（蜘蛛等）：poison = 总量，poisonRate = 每秒伤害（0 = 没有这一项）
         poison: rs.poison || 0,
         poisonRate: rs.poisonRate || 0,
+        missileHp: rs.missileHp || 0,
+        missileDmg: rs.missileDmg || 0,
         // 掉落物：一种花瓣一行，行内是该花瓣各掉落稀有度（卡面 + 下方概率）
         drops: (typeof mobDropRows === 'function') ? mobDropRows(mob.id, rarity) : [],
         anchor: el

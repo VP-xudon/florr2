@@ -22,8 +22,7 @@ const PETAL_ATTACK_DUR = 0.004;     // 花瓣每次命中(25Hz)按最大耐久�
 // 多节生物（一次生成整条、每一节独立结算）由数据表字段 MOB_TYPES[].segmented 声明。
 // 这里只保留唯一读取入口，不再维护 slug 白名单 —— 新增多节物种只改数据表。
 function isSegmentMob(type) { return !!(type && type.segmented); }
-// 花瓣在【击退引擎】里的物理重量 = 同稀有度生物重量 × 递减份额
-// （common ×0.5 → eternal ×0.05，见 sim/constants.js 的 petalKnockbackWeight）。
+// 所有花瓣使用旧版 Legendary 花瓣的固定击退质量（见 sim/constants.js）。
 // 注意别再退回 b.weight：那是实体分离用的真实重量，两者口径不同 ——
 // 混用会让花瓣"很轻却推得动怪"或者"很重却推不动"，手感直接失控。
 function petalWeight(b) {
@@ -34,8 +33,6 @@ function petalWeight(b) {
 // 质量悬殊带来的传递增益区间：以"同等级实体之间的击退"为基准 1。
 //   MAX = 1.5：重物砸轻物最多放大到 1.5 倍（用户要求的上限）；
 //   MIN = 0.2 ：轻物砸重物最多衰减到 0.2 倍。
-// 下限必须低于 sqrt(花瓣击退重量份额) 的最小值（eternal ×0.05 -> 0.224），
-// 否则高稀有度花瓣会被这个"地板"抬到同一档，"越高级推得越轻"的递进就完全看不出来。
 // 仅作用于【生物击退】；实体之间的推动 / 位移分离不设上限，按反质量自然分配。
 const KB_DISPARITY_MAX = 1.5;
 const KB_DISPARITY_MIN = 0.2;

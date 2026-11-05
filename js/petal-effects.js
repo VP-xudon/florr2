@@ -91,6 +91,11 @@ const PetalFX = {
     };
   },
 
+  damageOf(body, mob, player, baseDamage) {
+    const def = this.defOf(body && body.card && body.card.type);
+    return def && def.damage ? def.damage(this._ctx(body, player, 0), mob, baseDamage) : baseDamage;
+  },
+
   // ---- 装备型饰品（accessory）的绘制（可选）----
   // 返回 true  = 注册项自己画完了（高度自定义，比如 Third Eye 的白色眼珠）；
   // 返回 false = 用玩家层的默认实现（把素材原样画在头顶上方）。
@@ -193,11 +198,15 @@ const PetalFX = {
   // 脱轨计划：返回 null = 不脱轨，否则 { vx, vy, holdReload }。
   // 默认实现按能力字段生成：有 launch 的喷射出去（Peas），否则保留一点惯性滑行（Pollen / Honey）。
   // 具体物种可以覆盖：detach(ctx) 返回自己的初速/参数。
-  detach(body, player) {
+  detach(body, player, mobs) {
     const type = body && body.card && body.card.type;
     if (!type) return null;
     const def = this.defOf(type);
-    if (def && def.detach) return def.detach(this._ctx(body, player, 0)) || null;
+    if (def && def.detach) {
+      const ctx = this._ctx(body, player, 0);
+      ctx.mobs = mobs || [];
+      return def.detach(ctx) || null;
+    }
     const launch = this.trait(type, 'launch');
     if (launch) {
       // 喷射型：朝 N 个方向直直飞出去，速度 = speedK × 主角默认最高移速。
@@ -438,6 +447,53 @@ PetalFX.register('pollen', {});
 // flightOf 也能读到同一份参数；显式登记只是把"这只花瓣由引擎接管"写明。
 PetalFX.register('peas', {});
 
+PetalFX.register('orange', {
+  damage(ctx, mob, baseDamage) {
+    const previous = mob.lastHitByPlayer ? (mob.lastHitByPlayer.get(ctx.player) || 0) : 0;
+    return Math.min(baseDamage + previous * 0.5, ctx.stats.maxDamage || Infinity);
+  },
+  artVariant(svgId, txt) {
+    if (String(svgId) !== '50') return null;
+    const root = txt.match(/<g\b[^>]*transform="translate\(-6\.103 9\.445\)"[^>]*>/);
+    if (!root) return txt;
+    const paths = [...txt.matchAll(/<path\b[^>]*>/g)].map((match) => match[0]);
+    if (paths.length !== 12) return txt;
+    const single = root[0] + paths.slice(0, 4).join('') + '</g>';
+    return txt.replace(/<g\b[^>]*>[\s\S]*?<\/g>/,
+      '<g transform="translate(55 55) scale(0.8) translate(-55 -55)">' + single + '</g>');
+  }
+});
+
+PetalFX.register('missile', {
+  detach(ctx) {
+    const body = ctx.petal, player = ctx.player;
+    const baseAngle = player.facing || 0;
+    let angle = baseAngle, bestDelta = Math.PI / 18 + 1, bestDistance = Infinity;
+    for (const mob of ctx.mobs) {
+      if (!mob || mob.dead) continue;
+      const dx = mob.x - body.x, dy = mob.y - body.y;
+      const distance2 = dx * dx + dy * dy;
+      if (distance2 > 300 * 300) continue;
+      const targetAngle = Math.atan2(dy, dx);
+      const delta = Math.atan2(Math.sin(targetAngle - baseAngle), Math.cos(targetAngle - baseAngle));
+      const absDelta = Math.abs(delta);
+      if (absDelta > Math.PI / 18) continue;
+      if (absDelta < bestDelta || (absDelta === bestDelta && distance2 < bestDistance)) {
+        angle = baseAngle + delta;
+        bestDelta = absDelta;
+        bestDistance = distance2;
+      }
+    }
+    const speed = (ctx.type.launch.speedK || 1.3) * PLAYER_BASE_SPEED;
+    body.flightRot = angle - MISSILE_TIP_ANGLE;
+    body.flightSpin = 0;
+    return { vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, holdReload: false };
+  },
+  flight(body) {
+    return body.card.type.launch;
+  }
+});
+
 // —— 内置特效 5：蜜（Honey）——
 // ① 实体碰撞：这条【不写在这里】。所有花瓣都是实体（分离 + 双向伤害由战斗循环统一处理），
 //    蜜的区别只有 `sticky: true` —— 会被生物吸到表面"揉搓"（见 data.js PETAL_TRAITS）。
@@ -497,6 +553,16 @@ PetalFX.register('antennae', {
   bonus(type, rarity) {
     return { sight: (petalStatsFor(type, rarity).sight || 0) };
   },
+  drawAccessory(ctx2d, acc, player, R) {
+    const svg = acc.card.type.svg;
+    const img = CardRenderer.artImage(svg) || CardRenderer.artCanvas(svg, 256);
+    if (!img) return true;
+    const size = R * ACC_ART_SIZE_K;
+    const baseY = player.y - R * ACC_ART_LIFT_K + size * ACC_ART_DROP_K;
+    const scaledSize = size * 3;
+    drawPetalArt(ctx2d, img, scaledSize, player.x, baseY - size * 2, 0, 1, 1);
+    return true;
+  }
 });
 
 // 这里显式登记，让"饰品"这一形态和其它花瓣能力一样由引擎声明，而不是散落在渲染/逻辑里。

@@ -364,6 +364,27 @@ MobAI.register('bee', {
   facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
 });
 
+MobAI.register('hornet', {
+  init(mob) {
+    MobAI.defs.bee.init(mob);
+    mob.chaseSpeed = 0.95 * PLAYER_BASE_SPEED;
+    mob.wanderSpeed = (MOB_WANDER_MULT * PLAYER_BASE_SPEED
+      * rand(MOB_WANDER_RANGE[0], MOB_WANDER_RANGE[1])) * MOB_WANDER_SCALE * 1.2;
+    mob.speed = mob.wanderSpeed;
+  },
+  create() {
+    const ai = MobAI.defs.bee.create();
+    ai.kind = 'hornet';
+    return ai;
+  },
+  step(ai, dt, mob, player) {
+    const special = MobFX.stepMob(mob, dt, player);
+    return special || MobAI.defs.bee.step(ai, dt, mob, player);
+  },
+  notifyMoved(ai, d) { MobAI.defs.bee.notifyMoved(ai, d); },
+  facing(ai, mob) { return mob.facing; },
+});
+
 // ============================================================================
 // 内置 AI 4：蜘蛛（spider）—— aggressive 敌对，追击极快、游荡也很快
 // 口径（用户要求）：

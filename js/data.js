@@ -41,7 +41,7 @@ const MOB_POISON_COLOR = '#c58cff';
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
-  'faster', 'third_eye', 'web', 'antennae'
+  'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -70,6 +70,31 @@ function flagManual(kind, id, name, reason) {
 // 手工校正的花瓣稀有度数值（键 = slug）。registry 里这两张卡只有 common 一行，
 // 这里按官方 wiki 补齐整表（dmg/hp 直接写实数值，不用倍率推算）。
 const PETAL_RARITY_OVERRIDES = {
+  // Orange：按现有 Basic 数值预先换算并硬编码，运行时不依赖 Basic。
+  // dmg 为基础项（Basic 的 0.5 倍），命中时再加上次单击伤害的 0.5 倍，最终受 maxDamage 限制。
+  orange: {
+    common:    { dmg: 5,     hp: 10,    maxDamage: 100 },
+    unusual:   { dmg: 15,    hp: 30,    maxDamage: 300 },
+    rare:      { dmg: 45,    hp: 90,    maxDamage: 900 },
+    epic:      { dmg: 135,   hp: 270,   maxDamage: 2700 },
+    legendary: { dmg: 405,   hp: 810,   maxDamage: 8100 },
+    mythic:    { dmg: 1215,  hp: 2430,  maxDamage: 24300 },
+    ultra:     { dmg: 3645,  hp: 7290,  maxDamage: 72900 },
+    super:     { dmg: 10935, hp: 21870, maxDamage: 218700 },
+    eternal:   { dmg: 32805, hp: 65610, maxDamage: 656100 },
+    unique:    { dmg: 32805, hp: 65610, maxDamage: 656100 }
+  },
+  missile: {
+    unusual:   { dmg: 105,    hp: 6 },
+    rare:      { dmg: 315,    hp: 18 },
+    epic:      { dmg: 945,    hp: 54 },
+    legendary: { dmg: 2835,   hp: 162 },
+    mythic:    { dmg: 8505,   hp: 486 },
+    ultra:     { dmg: 25515,  hp: 1458 },
+    super:     { dmg: 76545,  hp: 4374 },
+    eternal:   { dmg: 229635, hp: 13122 },
+    unique:    { dmg: 229635, hp: 13122 }
+  },
   // Pollen：伤害/血量逐级 ×3（common 38/5 与 wiki 的 unusual 114/15 自洽）
   pollen: {
     common:    { dmg: 38,    hp: 5 },
@@ -190,15 +215,21 @@ const PETAL_SUB_COUNT = {
   pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
   stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 },
   // Peas：所有稀有度均为 4 个实体（单个绿色小球才是实体，见阵型布局）
-  peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 }
+  peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 },
+  orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 }
 };
+
+const PETAL_FORMATION_ORBIT_SPOTS = { orange: 8 };
+const PETAL_FORMATION_ORBIT_OFFSET = {};
+const PETAL_FORMATION_ARC_BASE = new Set(['orange']);
+const PETAL_FORMATION_AUTO_ROTATE = new Set(['orange']);
 
 // ================= 一卡多体的两种排布模型（重要） =================
 // A.【独立多体】Light / Pollen
 //    每个实体各占【一个轨道位】，各自独立地绕着主角飞舞、各自被吸附。
 //    卡面用通用 LIGHT_LAYOUTS（按数量查表）画出紧凑排布，实体端不套用该布局。
-// B.【阵型多体】Stinger 起 —— 未来同类的花瓣按这里登记
-//    像加载"一个"花瓣那样只分配【一个位置】，所有子实体按【卡面同款布局】锁定在一起
+// B.【阵型多体】Stinger / Peas / Orange —— 同类花瓣按这里登记
+//    所有子实体按固定布局围绕阵型中心锁定；可按需额外预留轨道角位以避免与其它花瓣重叠。
 //    整体运动；外观与卡面一致。但每个子实体仍是独立个体：各自结算碰撞、各自有血量。
 //    —— 即"被神秘力量锁定排列在一起"。
 //
@@ -207,7 +238,7 @@ const PETAL_SUB_COUNT = {
 //   2) 在 cards.js 的 FORMATION_LAYOUTS 里登记它的布局：
 //      { <实体数>: [ {x, y, k, rot}, ... ] }  // x/y 单位 = 单体直径 D，k = 相对单体缩放，
 //                                             // rot = 相对"单体朝向"的额外旋转（弧度）
-const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas']);
+const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas', 'orange']);
 
 // ---------------- 一卡多体的【数值显示口径】----------------
 // 有些花瓣的官方模板是【合并显示】的：卡面/悬浮框上写的是"这一整张卡合计"的数值，
@@ -274,11 +305,16 @@ const PETAL_TRAITS = {
   rose: { sticky: false },
   stinger: { sticky: false },
   leaf: { reload: 1.8, healOverTime: true, sticky: false },
+  orange: { reload: 1.5, sticky: false },
   pollen: { reload: 2.0, reloadText: '2.0s + 0.5s', detachAfter: 0.5, sticky: false },
   // Peas：固定按 detect 的距离公转（不随模式伸/缩），模式只影响它的特殊效果与判定。
   peas: {
     reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 },
     sticky: false, fixedReach: 'detect'
+  },
+  missile: {
+    reload: 1.5, launchMode: 'reach',
+    launch: { count: 1, speedK: 1.3, life: 2.0, spinRate: TAU * 2 }, orientOutward: true, sticky: false
   },
   // 蜜会被生物吸住并贴在表面（吸血式"拉仇恨"的载体），其它花瓣保持轨道运动。
   honey: {
@@ -350,6 +386,9 @@ function buildPetalTypes() {
       // ---- 能力字段：全部来自 PETAL_TRAITS，行为层只读字段、不判断 slug ----
       detachAfter: tr.detachAfter || 0,            // 滞留型：脱轨延时（>0 生效）
       launch: tr.launch || null,                    // 喷射参数（Peas）
+      launchMode: tr.launchMode || null,
+      launchDelay: tr.launchDelay || 0,
+      orientOutward: !!tr.orientOutward,
       sticky: !!tr.sticky,                          // 会被生物吸住揉搓（唯一来源，见 PETAL_TRAITS 注释）
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
@@ -370,6 +409,10 @@ function buildPetalTypes() {
       // 【阵型多体】（Stinger 起）：整坨只占一个轨道位，子实体按卡面布局锁定成一坨，
       // 外观与卡面一致，但各子实体仍独立结算碰撞与血量
       formation: PETAL_FORMATION_SLUGS.has(slug),
+      formationOrbitSpots: PETAL_FORMATION_ORBIT_SPOTS[slug] || 0,
+      formationOrbitOffset: PETAL_FORMATION_ORBIT_OFFSET[slug] || 0,
+      formationArcBase: PETAL_FORMATION_ARC_BASE.has(slug),
+      formationAutoRotate: PETAL_FORMATION_AUTO_ROTATE.has(slug),
       // reach 模式免疫：轨道半径不随空格（reach）放大（见 sim/player.js _syncPetals）
       noReach: REACH_IMMUNE_SLUGS.has(slug),
       // 固定轨道距离（'detect'）：无论当前模式如何，都按该模式的距离公转
@@ -406,7 +449,7 @@ function petalStatsFor(type, rarity) {
   // 时长这类"与稀有度无关"的字段没有逐档表，统一从能力声明里兜底（Web: 10s）。
   const dur = (type.web && type.web.duration) || 0;
   const pick = (o) => ({
-    dmg: o.dmg || 0, hp: o.hp || 0, heal: o.heal || 0,
+    dmg: o.dmg || 0, hp: o.hp || 0, heal: o.heal || 0, maxDamage: o.maxDamage || 0,
     // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成 / 视野放大
     rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0,
     sight: o.sight || 0,
@@ -422,6 +465,7 @@ function petalStatsFor(type, rarity) {
       dmg: (s.dmg || 0) * (mult.dmg || 1),
       hp: (s.hp || 0) * (mult.hp || 1),
       heal: (s.heal || 0) * (mult.heal || 1),
+      maxDamage: (s.maxDamage || 0) * (mult.maxDamage || 1),
       rotSpeed: (s.rotSpeed || 0) * (mult.rotSpeed || 1),
       attackRange: (s.attackRange || 0) * (mult.attackRange || 1),
       sight: (s.sight || 0) * (mult.sight || 1),
@@ -441,6 +485,8 @@ const MOB_HOSTILITY = {
   'Neutral': 'neutral',
   'Hostile': 'hostile'
 };
+const MISSILE_TIP_ANGLE = Math.atan2(30.003 - (61.08 + 39.265) / 2,
+  53.722 - (63.49 + 39.297) / 2);
 // 手工校正的稀有度数值表（键 = 生物 id）。
 // registry 里部分生物是旧版数据或压根缺字段（例如 Bee 的 hp/dmg 全是错的、没有 armor），
 // 这里按官方最新口径整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
@@ -472,6 +518,18 @@ const MOB_RARITY_OVERRIDES = {
     super:     { hp: 153090000, dmg: 109350, armor: 583, exp: 13376259 },
     eternal:   { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 },
     unique:    { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 }
+  },
+  11: {  // Hornet 黄蜂
+    common:    { hp: 60,         dmg: 50,     armor: 1,   exp: 1,        missileHp: 5,       missileDmg: 10,    missileDur: 2 },
+    unusual:   { hp: 225,        dmg: 150,    armor: 2,   exp: 2,        missileHp: 25,      missileDmg: 30,    missileDur: 3 },
+    rare:      { hp: 810,        dmg: 450,    armor: 7,   exp: 6,        missileHp: 125,     missileDmg: 90,    missileDur: 4 },
+    epic:      { hp: 3240,       dmg: 1350,   armor: 22,  exp: 53,       missileHp: 625,     missileDmg: 270,   missileDur: 5 },
+    legendary: { hp: 19440,      dmg: 4050,   armor: 65,  exp: 486,      missileHp: 3125,    missileDmg: 810,   missileDur: 6 },
+    mythic:    { hp: 189540,     dmg: 12150,  armor: 194, exp: 6856,     missileHp: 15625,   missileDmg: 2430,  missileDur: 7 },
+    ultra:     { hp: 8748000,    dmg: 36450,  armor: 583, exp: 266727,   missileHp: 78125,   missileDmg: 7290,  missileDur: 8 },
+    super:     { hp: 262440000,  dmg: 109350, armor: 583, exp: 16401473, missileHp: 390625,  missileDmg: 21870, missileDur: 9 },
+    eternal:   { hp: 1574640000, dmg: 328050, armor: 583, exp: 16401473, missileHp: 1953125, missileDmg: 65610, missileDur: 10 },
+    unique:    { hp: 1574640000, dmg: 328050, armor: 583, exp: 16401473, missileHp: 1953125, missileDmg: 65610, missileDur: 10 }
   }
 };
 
@@ -485,6 +543,7 @@ const MOB_RARITY_OVERRIDES = {
 const MOB_TRAITS = {
   ladybug: {},
   bee: { sPath: true, sizeScale: 1.395 * 0.9, chaseMult: 1.05, wanderFactor: 1.2 },
+  hornet: { sizeScale: 1.395 * 0.9, chaseMult: 0.95, hideHpBar: true },
   centipede: { segmented: true, sizeScale: 1.4 },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
@@ -528,7 +587,7 @@ function buildMobTypes() {
     if (m.rarities) {
       rarityStats = {};
       for (const rk in m.rarities) {
-        if (RARITY_ORDER.indexOf(rk) < 0) continue;   // 只认英文稀有度键
+        if (rk !== 'unique' && RARITY_ORDER.indexOf(rk) < 0) continue;   // Unique 可作为扩展档登记，但不进入当前档位序列
         const v = m.rarities[rk] || {};
         rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0, armor: v.armor, hostility: MOB_HOSTILITY[v.type] };
       }
@@ -538,7 +597,7 @@ function buildMobTypes() {
     if (ov) {
       rarityStats = rarityStats || {};
       for (const rk in ov) {
-        if (RARITY_ORDER.indexOf(rk) < 0) continue;
+        if (rk !== 'unique' && RARITY_ORDER.indexOf(rk) < 0) continue;
         rarityStats[rk] = Object.assign({}, rarityStats[rk] || {}, ov[rk]);
       }
     }
@@ -564,8 +623,16 @@ function buildMobTypes() {
       sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
       gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
       chaseMult: (mt.chaseMult != null) ? mt.chaseMult : null,   // null = 通用追击倍率
-      wanderFactor: (mt.wanderFactor != null) ? mt.wanderFactor : 1
+      wanderFactor: (mt.wanderFactor != null) ? mt.wanderFactor : 1,
+      hideHpBar: !!mt.hideHpBar,
+      missileHp: 0, missileDmg: 0, missileDur: 0
     };
+    for (const rk in t.rarityStats || {}) {
+      const rs = t.rarityStats[rk];
+      rs.missileHp = rs.missileHp || 0;
+      rs.missileDmg = rs.missileDmg || 0;
+      rs.missileDur = rs.missileDur || 0;
+    }
     out.push(t);
     MOB_BY_ID[id] = t;
   }
@@ -606,13 +673,26 @@ const MOB_DROP_ITEMS = {
   bee: ['stinger', 'pollen', 'honey'],         // Bee / 蜜蜂（按此顺序展示与掷骰）
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
-  spider: ['faster', 'web', 'third_eye', 'magic_eye']
+  spider: ['faster', 'web', 'third_eye', 'magic_eye'],
+  hornet: ['missile', 'magic_missile']
 };
 
 // 个别生物的每种掉落物有【各自】的稀有度分布。蜜蜂的 Stinger / Pollen / Honey 是三张不同的表：
 //   · stinger 没有专属表 -> 沿用 MOB_DROP_TABLE（正好就是官方 Stinger 表）
 //   · pollen / honey 用下面这两张；某档稀有度没写 = 这只生物在这一档不掉这件
 const MOB_DROP_TABLE_ITEM = {
+  missile: {
+    common:    [['unusual', 0.164]],
+    unusual:   [['unusual', 0.512]],
+    rare:      [['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
   pollen: {
     common:    [['unusual', 0.069]],
     unusual:   [['unusual', 0.247]],
@@ -718,6 +798,19 @@ const MOB_DROP_TABLE_ITEM = {
     super:   [['mythic', 0.96], ['ultra', 0.04]],
     eternal: [['mythic', 0.96], ['ultra', 0.04]],
     unique:  [['mythic', 0.96], ['ultra', 0.04]]
+  },
+  // Magic Missile：Missile 的魔法变种隐藏版，掉率完全相同。
+  magic_missile: {
+    common:    [['unusual', 0.164]],
+    unusual:   [['unusual', 0.512]],
+    rare:      [['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   }
 };
 
@@ -732,7 +825,7 @@ function dropDistFor(slug, rarity) {
 //  · blueberries   : 蜈蚣魔法变种隐藏掉落（Peas -> Blueberries）
 //  · magic_leaf    : 蜈蚣魔法变种隐藏掉落（Leaf -> Magic Leaf）
 // 三者与 Mana Orb 同款：仅登记进掉落表"不实装"，被替换后不显示、不参与实际掷骰掉落。
-const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf', 'magic_eye']);
+const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf', 'magic_eye', 'magic_missile']);
 
 // 魔法变种替换：仅对【特定生物】生效（其他生物掉落照旧，未来由你口述扩展）。
 // 当击杀者拥有 magician 战斗属性时，把原始掉落物替换为未实装变种（见 DROP_HIDDEN_SLUGS）。
@@ -741,7 +834,8 @@ const DROP_HIDDEN_SLUGS = new Set(['mana_orb', 'blueberries', 'magic_leaf', 'mag
 const MOB_DROP_MAGICIAN = {
   ladybug:   { rose: 'mana_orb' },
   centipede: { leaf: 'magic_leaf', peas: 'blueberries' },
-  spider:    { third_eye: 'magic_eye' }      // 蜘蛛：Third Eye -> Magic Eye（未实装变种）
+  spider:    { third_eye: 'magic_eye' },     // 蜘蛛：Third Eye -> Magic Eye（未实装变种）
+  hornet:    { missile: 'magic_missile' }
 };
 
 // 掉落表查询入口：对外仍接受「数字 id / slug / type 对象」，内部统一转 slug。
@@ -950,7 +1044,7 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
 // 组内成员写成 [slug, 组内权重]；权重只在组内比较，外层 ":w" 会再乘上来。
 const MOB_GROUPS = {
-  garden: [['ladybug', 3], ['bee', 2], ['spider', 2], ['centipede', 1]]
+  garden: [['ladybug', 3], ['bee', 2], ['spider', 2], ['centipede', 1], ['hornet', 1]]
 };
 
 // 兜底物种（生成区解析不出任何有效物种时使用）
@@ -979,7 +1073,7 @@ function rollMobRarityByDifficulty(diff) {
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede', 'spider']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede', 'spider', 'hornet']);
 
 function parseSpawnMobs(str) {
   const out = [];

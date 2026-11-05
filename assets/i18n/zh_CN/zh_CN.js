@@ -1444,7 +1444,7 @@ window.I18N_ZH_CN = {
 "Petals/basil/Py": "luole",
 "Petals/orange/Name": "橙子",
 "Petals/orange/FullName": "橙子",
-"Petals/orange/Description": "一种美味的柑橘类水果。",
+"Petals/orange/Description": "含有维生素C的汁水撒到伤口上可是很疼的。",
 "Petals/orange/Py": "chengzi",
 "Petals/ant_egg/Name": "卵",
 "Petals/ant_egg/FullName": "蚁卵",

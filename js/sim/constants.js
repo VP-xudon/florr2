@@ -52,19 +52,10 @@ function rarityWeight(rarity) {
   return Math.pow(d / MOB_DIAM.common, 2);
 }
 // ---- 花瓣在【击退引擎】里的物理重量 ----
-// 花瓣不是生物那样的"实心块"，它传能时只该带走一小部分：口径定为
-//   common  = 同稀有度生物重量 × 0.5
-//   eternal = 同稀有度生物重量 × 0.05
-// 中间各档按【等比】递进（每档乘同一个比例 0.1^(1/8)），与"生物体重随稀有度递增"同构。
-// 只用于击退（动量传递）；实体分离仍按 rarityWeight 的原值，二者互不干扰。
-const PETAL_KB_WEIGHT_COMMON = 0.5;
-const PETAL_KB_WEIGHT_ETERNAL = 0.05;
-function petalKnockbackWeight(rarity) {
-  const i = Math.max(0, RARITY_ORDER.indexOf(rarity));
-  const n = Math.max(1, RARITY_ORDER.length - 1);
-  const k = PETAL_KB_WEIGHT_COMMON
-    * Math.pow(PETAL_KB_WEIGHT_ETERNAL / PETAL_KB_WEIGHT_COMMON, i / n);
-  return rarityWeight(rarity) * k;
+// 所有稀有度的花瓣统一采用旧版 Legendary 花瓣的绝对击退质量；生物仍按 rarityWeight 分档。
+const PETAL_KB_WEIGHT_SHARE_LEGENDARY = 0.5 * Math.pow(0.05 / 0.5, 4 / 8);
+function petalKnockbackWeight() {
+  return rarityWeight('legendary') * PETAL_KB_WEIGHT_SHARE_LEGENDARY;
 }
 // ---- 装备型饰品（accessory）的版面 ----
 // 统一在"本体半径 R"上取比例：尺寸 / 上浮距离（头顶）/ 再往下压的距离（占自身尺寸）。

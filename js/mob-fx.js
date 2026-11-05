@@ -36,11 +36,68 @@
 const MobFX = {
   defs: {},        // slug -> 物种特性声明
   fields: {},      // kind -> 场地实体种类（怎么造）
+  _projectileSeq: 1,
+
+  async prepareAssets() {
+    if (this._assetsReady) return true;
+    const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
+    if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
+    const source = await response.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'image/svg+xml');
+    const root = doc.documentElement;
+    const group = root.querySelector('g');
+    const paths = group ? Array.from(group.children).filter((node) => node.localName === 'path') : [];
+    if (!group || paths.length < 2) throw new Error('Hornet tail paths not found');
+    const emptyRoot = root.cloneNode(true);
+    const emptyGroup = emptyRoot.querySelector('g');
+    Array.from(emptyGroup.children).filter((node) => node.localName === 'path').slice(0, 2)
+      .forEach((node) => node.remove());
+    const serialize = (node) => 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(node));
+    await SpriteStore.load('mob11_empty', serialize(emptyRoot));
+    this._assetsReady = true;
+    return true;
+  },
 
   // ---------------- 注册 ----------------
   register(slug, def) {
     this.defs[slug] = def || {};
     return this.defs[slug];
+  },
+
+  createMissile(mob) {
+    const stats = (mob.type.rarityStats && mob.type.rarityStats[mob.rarity]) || {};
+    return {
+      id: mob.netId + ':missile:' + (this._projectileSeq++),
+      parentId: mob.netId, x: mob.x, y: mob.y, facing: mob.facing + Math.PI,
+      vx: 0, vy: 0, hp: stats.missileHp || 1, maxHp: stats.missileHp || 1,
+      dmg: stats.missileDmg || 0, armor: mob.armor, life: stats.missileDur || 2,
+      age: 0, hurtT: 0, flight: false, dead: false, exiting: false,
+      radius: mob.drawSize * 0.12
+    };
+  },
+
+  initMob(mob) {
+    const def = this.defOf(mob);
+    if (def && def.init) def.init(mob);
+  },
+
+  hitMissile(mob, damage) {
+    const st = mob && mob.hornet;
+    const missile = st && st.missile;
+    if (!missile || missile.dead || missile.exiting || !(damage > 0)) return 0;
+    const applied = Math.min(damage, missile.hp);
+    missile.hp -= applied;
+    missile.hurtT = 0.3;
+    if (missile.hp <= 0) {
+      missile.hp = 0;
+      missile.dead = true;
+      missile.exiting = true;
+      ExitFX.begin(missile);
+      st.reloadT = 0;
+      mob.ai.hornetMode = 'reload';
+    }
+    return applied;
   },
   registerField(kind, def) {
     this.fields[kind] = def || {};
@@ -49,6 +106,44 @@ const MobFX = {
   defOf(mob) {
     const slug = mob && mob.type && mob.type.slug;
     return (slug && this.defs[slug]) || null;
+  },
+  artSvgOf(mob) {
+    const def = this.defOf(mob);
+    if (!def) return null;
+    if (def.artSvgOf) return def.artSvgOf(mob) || null;
+    return def.artSvg || null;
+  },
+  facingLocked(mob) {
+    const def = this.defOf(mob);
+    return !!(def && def.facingLocked && def.facingLocked(mob));
+  },
+
+  stepMob(mob, dt, player) {
+    const def = this.defOf(mob);
+    return def && def.step ? def.step(mob, dt, player) : null;
+  },
+
+  tickMob(mob, dt, player) {
+    const def = this.defOf(mob);
+    if (def && def.tick) def.tick(mob, dt, player);
+  },
+
+  drawMob(ctx, mob) {
+    const def = this.defOf(mob);
+    if (def && def.draw) def.draw(ctx, mob, mob._drawScale || 1, mob._drawAlpha == null ? 1 : mob._drawAlpha);
+  },
+
+  drawMissile(ctx, missile, size, alpha) {
+    if (!missile || (missile.dead && !missile.exiting)) return;
+    let scale = spawnPop(missile.age || 0);
+    let a = alpha * spawnFade(missile.age || 0);
+    if (missile.exiting) {
+      scale *= ExitFX.scale(missile);
+      a = ExitFX.alpha(missile);
+    }
+    const art = CardRenderer.artCanvas('9', 128);
+    if (art) drawPetalArt(ctx, art, size * scale, missile.x, missile.y,
+      (missile.facing || 0) - MISSILE_TIP_ANGLE, 1, a);
   },
 
   // ---------------- 大招：稀有度门槛 ----------------
@@ -208,5 +303,133 @@ MobFX.register('spider', {
     spin: { rate: TAU * SPIDER_ULT_TURNS_PER_SEC },     // 3 秒 2 圈
     gaitRate: MOB_ULT_GAIT_RATE,                       // 腿继续摆动
     field: { kind: 'web', mul: SPIDER_ULT_WEB_MUL },   // 2 倍半径的超大蛛网
+  },
+});
+
+MobFX.register('hornet', {
+  artSvgOf(mob) {
+    const missile = mob.hornet && mob.hornet.missile;
+    return missile && !missile.dead && !missile.exiting ? '11' : '11_empty';
+  },
+  facingLocked(mob) {
+    const phase = mob.hornet && mob.hornet.spinPhase;
+    return phase === 'aim' || phase === 'return';
+  },
+  draw(ctx, mob, scale, alpha) {
+    const attached = (mob.hornet && mob.hornet.missile) || mob.hornetMissile;
+    if (attached && (attached.flight || attached.exiting)) {
+      MobFX.drawMissile(ctx, attached, attached.drawSize || mob.drawSize * 0.4, alpha == null ? 1 : alpha);
+    }
+  },
+  init(mob) {
+    mob.hornet = { mode: 'approach', missile: MobFX.createMissile(mob), projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 };
+  },
+  tick(mob, dt) {
+    const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
+    if (st.missile) {
+      const missile = st.missile;
+      if (missile.exiting) {
+        ExitFX.tick(missile, dt);
+        if (ExitFX.done(missile)) st.missile = null;
+      }
+      missile.age += dt;
+      missile.hurtT = Math.max(0, missile.hurtT - dt);
+      if (!missile.flight && !missile.exiting) {
+        const tailA = mob.facing + Math.PI;
+        const offset = mob.drawSize * 0.39;
+        missile.x = mob.x + Math.cos(tailA) * offset;
+        missile.y = mob.y + Math.sin(tailA) * offset;
+        missile.facing = tailA;
+      }
+    } else if (mob.ai.hornetMode === 'reload') {
+      st.reloadT += dt;
+      if (st.reloadT >= 0.5) {
+        st.missile = MobFX.createMissile(mob);
+        mob.ai.hornetMode = 'approach';
+        st.reloadT = 0;
+      }
+    }
+  },
+  step(mob, dt, player) {
+    const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
+    const spinRate = TAU * 3;
+    if (st.spinPhase === 'return') {
+      const back = MobAI._util.angNorm(st.baseFacing - mob.facing);
+      const step = Math.sign(back) * Math.min(Math.abs(back), spinRate * dt);
+      mob.facing = wrapAngle(mob.facing + step);
+      if (Math.abs(back) <= spinRate * dt) st.spinPhase = null;
+      return { x: 0, y: 0 };
+    }
+    if (st.spinPhase === 'aim') {
+      const turn = MobAI._util.angNorm(st.aimFacing - mob.facing);
+      const step = Math.sign(turn) * Math.min(Math.abs(turn), spinRate * dt);
+      mob.facing = wrapAngle(mob.facing + step);
+      if (Math.abs(turn) <= spinRate * dt) {
+        const missile = st.missile;
+        if (missile && !missile.dead && !missile.exiting) {
+          const speed = 1.3 * PLAYER_BASE_SPEED;
+          missile.flight = true;
+          missile.facing = st.launchAngle;
+          missile.vx = Math.cos(st.launchAngle) * speed;
+          missile.vy = Math.sin(st.launchAngle) * speed;
+          missile.life = (mob.type.rarityStats[mob.rarity] || {}).missileDur || 2;
+          (st.projectiles || (st.projectiles = [])).push(missile);
+          st.missile = null;
+          mob.ai.hornetMode = 'reload';
+          st.reloadT = 0;
+        } else {
+          st.spinPhase = 'return';
+          return { x: 0, y: 0 };
+        }
+        st.spinPhase = 'return';
+      }
+      return { x: 0, y: 0 };
+    }
+    if (st.missile && st.missile.exiting) return { x: 0, y: 0 };
+    const tgt = mob.topThreat();
+    if (!tgt || !mob.canSee(tgt)) {
+      mob.ai.hornetMode = 'wander';
+      return MobAI.defs.bee.step(mob.ai, dt, mob, player);
+    }
+    if (!st.missile || st.missile.exiting || st.missile.dead) {
+      mob.ai.hornetMode = 'reload';
+      const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      const desiredRange = Math.max(220, mob.drawSize * 1.8);
+      if (distance > desiredRange + 12) {
+        return { x: dx / distance * mob.chaseSpeed, y: dy / distance * mob.chaseSpeed };
+      }
+      if (distance < desiredRange - 12) {
+        return { x: -dx / distance * mob.chaseSpeed, y: -dy / distance * mob.chaseSpeed };
+      }
+      return { x: 0, y: 0 };
+    }
+    const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const desiredRange = Math.max(220, mob.drawSize * 1.8);
+    if (d > desiredRange + 12) {
+      mob.ai.hornetMode = 'approach';
+      return { x: dx / d * mob.chaseSpeed, y: dy / d * mob.chaseSpeed };
+    }
+    if (d < desiredRange - 12) {
+      mob.ai.hornetMode = 'approach';
+      return { x: -dx / d * mob.chaseSpeed, y: -dy / d * mob.chaseSpeed };
+    }
+    if (Math.hypot(mob.vx || 0, mob.vy || 0) > 8) {
+      mob.ai.hornetMode = 'stop';
+      return { x: 0, y: 0 };
+    }
+    if (!st.spinPhase) {
+      const ri = RARITY_ORDER.indexOf(mob.rarity);
+      const lead = ri >= RARITY_ORDER.indexOf('epic') ? clamp(d / Math.max(1, PLAYER_BASE_SPEED * 1.3), 0, 0.7) : 0;
+      const px = tgt.x + (tgt.vx || 0) * lead;
+      const py = tgt.y + (tgt.vy || 0) * lead;
+      st.launchAngle = Math.atan2(py - mob.y, px - mob.x);
+      st.baseFacing = mob.facing;
+      st.aimFacing = wrapAngle(st.launchAngle - Math.PI);
+      st.spinPhase = 'aim';
+      mob.ai.hornetMode = 'aim';
+    }
+    return { x: 0, y: 0 };
   },
 });

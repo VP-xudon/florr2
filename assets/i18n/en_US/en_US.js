@@ -1092,7 +1092,7 @@ window.I18N_EN = {
 "Petals/basil/Description": "Increases all healing received.",
 "Petals/orange/Name": "Orange",
 "Petals/orange/FullName": "Orange",
-"Petals/orange/Description": "A sweet citrus fruit.",
+"Petals/orange/Description": "Juice containing vitamin C can sting quite a lot if it gets into a wound.",
 "Petals/ant_egg/Name": "Egg",
 "Petals/ant_egg/FullName": "Ant Egg",
 "Petals/ant_egg/Description": "Something interesting might pop out of this.",

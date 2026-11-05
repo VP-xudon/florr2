@@ -549,9 +549,10 @@ class Player {
     // 每个光点各占一个轨道位 —— 所以轨道总数 = Σ 各槽光点数。
     const cntOf = (card) => (card && CardRenderer.lightSubCount)
       ? CardRenderer.lightSubCount(card.type, card.rarity) : 1;
-    // 【阵型多体】（Stinger 起）：整坨【共用一个轨道位】（像加载一个花瓣那样分配位置）；
+    // 【阵型多体】：整坨共享中心角；formationOrbitSpots 可额外预留角位（Orange 用于避让邻瓣）。
     // 其余一卡多体（Light / Pollen）仍然是每个实体各占一个轨道位、各自独立飞。
-    const spotOf = (card) => (card && card.type && card.type.formation) ? 1 : cntOf(card);
+    const spotOf = (card) => (card && card.type && card.type.formation)
+      ? Math.max(1, card.type.formationOrbitSpots || 1) : cntOf(card);
     let totalSpots = 0;
     for (let k = 0; k < n; k++) totalSpots += spotOf(this.slots[equipped[k]]);
     const spotStep = totalSpots > 0 ? TAU / totalSpots : 0;
@@ -633,19 +634,22 @@ class Player {
         body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
         body.ord = k; body.n = n;
         body.cnt = cnt;
-        body.spot = (nSpot === 1) ? myBase : myBase + sub;   // 阵型型：整坨共用同一个轨道位
+        body.spot = (nSpot === 1) ? myBase
+          : (card.type.formation ? myBase + (nSpot - 1) * 0.5 : myBase + sub);
         // 出生朝向：【底边朝着花朵】= 公转角度 + 90°（素材默认"下方"指向花心），
         // 自转速率也在这里定死（见 _petalSelfRate），之后公转变化不再影响它。
         if (body.selfRot == null) {
           body.selfRot = this.spin + body.spot * spotStep + Math.PI / 2;
           body.selfRate = this._petalSelfRate(body);
         }
-        // ---- 阵型多体（Stinger 起）：子实体按【卡面同款布局】锁定偏移 + 各自朝向 ----
+        // ---- 阵型多体：子实体按登记布局锁定偏移 + 各自朝向 ----
         // 每个子实体仍是完全独立的个体（各自结算碰撞、各自有血量），
         // 只是位置/朝向常年被布局锁定成卡面那一坨的形状。
-        if (nSpot === 1 && cnt > 1) {
-          const lay = (typeof CardRenderer !== 'undefined' && CardRenderer.multiLayout)
-            ? CardRenderer.multiLayout(card.type.svg, card.rarity) : null;
+        if (card.type.formation && cnt > 1) {
+          const lay = (typeof CardRenderer !== 'undefined' && CardRenderer.entityFormationLayout)
+            ? CardRenderer.entityFormationLayout(card.type.svg, card.rarity)
+            : ((typeof CardRenderer !== 'undefined' && CardRenderer.multiLayout)
+              ? CardRenderer.multiLayout(card.type.svg, card.rarity) : null);
           const s = (lay && lay[sub]) ? lay[sub] : null;
           if (s) {
             // 与其它花瓣（Stinger）【完全相同的公式】：k = 1，单位就是 D。
@@ -667,7 +671,9 @@ class Player {
               ? CardRenderer.lightDRatio(String(card.type.svg), true) : 1;
             const entD = _dr * PETAL_ENT_SIZE;
             body.formK = s.k || 1;
-            body.formOff = { x: s.x * entD, y: s.y * entD };
+            body.formD = entD;
+            body.formArcBase = !!card.type.formationArcBase;
+            body.formOff = body.formArcBase ? null : { x: s.x * entD, y: s.y * entD };
             body.formRot = s.rot || 0;
             // （与 Stinger 完全一致：不再有任何"单球索引 / 二次缩放"的特例）
           }
@@ -679,8 +685,16 @@ class Player {
         // 脱轨时机、初速、装填策略全部由 PetalFX 的注册定义决定（能力字段 + detach 钩子），
         // 这里只负责把计划套到实体与卡片状态上，不再判断"是不是哪种花瓣"。
         const detachAt = PetalFX.trait(card.type, 'detachAfter') || 0;
-        if (detachAt > 0 && !body.dead && body.age >= detachAt && this._detachReady()) {
-          const plan = PetalFX.detach(body, this);
+        const launchMode = PetalFX.trait(card.type, 'launchMode');
+        const launchDelay = PetalFX.trait(card.type, 'launchDelay') || 0;
+        let detachReady = this._detachReady();
+        if (launchMode) {
+          body.launchModeT = this.mode === launchMode ? (body.launchModeT || 0) + dt : 0;
+          detachReady = body.launchModeT >= launchDelay;
+        }
+        if ((detachAt > 0 || launchMode) && !body.dead
+          && body.age >= detachAt && detachReady) {
+          const plan = PetalFX.detach(body, this, mobs);
           body.stationary = true;                   // 脱离轨道：不再跟随
           body.life = 0;
           if (plan) {
@@ -757,7 +771,9 @@ class Player {
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       // 自转：独立于公转，从加载好起持续转动（喷射飞行的实体也照样转）
-      b.selfRot = (b.selfRot || 0) + this._petalSelfRate(b) * dtc;
+      if (!b.card.type.orientOutward) {
+        b.selfRot = (b.selfRot || 0) + this._petalSelfRate(b) * dtc;
+      }
 
       // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
       // 不再跟随轨道、也不参与生物吸附（它就"放在地上"）。
@@ -767,6 +783,7 @@ class Player {
         // 飞行期间实体照常存在，因此碰撞/受伤/结算伤害都走正常链路，2s 后强制移除。
         const flight = PetalFX.flightOf(b);
         if (flight) {
+          if (flight.spinRate) b.flightSpin = (b.flightSpin || 0) + flight.spinRate * dtc;
           // 注意：b.life 已在上面的"滞留实体"循环（_syncPetals 开头）每帧 +dt，
           // 这里再加一次会让存活时长减半 —— 绝不重复累加。
           if (b.life >= (flight.life || PEAS_FLIGHT_T)) {
@@ -816,10 +833,12 @@ class Player {
       // 【reach 免疫的花瓣（Rose 等）连这份加成也不吃】—— 它们必须永远待在基础轨道距离上。
       // 之前只把倍率钳到 1、却照样加 reachBonus，表现就是"玫瑰还是被 reach 出去了，只是短一点"。
       const rb = noReach ? 0 : (this.reachBonus || 0) * (this.mode === 'reach' ? this.modeT : 0);
-      const reach = baseReach * mult + rb;
+      const formationOffset = (ptype && ptype.formationOrbitOffset || 0) * PETAL_D;
+      const reach = baseReach * mult + rb + formationOffset;
       const ang = this.spin + (b.spot || 0) * spotStep;
       let tx = this.x + Math.cos(ang) * reach;
       let ty = this.y + Math.sin(ang) * reach;
+      if (b.card.type.orientOutward) b.selfRot = ang - MISSILE_TIP_ANGLE;
       // 引擎钩子：花瓣可以微调自己的"应到位置"（Faster 的活泼飘动走这里）
       if (typeof PetalFX !== 'undefined' && PetalFX.orbitOffset) {
         if (!this._wob) this._wob = { x: 0, y: 0 };
@@ -831,7 +850,20 @@ class Player {
       // 于是它们恒保持卡面那一坨的形状（"被神秘力量锁定排列在一起"）。
       // 旋转基准取 R = ang + π/2，与单片花瓣自身的绘制朝向同一帧：
       // 这样世界里的排布 = 卡面排布整体旋转 R，与卡面严格同构。
-      if (b.formOff) {
+      if (b.formArcBase) {
+        const edge = 5 * (b.formD || PETAL_ENT_SIZE);
+        const half = Math.asin(Math.min(1, edge / (2 * reach)));
+        b.drawRot = ang + Math.PI / 2 + (b.formRot || 0);
+        if (b.sub === 0) {
+          const apexR = reach * Math.cos(half) + edge * Math.sqrt(3) / 2;
+          tx = this.x + Math.cos(ang) * apexR;
+          ty = this.y + Math.sin(ang) * apexR;
+        } else {
+          const side = b.sub === 1 ? -1 : 1;
+          tx = this.x + Math.cos(ang + side * half) * reach;
+          ty = this.y + Math.sin(ang + side * half) * reach;
+        }
+      } else if (b.formOff) {
         const R = ang + Math.PI / 2;
         // 绘制朝向也要【由阵型基准统一给出】：否则每个子体各自按自身位置算朝向，
         // Ultra Stinger 的"尖端朝向中心"会被各子体自己那点偏移带偏而失真。
@@ -923,6 +955,8 @@ class Player {
       stationary: !!b.stationary,
       // 阵型型子实体：整体朝向由更新阶段算好（基准 + 布局朝向，如 Ultra Stinger 尖端向心）
       drawRot: (b.drawRot != null) ? b.drawRot : null,
+      flightRot: (b.flightRot != null) ? b.flightRot : null,
+      flightSpin: b.flightSpin || 0,
       // 阵型子体的相对尺寸（与卡面同一个 k），null = 满尺寸
       formK: (b.formK != null) ? b.formK : null,
       // 自转（独立于公转），从加载好那一刻起持续转动
@@ -1002,7 +1036,8 @@ class Player {
       const svgKey = pp.svg || (p && p.type && p.type.svg);
       // 朝向 = 【自转】为主；阵型型子实体再叠加阵型基准（drawRot）。
       // 自转独立于公转：普通花瓣不再由"相对主角的位置"反推朝向。
-      const rot = ((pp.stationary ? 0 : (pp.drawRot != null ? pp.drawRot : 0)) + (pp.selfRot || 0));
+      const rot = pp.flightRot != null ? pp.flightRot + (pp.flightSpin || 0)
+        : ((pp.stationary ? 0 : (pp.drawRot != null ? pp.drawRot : 0)) + (pp.selfRot || 0));
       const a = pp.stationary ? 1 : spawnFade(pp.age);
       // 与其它花瓣（Stinger）同一条管线：svg 已经指向正确素材，直接用
       const cv = svgKey ? CardRenderer.artCanvas(svgKey, 128) : null;

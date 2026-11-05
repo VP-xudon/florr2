@@ -6,6 +6,7 @@ class LocalServer {
     this.t = 0;                 // 服务端累计时间（秒）
     this.nextId = 1;
     this.ents = [];             // 权威 Mob 实体（只增不减由 cull 负责）
+    this.hornetProjectiles = []; // 已发射的独立 Hornet 导弹，不随母体回收
     this.player = null;         // 玩家权威副本（跑同一套物理，供战斗定位）
     this.map = null;            // 碰撞地图（与客户端同一份）
     this._input = { dx: 0, dy: 0, mode: 'normal' };
@@ -206,9 +207,33 @@ class LocalServer {
     rest.length = n;
   }
 
+  _tickHornetProjectiles(dt) {
+    const list = this.hornetProjectiles;
+        let keep = 0; // Keep track of projectiles to retain
+        for (let i = 0; i < list.length; i++) {
+          const projectile = list[i];
+          projectile.age += dt;
+          projectile.hurtT = Math.max(0, projectile.hurtT - dt);
+          if (!projectile.exiting) {
+            projectile.x += projectile.vx * dt;
+            projectile.y += projectile.vy * dt;
+            projectile.life -= dt;
+            if (projectile.life <= 0) {
+              projectile.exiting = true;
+              ExitFX.begin(projectile);
+            }
+          } else {
+            ExitFX.tick(projectile, dt);
+            if (ExitFX.done(projectile)) continue;
+          }
+          list[keep++] = projectile;
+        }
+        list.length = keep;
+  }
+
   // 新个体登记：同时进权威列表与醒/睡分区（否则它会一直不跑 AI，看起来像木桩）。
   _addEnt(m) {
-    this.ents.push(m);
+    this.ents.push(m); // Add entity to the list
     (this._act || (this._act = [])).push(m);
     return m;
   }
@@ -222,7 +247,7 @@ class LocalServer {
   //   · 远处生物休眠（只保留位置，不跑 AI），所以全图人口不等于全图负载
   aliveMobs() {
     let n = 0;
-    for (const m of this.ents) if (!m.dead) n++;
+    for (const m of this.ents) if (!m.dead && !m.isSubEntity) n++;
     return n;
   }
 
@@ -880,6 +905,14 @@ class LocalServer {
       // （跟随=被头拽着走，与轨迹法冲突，已彻底移除）。
       m._followPt = null;
       m.update(dt, p, this.map);
+      if (m.hornet && m.hornet.projectiles && m.hornet.projectiles.length) {
+        for (const projectile of m.hornet.projectiles) {
+          projectile.owner = m;
+          projectile.parentId = m.netId;
+          this.hornetProjectiles.push(projectile);
+        }
+        m.hornet.projectiles.length = 0;
+      }
       if (!m.dead) awake.push(m);
       act[actN++] = m;
     }
@@ -888,6 +921,7 @@ class LocalServer {
     // 每步都做就是纯 GC 压力）。
     // 【回收口径】只摘"退场动画已播完"的个体（ExitFX.done）—— 退场没播完就还在场。
     if (needCompact) this.ents = this.ents.filter((m) => !ExitFX.done(m));
+    this._tickHornetProjectiles(dt);
     _mk('mobs');
 
     // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
@@ -1080,6 +1114,44 @@ class LocalServer {
     for (const b of p.petals) {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
     }
+    for (const projectile of this.hornetProjectiles || []) {
+      if (projectile.dead || projectile.exiting) continue;
+      const owner = projectile.owner;
+      const radius = projectile.radius || 8;
+      for (const b of p.petals) {
+        if (b.dead || b.fxNoCombat) continue;
+        const dx = b.x - projectile.x, dy = b.y - projectile.y;
+        const rr = PETAL_R + radius;
+        if (dx * dx + dy * dy > rr * rr) continue;
+        const stats = petalStatsFor(b.card.type, b.card.rarity);
+        const incoming = this._dmg(PetalFX.damageOf(b, owner, p, stats.dmg), projectile.armor || 0);
+        if (incoming > 0) {
+          const applied = Math.min(incoming, projectile.hp);
+          projectile.hp -= applied;
+          projectile.hurtT = 0.3;
+          this._events.push({ kind: 'dmg', x: projectile.x, y: projectile.y,
+            r: radius, text: String(Math.round(applied)), color: DAMAGE_TEXT_COLOR });
+          if (projectile.hp <= 0) {
+            projectile.hp = 0; projectile.dead = true; projectile.exiting = true;
+            ExitFX.begin(projectile);
+            break;
+          }
+        }
+      }
+      if (projectile.dead || projectile.exiting) continue;
+      const dx = p.x - projectile.x, dy = p.y - projectile.y;
+      if (dx * dx + dy * dy > ((projectile.radius || 8) + p.r) ** 2) continue;
+      const damage = this._dmg(projectile.dmg, p.armor);
+      if (damage > 0 && p.hurt(damage, owner)) {
+        const d = Math.hypot(dx, dy) || 1;
+        const share = (KNOCKBACK_SHARE[(owner && owner.rarity) || 'common'] || KNOCKBACK_SHARE.common)[0];
+        const total = FLOWER_KNOCKBACK * p.r * 2 * share;
+        applyKnockback(p, dx / d, dy / d, total);
+        this._events.push({ kind: 'hurt', ux: dx / d, uy: dy / d, total, shake: true });
+      }
+      projectile.dead = true; projectile.exiting = true;
+      ExitFX.begin(projectile);
+    }
     // ---- 持续回血（Leaf）已迁入 PetalFX 的 passive 效果 ----
     // 规则：只要实体加载好且未死亡就每帧回 heal×dt（封顶 maxHp、不弹字）。
     // 放在 PetalFX.tick 里而不是这里，理由：
@@ -1092,6 +1164,43 @@ class LocalServer {
     const awake = this._awake || this.ents;
     for (const m of awake) {
       if (m.dead) continue;
+      const hornetMissile = m.hornet && m.hornet.missile;
+      if (hornetMissile && !hornetMissile.dead && !hornetMissile.exiting) {
+        const radius = hornetMissile.radius || 8;
+        for (const b of p.petals) {
+          if (b.dead || b.fxNoCombat) continue;
+          const dx = b.x - hornetMissile.x, dy = b.y - hornetMissile.y;
+          const rr = PETAL_R + radius;
+          if (dx * dx + dy * dy > rr * rr) continue;
+          const stats = petalStatsFor(b.card.type, b.card.rarity);
+          const hitDamage = this._dmg(PetalFX.damageOf(b, m, p, stats.dmg), hornetMissile.armor || 0);
+          if (hitDamage > 0) {
+            const applied = MobFX.hitMissile(m, hitDamage);
+            if (applied > 0) {
+              this._events.push({ kind: 'dmg', x: hornetMissile.x, y: hornetMissile.y,
+                r: radius, text: String(Math.round(applied)), color: DAMAGE_TEXT_COLOR });
+            }
+          }
+        }
+        const pdx = p.x - hornetMissile.x, pdy = p.y - hornetMissile.y;
+        const hitPlayer = pdx * pdx + pdy * pdy <= (radius + p.r) * (radius + p.r);
+        if (hornetMissile.flight && hitPlayer) {
+          const damage = this._dmg(hornetMissile.dmg, p.armor);
+          if (damage > 0) {
+            const hurt = p.hurt(damage, m);
+            if (hurt) {
+              const d = Math.hypot(pdx, pdy) || 1;
+              const total = FLOWER_KNOCKBACK * p.r * 2;
+              const share = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[0];
+              applyKnockback(p, pdx / d, pdy / d, total * share);
+              this._events.push({ kind: 'hurt', ux: pdx / d, uy: pdy / d, total: total * share, shake: true });
+            }
+            hornetMissile.exiting = true;
+            hornetMissile.dead = true;
+            ExitFX.begin(hornetMissile);
+          }
+        }
+      }
       // —— 花瓣 vs 昆虫（严格按 SVG 轮廓多边形判定，不再用外接圆）——
       for (const b of p.petals) {
         if (b.dead || b.fxNoCombat) continue;
@@ -1139,7 +1248,8 @@ class LocalServer {
         // 双向走【同一个公式】：伤害方 dmg - 受击方 armor，钳到 0，全额扣，不做任何削峰。
         // 所以"伤害 ≥ 耐久"就是当 tick 直接碎（common 瓢虫 10 vs common basic 10、
         // rare 瓢虫 90 vs 任何低稀有度花瓣，都是一下没），不会出现"贴着磨一会才碎"。
-        const toMob = this._dmg(st.dmg, m.armor);
+        const attack = PetalFX.damageOf(b, m, p, st.dmg);
+        const toMob = this._dmg(attack, m.armor);
         const toPetal = this._dmg(m.dmg, b.armor);
         if (toPetal > 0) {
           b.hp -= toPetal; b.hurtT = 0.3;
@@ -1269,6 +1379,9 @@ class LocalServer {
     if (toMob <= 0) return false;
     const r = m.hurt(toMob, this.player);
     if (r.applied > 0) {
+      if (Number.isFinite(toMob) && this.player && m.lastHitByPlayer) {
+        m.lastHitByPlayer.set(this.player, r.applied);
+      }
       m.pendDmg = (m.pendDmg || 0) + r.applied;
       if (!(m.dmgTextT > 0)) {
         // 飘字聚合窗口：每 tick 结算一次，若逐 tick 弹字会被刷屏（25 条/秒），
@@ -1606,7 +1719,8 @@ class LocalServer {
       // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
       petals: this._snapPetals(p),
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
-      ents: this._fillEnts()
+      ents: this._fillEnts(),
+      projectiles: this._fillHornetProjectiles()
     };
   }
 
@@ -1682,9 +1796,39 @@ class LocalServer {
       // （自转朝向本来就下发；这里补的是"大招进行中"这个开关：
       //   腿要继续摆、客户端要在大招结束时补一张超大蛛网）。
       o.ultActive = m.ultActive ? 1 : 0;
+      const hm = m.hornet && m.hornet.missile;
+      o.hornetMissile = hm ? {
+        id: hm.id, x: hm.x, y: hm.y, facing: hm.facing,
+        vx: hm.vx, vy: hm.vy, flight: !!hm.flight, hp: hm.hp, maxHp: hm.maxHp,
+        hurtT: hm.hurtT || 0, age: hm.age || 0, exiting: !!hm.exiting, exitT: hm.exitT || 0,
+        dead: !!hm.dead, radius: hm.radius || 0, drawSize: hm.drawSize || 0
+      } : null;
+      o.hornetProjectiles = (m.hornet && m.hornet.projectiles || []).map((projectile) => ({
+        id: projectile.id, x: projectile.x, y: projectile.y, facing: projectile.facing,
+        vx: projectile.vx, vy: projectile.vy, flight: true, hp: projectile.hp, maxHp: projectile.maxHp,
+        hurtT: projectile.hurtT || 0, age: projectile.age || 0, exiting: !!projectile.exiting,
+        exitT: projectile.exitT || 0, dead: !!projectile.dead, radius: projectile.radius || 0,
+        drawSize: projectile.drawSize || 0
+      }));
       n++;
     }
     buf.length = n;
     return buf;
+  }
+
+  _fillHornetProjectiles() {
+    const src = this.hornetProjectiles || [];
+    const out = this._projectileBuf || (this._projectileBuf = []);
+    for (let i = 0; i < src.length; i++) {
+      const p = src[i];
+      const o = out[i] || (out[i] = {});
+      o.id = p.id; o.parentId = p.parentId;
+      o.x = p.x; o.y = p.y; o.facing = p.facing;
+      o.hp = p.hp; o.maxHp = p.maxHp; o.hurtT = p.hurtT || 0;
+      o.age = p.age || 0; o.exiting = !!p.exiting; o.exitT = p.exitT || 0;
+      o.dead = !!p.dead; o.radius = p.radius || 0; o.drawSize = p.drawSize || 0;
+    }
+    out.length = src.length;
+    return out;
   }
 }

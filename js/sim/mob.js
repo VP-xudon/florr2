@@ -4,6 +4,7 @@
 class Mob {
   constructor(type, x, y, level, rarity) {
     this.type = type; this.name = type.name; this.svg = type.svg; this.zh = type.zh || '';
+    this.hideHpBar = !!type.hideHpBar;
     this.level = level || 1;
     this.rarity = rarity || 'common';
     this.aiConf = type.ai || null;      // 官方 AI 配置（aggro/chase/flee/retaliate…）
@@ -81,6 +82,7 @@ class Mob {
     // 那是【整条蜈蚣】的图和轮廓，套在一节上就是"鬼样子 + 不规则碰撞箱"。
     // 所以这里给一个贴图级默认（身体节），绝不回落到 mob12。
     if (!this.artSvg && type.segmented) this.artSvg = '12_b';
+    if (!this.artSvg && typeof MobFX !== 'undefined') this.artSvg = MobFX.artSvgOf(this);
     // 贴图朝向补偿：优先按【实际用的贴图】查（蜈蚣头 12_h / 身 12_b 可分别调整），
     // 取不到再按物种 id（12）查。
     this.artRot = MOB_ART_ROT[String(this.artSvg || this.svg)] || MOB_ART_ROT[svgKey] || 0;
@@ -88,6 +90,7 @@ class Mob {
     this.dots = (svgKey === '3') ? this._makeDots() : null;   // 瓢虫：程序化随机斑点
     this.hostility = (rs && rs.hostility) || type.hostility || 'neutral';   // 仇恨按稀有度（瓢虫 common/unusual 被动、rare+ 中立）
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
+    this.lastHitByPlayer = new Map();   // 每只生物分别记录各玩家最近一次实际非毒单击伤害
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
     this.honeyImmune = false;           // 被蜜影响满 40s 后永久免疫所有蜜
     this.flash = 0; this.squash = 0;
@@ -124,6 +127,7 @@ class Mob {
     // ---- 最后一步：挂上这个物种的 AI ----
     // init 会覆盖 wanderSpeed/chaseSpeed/turnRate 等（必须放在速度算完之后），
     // create 建立运行时状态。未注册的物种自动回落到通用游走。
+    if (typeof MobFX !== 'undefined') MobFX.initMob(this);
     MobAI.attach(this);
   }
 
@@ -377,6 +381,8 @@ class Mob {
       : Math.max(target, this.hpBarA - step);
   }
 
+  get hiddenHpBar() { return !!this.type.hideHpBar; }
+
   update(dt, player, map) {
     // 死亡：只推进退场动画（放大渐隐），退场播完才由 ExitFX.sweep 回收。
     if (this.dead) { ExitFX.tick(this, dt); return; }
@@ -388,6 +394,14 @@ class Mob {
     this.squash = damp(this.squash, 0, 10, dt);
     tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
     if (typeof StatusFX !== 'undefined') StatusFX.tick(this, dt);   // 状态效果时长推进
+    if (typeof MobFX !== 'undefined') {
+      const artSvg = MobFX.artSvgOf(this);
+      if (artSvg && artSvg !== this.artSvg) {
+        this.artSvg = artSvg;
+        this.artRot = MOB_ART_ROT[String(artSvg)] || this.artRot || 0;
+        this.shape = this.hull = null;
+      }
+    }
     // 碰撞外形：统一走 _ensureShape（客户端 draw 也调它）——
     // 之前这里内联复制了一份一模一样的逻辑，改一处漏一处，正是"两套碰撞"的来源之一。
     if (!this.shape) this._ensureShape();
@@ -492,10 +506,12 @@ class Mob {
     // —— 5) 朝向跟随真实移动方向；停下来就保持当前朝向（下一趟再转）——
     // 【大招期间例外】：自转的朝向由大招自己驱动（蜘蛛自转），这里绝不能覆盖。
     const sp = Math.hypot(this.vx, this.vy);
-    if (!this.ultHold && sp > this.speed * 0.12) {
+    if (!this.ultHold && !(typeof MobFX !== 'undefined' && MobFX.facingLocked(this))
+      && sp > this.speed * 0.12) {
       // wrapAngle：绕圈追击时朝向会无限累加（AI 的 heading 也是），写回时归一
       this.facing = wrapAngle(lerpAngle(this.facing, Math.atan2(this.vy, this.vx), clamp(dt * 7, 0, 1)));
     }
+    if (typeof MobFX !== 'undefined') MobFX.tickMob(this, dt, player);
   }
 
   draw(ctx) {
@@ -518,6 +534,11 @@ class Mob {
       key = 'mob' + this.svg;
     }
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
+    if (!this.dead && typeof MobFX !== 'undefined') {
+      this._drawScale = scale; this._drawAlpha = alpha;
+      MobFX.drawMob(ctx, this);
+      this._drawScale = null; this._drawAlpha = null;
+    }
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     let bodyAlpha = alpha;
     // 步态（蜘蛛等）：按本帧位移累计 gait，站立不动时腿就停住。
@@ -640,7 +661,7 @@ class Mob {
     // 文字统一 Ubuntu 800 + 纯黑描边（与卡牌/悬浮框同款漫画字）；名称白色，稀有度用其本色。
     // 名牌模式：'classic'（普通生物 / 蜈蚣【头节】）= 名称 + 血条 + 稀有度，常显；
     //           'player' （蜈蚣【非头节】）= 只有血条、满血不显示、无名称无稀有度（见下方分支）。
-    if (!this.dead && (this.plateStyle || 'classic') === 'classic') {
+    if (!this.dead && !this.hiddenHpBar && (this.plateStyle || 'classic') === 'classic') {
       // 名牌（血条/名称/稀有度）一律用【common 等级的基准尺寸】，不随稀有度缩放 ——
       // 这样大怪小怪的名牌大小一致，远看也读得清。只有"比 common 还小"的生物才按比例收一点，
       // 免得血条比身体还宽。（当前所有生物都 ≥ common，所以实际上就是固定大小。）
@@ -703,7 +724,7 @@ class Mob {
       ctx.fillStyle = rarCol;
       ctx.fillText(rarName, br, rarY);
       ctx.restore();
-    } else if (!this.dead && (this.hpBarA || 0) > 0.001) {
+    } else if (!this.dead && !this.hiddenHpBar && (this.hpBarA || 0) > 0.001) {
       // 【主角血条模式】（多节生物的非头节，且生成后即使升为一段的头也保持此模式）：
       // 只画一条血条，贴在本体底边下方；满血不显示、掉血才渐显；不显示名称与稀有度。
       const bw = HPBAR_W, bh = HPBAR_H;

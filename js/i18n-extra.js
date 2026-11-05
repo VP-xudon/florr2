@@ -58,6 +58,9 @@
     'UI/Petal/RotSpeedLabel': 'Rotation Speed:',
     'UI/Petal/AttackRangeLabel': 'Attack Range:',
     'UI/Petal/SightLabel': 'Vision:',
+    'UI/Petal/MaxDamageLabel': 'Max Damage:',
+    'UI/Mob/MissileHealth': 'Missile Health:',
+    'UI/Mob/MissileDamage': 'Missile Damage:',
     // ---- 花瓣属性：场地型（Web）----
     'UI/Petal/RadiusLabel': 'Radius:',
     'UI/Petal/DurationLabel': 'Duration:',
@@ -130,6 +133,9 @@
     'UI/Petal/RotSpeedLabel': '旋转速度：',
     'UI/Petal/AttackRangeLabel': '攻击距离：',
     'UI/Petal/SightLabel': '视野：',
+    'UI/Petal/MaxDamageLabel': '最大伤害：',
+    'UI/Mob/MissileHealth': '导弹生命值：',
+    'UI/Mob/MissileDamage': '导弹伤害：',
     // ---- 花瓣属性：场地型（Web）----
     'UI/Petal/RadiusLabel': '半径：',
     'UI/Petal/DurationLabel': '持续时间：',

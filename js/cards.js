@@ -102,7 +102,9 @@ const CardRenderer = (function () {
         'position:absolute;left:-9999px;top:0;width:120px;height:120px;' +
         'overflow:hidden;opacity:0;pointer-events:none;';
       document.body.appendChild(box);
-      box.innerHTML = svgText;
+      const variant = (typeof PetalFX !== 'undefined' && PetalFX.artVariant)
+        ? PetalFX.artVariant(svgId, svgText) : null;
+      box.innerHTML = variant || svgText;
       const svg = box.querySelector('svg');
       if (svg && svg.getBBox) {
         const b = svg.getBBox();
@@ -171,6 +173,10 @@ const CardRenderer = (function () {
     }
     return out;
   }
+  function evenlyRotated(layout) {
+    const step = layout.length ? TAU / layout.length : 0;
+    return layout.map((part, i) => ({ ...part, rot: i * step }));
+  }
   // Stinger：
   //   3 个（Mythic） -> 三个交错围成【空心】的大三角，顶点朝右；每个朝向都与单体一致
   //   5 个（Ultra+） -> 围成一圈，【尖端朝向中心】
@@ -209,8 +215,11 @@ const CardRenderer = (function () {
   //   现在单球径缩到 23.001（0.7×rose），但菱形间距沿用原始绝对值 12.143
   //   -> r = 12.143 / 23.001 = 0.5279（相邻球心距 = 0.747 球径，仍部分重合，与原图观感一致）
   const PEAS_LAYOUTS = { 4: formDiamond(0.5279, 1) };
+  const ORANGE_LAYOUTS = {
+    3: evenlyRotated(formRing(3, 0.58 / Math.sqrt(3), 0.72 * 1.3, -Math.PI / 2, false))
+  };
   // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
-  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS };
+  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS };
 
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
@@ -231,9 +240,21 @@ const CardRenderer = (function () {
     // 阵型型（Stinger…）：用它【自己的】布局（含每实例朝向），使卡面与实体排布严格一致
     if (t.formation) {
       const tab = FORMATION_LAYOUTS[t.slug];
-      if (tab && tab[n]) return tab[n];
+      const formation = (tab && tab[n]) || LIGHT_LAYOUTS[n] || null;
+      if (formation) return t.formationAutoRotate ? evenlyRotated(formation) : formation;
     }
     return LIGHT_LAYOUTS[n] || null;
+  }
+
+  function entityFormationLayout(svgId, rarity) {
+    const type = (typeof getPetal === 'function') ? getPetal(svgId) : null;
+    const n = lightSubCount(type, rarity);
+    const tab = type && type.formation ? FORMATION_LAYOUTS[type.slug] : null;
+    if (type && type.formationAutoRotate) {
+      const layout = (tab && tab.entity && n === 3) ? tab.entity : multiLayout(svgId, rarity);
+      return layout ? evenlyRotated(layout.map((part) => ({ ...part, k: 1 }))) : null;
+    }
+    return tab && tab.entity && n === 3 ? tab.entity : multiLayout(svgId, rarity);
   }
 
   // 单个 Light 的直径占素材绘制矩形【宽】的比例：用实测 bbox / 统一窗口宽反推，
@@ -242,6 +263,7 @@ const CardRenderer = (function () {
     const bb = _bb[svgId];
     const winW = forEntity ? _entWinW[svgId] : _winW[svgId];
     if (bb && winW) return bb[2] / winW;
+    if (String(svgId) === '50') return forEntity ? 32.8545 / PETAL_ENT_REF[0] : 32.8545 / PETAL_CARD_REF[0];
     // 兜底（测量/窗口尚未就绪）：Light 实测 ≈24.28，卡面窗口 68.26、实体窗口 32.86
     return forEntity ? 0.7389 : 0.3558;
   }
@@ -842,6 +864,6 @@ const CardRenderer = (function () {
     // 需要"图形真正的中心/尺寸"时用它 —— 窗口是统一化的，跟图形本身不一样大。
     contentBox: (id) => _bb[id] || null,
     // 多体花瓣（Light）：卡面布局 / 直径换算 / 通用绘制 / 实体光点数
-    multiLayout, lightDRatio, drawMulti, lightSubCount
+    multiLayout, entityFormationLayout, lightDRatio, drawMulti, lightSubCount
   };
 })();

@@ -76,6 +76,7 @@ async function boot() {
     if (window.GARDEN_DATA && UI.showLoadingWarn) UI.showLoadingWarn();
   }, 20000);
   try {
+    await MobFX.prepareAssets();
     await Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s)));
   } catch (e) { /* 单个素材失败不影响其他 */ }
   // 小地图位图预热：在 Loading 阶段就构建好，避免首次悬浮缩放时现场绘制整张大图而卡顿
@@ -97,7 +98,7 @@ async function loadSelftest() {
   try {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'js/selftest.js?v=68';
+      s.src = 'js/selftest.js?v=70';
       s.async = true;
       s.onload = resolve;
       s.onerror = () => reject(new Error('js/selftest.js 加载失败'));

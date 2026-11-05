@@ -75,6 +75,7 @@ class Game {
     this.player = null;
     this.mobs = [];          // 【视图层】生物：由服务端快照按 id 镜像而来（含插值坐标）
     this.mobViews = new Map();   // netId -> 视图 Mob（快照差分创建/销毁用）
+    this.hornetProjectiles = new Map();
     // 远端生物【只留坐标】：屏幕外的个体不建视图（视图对象很重，全图 4000+ 只各建一个
     // 会把内存与 GC 拖垮），只有小地图/F3 需要知道它们在哪。
     this._farX = new Float32Array(1024);
@@ -363,6 +364,7 @@ class Game {
     if (!snap) return;
     // 记录本快照覆盖的模拟时长：插值步长按它算，而不是硬编码 1/25
     if (snap.dt > 0) this._snapDt = snap.dt;
+    if (snap.projectiles) this._applyProjectiles(snap.projectiles, snap.dt || SNAP_DT);
     // F3 指标：快照间隔归零 + 计数（不参与任何逻辑）
     this.perf.snapAge = 0;
     this.perf.snapCount = (this.perf.snapCount || 0) + 1;
@@ -463,6 +465,49 @@ class Game {
       v.hp = e.hp; v.maxHp = e.maxHp; v.dead = e.dead;
       v.vx = e.vx || 0; v.vy = e.vy || 0;   // 只用于推挤的动能项（视图实体不积分位置）
       if (e.artSvg) v.artSvg = e.artSvg;   // 多节生物：头节/身体节贴图区分
+      if (e.typeId === 11 && e.artSvg && v.artSvg !== e.artSvg) {
+        v.artSvg = e.artSvg;
+        v.artRot = MOB_ART_ROT[e.artSvg] || MOB_ART_ROT['11'] || 0;
+        v.shape = v.hull = null;
+      }
+      if (e.hornetMissile && typeof structuredClone === 'function') {
+        const nextMissile = structuredClone(e.hornetMissile);
+        const prev = v.hornetMissile;
+        if (prev && prev.id === nextMissile.id) {
+          nextMissile.px = prev.x; nextMissile.py = prev.y;
+          nextMissile.tx = nextMissile.x; nextMissile.ty = nextMissile.y;
+          nextMissile.blend = 0;
+        } else {
+          nextMissile.px = nextMissile.x; nextMissile.py = nextMissile.y;
+          nextMissile.tx = nextMissile.x; nextMissile.ty = nextMissile.y;
+          nextMissile.blend = 1;
+        }
+        v.hornetMissile = nextMissile;
+      } else if (e.hornetMissile) {
+        v.hornetMissile = Object.assign(v.hornetMissile || {}, e.hornetMissile);
+      } else if (v.hornetMissile) {
+        if (!v.hornetMissile.exiting) {
+          v.hornetMissile.exiting = true;
+          ExitFX.begin(v.hornetMissile);
+        }
+      }
+      if (Array.isArray(e.hornetProjectiles)) {
+        const old = v.hornetProjectiles || [];
+        v.hornetProjectiles = e.hornetProjectiles.map((item) => {
+          const next = Object.assign({}, item);
+          const prev = old.find((candidate) => candidate.id === item.id);
+          next.px = prev ? prev.x : item.x;
+          next.py = prev ? prev.y : item.y;
+          next.tx = item.x;
+          next.ty = item.y;
+          next.blend = prev ? 0 : 1;
+          if (prev && prev.exiting && !next.exiting) {
+            next.exiting = true;
+            next.exitT = prev.exitT;
+          }
+          return next;
+        });
+      }
       if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
       if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
       // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）
@@ -495,6 +540,32 @@ class Game {
       // 客户端压根没看见 dead —— 这时也要补一个退场动画。
       if (!v.gone && !seen.has(v.netId)) { v.gone = true; this._goneDirty = true; }
       if (v.gone && !v.exiting) ExitFX.begin(v);
+    }
+  }
+
+  _applyProjectiles(items, dt) {
+    const seen = new Set();
+    for (const item of items || []) {
+      seen.add(item.id);
+      const current = this.hornetProjectiles.get(item.id);
+      const view = current || Object.assign({}, item);
+      view.px = current ? current.x : item.x;
+      view.py = current ? current.y : item.y;
+      view.tx = item.x; view.ty = item.y;
+      view.blend = current ? 0 : 1;
+      Object.assign(view, item);
+      view.px = current ? current.x : item.x;
+      view.py = current ? current.y : item.y;
+      view.tx = item.x; view.ty = item.y;
+      view.blend = current ? 0 : 1;
+      this.hornetProjectiles.set(item.id, view);
+    }
+    for (const [id, projectile] of this.hornetProjectiles) {
+      if (seen.has(id)) continue;
+      if (!projectile.exiting) {
+        projectile.exiting = true;
+        ExitFX.begin(projectile);
+      }
     }
   }
 
@@ -544,6 +615,17 @@ class Game {
 
   // 视图生物每帧推进：插值坐标 + 自身动画计时（AI/移动/战斗都在服务端）
   _tickMobViews(dt) {
+    const projectileKeep = [];
+    for (const [id, projectile] of this.hornetProjectiles) {
+      if (projectile.exiting) ExitFX.tick(projectile, dt);
+      else if (projectile.blend < 1) {
+        projectile.blend = Math.min(1, projectile.blend + dt / (this._snapDt || SNAP_DT));
+        projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
+        projectile.y = projectile.py + (projectile.ty - projectile.py) * projectile.blend;
+      }
+      if (projectile.exiting && ExitFX.done(projectile)) this.hornetProjectiles.delete(id);
+      else projectileKeep.push(projectile);
+    }
     // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：客户端镜像一份用于绘制。
     // 服务端另有权威判定（谁被减速），这里只负责"网在哪、什么时候消失"。
     // 【退场强绑定】网到期不是凭空消失，而是走通用退场（放大 + 渐隐），播完才回收。
@@ -586,6 +668,23 @@ class Game {
       // 25Hz -> 60fps 插值后整条平滑移动（不做逐帧硬贴，避免 25Hz 台阶抖动）。
       m.x = m.px + (m.tx - m.px) * b;
       m.y = m.py + (m.ty - m.py) * b;
+      if (m.hornetMissile) {
+        const missile = m.hornetMissile;
+        if (missile.exiting) ExitFX.tick(missile, dt);
+        else if (missile.blend < 1) {
+          missile.blend = Math.min(1, missile.blend + k);
+          missile.x = missile.px + (missile.tx - missile.px) * missile.blend;
+          missile.y = missile.py + (missile.ty - missile.py) * missile.blend;
+        }
+      }
+      for (const projectile of m.hornetProjectiles || []) {
+        if (projectile.exiting) ExitFX.tick(projectile, dt);
+        else if (projectile.blend < 1) {
+          projectile.blend = Math.min(1, projectile.blend + k);
+          projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
+          projectile.y = projectile.py + (projectile.ty - projectile.py) * projectile.blend;
+        }
+      }
       // 主角血条模式（多节生物的非头节）：血条满血渐隐 / 掉血渐显 —— 视图不走 Mob.update，
       // 所以这个淡入淡出必须在这里推进，否则 hpBarA 永远是 0，血条根本不出现。
       if (m.plateStyle === 'player') m._tickHpBarA(dt);
@@ -913,6 +1012,12 @@ class Game {
     const sight = Math.max(0, (this.player && this.player.sightBonus) || 0);
     this.camZoomTarget = 1 / (1 + sight);
     this.camZoom = damp(this.camZoom || 1, this.camZoomTarget, 4.5, dt);
+    const zoom = Math.max(0.01, this.camZoom);
+    const camera = this.camera || p;
+    this._nearR = Math.hypot(
+      Math.abs(camera.x - p.x) + this.W / (2 * zoom),
+      Math.abs(camera.y - p.y) + this.H / (2 * zoom)
+    ) + 300;
     this.shake = Math.max(0, this.shake - dt * 30);
     // F3 调试屏幕：只在打开时更新（内部再限频 5Hz）
     if (typeof DebugScreen !== 'undefined' && DebugScreen.on) DebugScreen.update(dt);
@@ -1046,11 +1151,14 @@ class Game {
   //   粒子进的是 auraFx（画在花瓣【之下】），不是普通 particles。
   _tickPetalAura(dt) {
     const p = this.player;
-    if (!p || !p.petals || !p.petals.length) return;
+    if (!p) return;
+    const petals = p.petals || [];
+    const accessories = p.accessories || [];
+    if (!petals.length && !accessories.length) return;
     this._auraAcc = (this._auraAcc || 0) + dt;
     if (this._auraAcc < AURA_INTERVAL) return;
     this._auraAcc = 0;
-    for (const b of p.petals) {
+    for (const b of petals) {
       if (b.dead || !b.card) continue;
       const t = b.card.type, r = b.card.rarity;
       if (!t) continue;
@@ -1058,6 +1166,12 @@ class Game {
       if (!hot) continue;
       const col = (typeof RARITIES !== 'undefined' && RARITIES[r]) ? RARITIES[r].color : '#fff';
       this.auraFx.push(new Particle(b.x, b.y, col));
+    }
+    for (const a of accessories) {
+      const r = a.card && a.card.rarity;
+      if (r !== 'super' && r !== 'eternal') continue;
+      const col = (typeof RARITIES !== 'undefined' && RARITIES[r]) ? RARITIES[r].color : '#fff';
+      this.auraFx.push(new Particle(p.x, p.y, col));
     }
   }
 
@@ -1141,6 +1255,9 @@ class Game {
     for (const c of this.cards) c.draw(ctx);
     for (const s of this.dropFx) s.draw(ctx);
     for (const d of this.drops) { try { d.draw(ctx); } catch (e) { console.error('[draw drop]', e); } }
+    for (const projectile of this.hornetProjectiles.values()) {
+      MobFX.drawMissile(ctx, projectile, projectile.drawSize || 20, 1);
+    }
 
     // /tp 的目标标记（地面红点 + 脉冲圈，在实体之下，不影响读图）
     if (this.tpTarget) this._drawTpMarker(ctx);

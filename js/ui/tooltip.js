@@ -61,6 +61,8 @@ Object.assign(UI, {
           if (t.hp > 0) rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp });
           if (t.dmg > 0) rows.push({ label: statLabel('Mob/Attribute/Damage', 'Damage:'), value: t.dmg });
           if (t.armor > 0) rows.push({ label: statLabel('Mob/Attribute/Armor', 'Armor:'), value: t.armor });
+          if (t.missileHp > 0) rows.push({ label: statLabel('UI/Mob/MissileHealth', 'Missile Health:'), value: t.missileHp });
+          if (t.missileDmg > 0) rows.push({ label: statLabel('UI/Mob/MissileDamage', 'Missile Damage:'), value: t.missileDmg });
           // 中毒（Poison）：官方模板是 "Poison: {0:tooltip} ({1:tooltip}/s)" ——
           // 标签与数值一起拆出来，单位（/s 还是 /秒）跟着语言走。
           if (t.poison > 0) {
@@ -71,6 +73,9 @@ Object.assign(UI, {
         } else {
           if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp });
           if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg });
+          if (t.maxDamage > 0) {
+            rows.push({ label: statLabel('UI/Petal/MaxDamageLabel', 'Max Damage:'), value: t.maxDamage, labelColor: '#ff6b6b' });
+          }
           if (t.heal > 0) rows.push({ label: statLabel('Petal/Attribute/Heal', 'Heal:'), value: t.heal + (t.healPerSec ? '/s' : '') });
           if (t.maxMobRarityName) {
             rows.push({
@@ -404,7 +409,7 @@ Object.assign(UI, {
         // 治疗用专用粉色，不与伤害(红)/生命(绿)共用颜色（与玫瑰回血飘字同色）
         const STAT_COLORS = ['#7fe08a', '#ff6b6b', HEAL_TEXT_COLOR];
         // 生物：Health / Damage / Armor（Armor 用中性灰蓝，避免与治疗的粉色混淆）
-        const MOB_STAT_COLORS = ['#7fe08a', '#ff6b6b', '#b8c6d1'];
+        const MOB_STAT_COLORS = ['#7fe08a', '#ff6b6b', '#b8c6d1', '#7fe08a', '#ff6b6b'];
         const rowColors = t.mob ? MOB_STAT_COLORS : STAT_COLORS;
         // 每行：标签（默认按行序取色，可被 row.labelColor 覆盖）+ 数值（默认白色，
         // 可被 row.valueColor 覆盖，例如 Max Mob Rarity 用被吸引稀有度自己的颜色）。

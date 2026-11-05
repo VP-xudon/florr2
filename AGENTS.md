@@ -239,7 +239,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 - `RARITIES` 共 9 档：`common → unusual → rare → epic → legendary → mythic → ultra → super → eternal`（无 `unique`；个别覆盖表里会出现但不在主序列）。
 - `registry.js` 里 **花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实、84+ 忽略**。二创/缺名项不进入游戏，登记到 `NEEDS_MANUAL`。
-- **当前真正启用的花瓣 11 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye, web, antennae`。
+- **当前真正启用的花瓣 14 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye, web, antennae, orange, missile`。Magic Missile 是 Missile 的魔法变种隐藏掉落，按 Magic Leaf 同样方式仅登记、不显示、不实际掉落。
 - **Antennae（触角，id 17，utility）= 视野扩大**：装备型饰品（同 Third Eye 形态：不进轨道、无战斗、不可堆叠）。
   数值 `PETAL_RARITY_OVERRIDES.antennae.sight` = **官方视野扩大比例**：
   common 11.1% / unusual 17.6% / rare 25% / epic 33.3% / legendary 42.9% / mythic 100% / ultra 185.7% / super 400% / eternal 900%；
@@ -258,7 +258,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   **实体结算永远用数据表里的单体值**（每个实体各拿一份），两者严格分开。
   没有这个登记就会踩两个坑：① 每个小球拿到合计值 → 伤害翻 4 倍；
   ② 卡槽水缸分母用单体值 → 4 个实体的血量总和除以单体值 = 永远满阴影。其余 registry 数据保留但不加载。
-- **可自然生成的生物 4 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider`。
+- **Orange（id 50）是三实体阵型花瓣**：单果素材从三果 SVG 变体提取，实体尺寸保持与 Basic 相当；卡面单体放大 1.3 倍，紧凑三角可轻微重叠，单体额外朝向由布局数量自动均分。实体两颗底瓣沿玩家标准轨道半径形成弧形，中心距为单体直径 5 倍；第三颗按等边三角形顶点计算，不再把整组外推。整组仍预留 8 个轨道角位。reload 为 1.5s。每只生物分别记录各玩家最近一次实际非毒单击伤害；Orange 单体伤害按 `min(Orange 面板基础伤害 + 0.5 × 该玩家对该生物的上次实际单击伤害, Max Damage)` 计算，再走统一护甲结算；Orange 自己造成的实际伤害也更新记录。Max Damage 在悬浮框显示并走 `i18n-extra.js`。
+- **Missile（id 9）**：Unusual 起有伤害/血量；reload 1.5s，tooltip 显示 `1.5s + 0.5s`。仅在 reach 连续保持 0.5s 后发射，速度与 Peas 相同，生存 2s；发射时只在玩家朝向 ±10°、300px 范围内选目标并微调一次，之后严格直线飞行、正常参与实体碰撞与战斗。轨道时尖端朝外。
+- **Hornet（id 11）**：Hostile；Common~Unique 属性按覆盖表，追击速度为玩家的 0.95 倍、游荡复用 Bee 的 S 型 AI。尾部 Missile 是 MobFX 子实体：独立 HP/Damage、无血条、可单独受击；飞行直线 2~10 秒按稀有度数值，命中玩家按统一护甲结算。Missile 消失后退场并等待 0.5s 重生；Missile/Magic Missile 掉率表相同，Magic Missile 按 Magic Leaf 规则隐藏。
+- **可自然生成的生物 5 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider, hornet`。
   蜘蛛是 aggressive：`MOB_TRAITS.spider.sightR = 500`，AI `spider` 把追击压成 1.10×（游荡 = 追击 × 0.9）。
 - **生物特性走 `MobFX` 引擎**（`js/mob-fx.js`，与 `PetalFX` 对称）：
   大招这类特性天然横跨 4 层（`ai.js` 调度 / `sim/mob.js` 状态 / `net/server.js` 产出 / `game.js` 表现），
@@ -439,13 +442,9 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 生物速度口径：追击 = 0.90×玩家最高速（蜜蜂 1.05×）；游荡 = 0.95 × 0.3~0.5 随机 × 0.75（蜜蜂 ×1.2），只有蜜蜂走 S 型。
 
-**击退重量口径（两套，别混用）**：
+**击退重量口径（实体质量与击退质量）**：
 - 实体分离用 `b.weight = rarityWeight(rarity)`（面积口径，生物/花瓣同一套）。
-- **动量传递（击退）用 `petalWeight()` = 同等级生物重量 × 递减份额**：common ×0.5 → eternal ×0.05，
-  等比递进（每档 ×0.1^(1/8)）。见 `sim/constants.js` 的 `petalKnockbackWeight`。
-  花瓣比同等级生物轻得多，所以动量小得多 —— 想让"花瓣击退更/更不猛"只调这两个端点，
-  再配合 `KB_DISPARITY_MIN/MAX`（0.2 / 1.5）：下限必须 ≤ sqrt(最小份额)≈0.224，
-  否则高稀有度花瓣会被地板抬到同一档，"越高级推得越轻"的递进就看不出来。
+- **动量传递（击退）**：生物仍使用 `rarityWeight(rarity)`，生物互推与生物受花瓣推动共用同一重量表；所有花瓣固定使用旧版 Legendary 花瓣的击退质量（`petalKnockbackWeight`），不再随花瓣稀有度变化。`KB_DISPARITY_MIN/MAX` 仅影响生物受击时的质量悬殊增益。
 
 **多节生物（蜈蚣）的四条规则**：
 - **断链继承仇恨**：前节死亡、本节升为新段首的那一刻，必须 `inheritThreat(旧段首)` 把旧账本并进来 ——
@@ -560,7 +559,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 - **快照仍是每帧全量**（未池化/未降频）：`LocalNet.step` 每帧推进模拟并立刻投递快照（约 2.5ms/帧，4700 只实体的对象分配是当前 GC 主要来源），本地零延迟优先；`SNAP_DT` 只用于客户端插值步长基准。真服务器应改为按 `SNAP_HZ` 投递 + 对象池。
 - **生物实体数远超 `GLOBAL_MAX_MOBS`**：上限按"只"统计，而一条蜈蚣会展开成多节实体（实测约 4500~4900 个视图实体）。
 - 只有 Garden 一张图；`/init <map>` 只能初始化当前地图，不能切图（其余 `.tmj` 未被加载）。
-- 只有 8 种花瓣（`basic/light/rose/stinger/pollen/honey/peas/leaf`）、3 种可生成生物（瓢虫/蜜蜂/蜈蚣）；大量 registry 数据尚未接入玩法。
+- 当前启用 14 种花瓣；其中实际战斗花瓣有 `basic/light/rose/stinger/pollen/honey/peas/leaf/orange/missile`，另有 Faster、Third Eye、Antennae 等饰品/加成花瓣。大量 registry 数据仍未接入玩法。
 - 聊天只有 Local 可用；Squad/Guild/Whisper 是 UI + 提示占位。没有真实多人/账号系统。
 - 没有存档：除设置 Cookie 外，装备/图鉴/进度都在内存，刷新即重置。
 - 没有音效/音乐。触控已适配（摇杆 + A/B），但**未在真机验证**：`pointer` 事件与 `env(safe-area-inset-*)` 只在桌面用 `?touch=1` 和 headless 尺寸断言验证过。
