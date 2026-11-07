@@ -198,13 +198,14 @@ const PetalFX = {
   // 脱轨计划：返回 null = 不脱轨，否则 { vx, vy, holdReload }。
   // 默认实现按能力字段生成：有 launch 的喷射出去（Peas），否则保留一点惯性滑行（Pollen / Honey）。
   // 具体物种可以覆盖：detach(ctx) 返回自己的初速/参数。
-  detach(body, player, mobs) {
+  detach(body, player, mobs, orbitAngle) {
     const type = body && body.card && body.card.type;
     if (!type) return null;
     const def = this.defOf(type);
     if (def && def.detach) {
       const ctx = this._ctx(body, player, 0);
       ctx.mobs = mobs || [];
+      ctx.orbitAngle = (orbitAngle == null) ? null : orbitAngle;
       return def.detach(ctx) || null;
     }
     const launch = this.trait(type, 'launch');
@@ -289,9 +290,12 @@ const PetalFX = {
     const nx = c.hit.nx, ny = c.hit.ny;
     // ① 一次接触只传一次动能。接触强度取"花瓣撞过来"与"生物撞过来"两者中更大的那个，
     //    否则"站着不动让怪撞"永远传不出力。
-    const vN = Math.max(c.approach || 0, c.relN || 0);
-    if (vN >= PETAL_KB_MIN_APPROACH && !(b.kbT > 0)) {
-      const impact = clamp(vN / PETAL_KB_REF, 0.35, 2.2);
+    if (!(b.kbT > 0)) {
+      // 【与速度彻底解耦】：以前 impact = vN / 参考速度（reach 伸得远、转得快就更猛），
+      // 于是同一片花瓣"伸出去"和"贴着"击退强度差一倍。现在统一按
+      // 「正常转速下动能的 1.5 倍」给一份固定冲量，只由稀有度/质量分配决定差异。
+      // vN 只用来判断"这是一次真实接触"，不参与强度计算。
+      const impact = PETAL_KB_IMPACT;
       applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
       b.kbT = PETAL_KB_CD;
     }
@@ -464,33 +468,25 @@ PetalFX.register('orange', {
   }
 });
 
+// 口径（用户要求）：
+//   · 不在 reach 模式：正常公转，【尖端朝外】（orientOutward），轨道紧贴本体、不吃 reach；
+//   · 进入 reach：立刻从【当前角度】沿尖端方向直线飞出，速度不变，飞行中【不旋转】，
+//     2 秒后消失（launch.life）。
+// 早期版本会"自动瞄准 ±10° 内最近的生物"，那不是 Missile 的行为，已删除。
 PetalFX.register('missile', {
   detach(ctx) {
     const body = ctx.petal, player = ctx.player;
-    const baseAngle = player.facing || 0;
-    let angle = baseAngle, bestDelta = Math.PI / 18 + 1, bestDistance = Infinity;
-    for (const mob of ctx.mobs) {
-      if (!mob || mob.dead) continue;
-      const dx = mob.x - body.x, dy = mob.y - body.y;
-      const distance2 = dx * dx + dy * dy;
-      if (distance2 > 300 * 300) continue;
-      const targetAngle = Math.atan2(dy, dx);
-      const delta = Math.atan2(Math.sin(targetAngle - baseAngle), Math.cos(targetAngle - baseAngle));
-      const absDelta = Math.abs(delta);
-      if (absDelta > Math.PI / 18) continue;
-      if (absDelta < bestDelta || (absDelta === bestDelta && distance2 < bestDistance)) {
-        angle = baseAngle + delta;
-        bestDelta = absDelta;
-        bestDistance = distance2;
-      }
-    }
+    // 方向 = 它此刻所在的轨道角（尖端本来就朝这个方向）；
+    // 刚生成时位置可能还在本体中心，所以优先用引擎传进来的轨道角。
+    const ang = (ctx.orbitAngle != null) ? ctx.orbitAngle
+      : Math.atan2(body.y - player.y, body.x - player.x);
     const speed = (ctx.type.launch.speedK || 1.3) * PLAYER_BASE_SPEED;
-    body.flightRot = angle - MISSILE_TIP_ANGLE;
-    body.flightSpin = 0;
-    return { vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, holdReload: false };
+    body.flightRot = ang - MISSILE_TIP_ANGLE;   // 绘制：尖端对准飞行方向
+    body.flightSpin = 0;                        // 飞行中不旋转
+    return { vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, holdReload: false };
   },
   flight(body) {
-    return body.card.type.launch;
+    return body.card.type.launch;               // { life: 2.0, 无 spinRate } => 飞满 2s 消失
   }
 });
 
@@ -670,6 +666,86 @@ function spawnWebField(ctx) {
   if (typeof ctx.player.spawnWeb !== 'function') return;
   ctx.player.spawnWeb(b.x, b.y, st.radius, st.duration || 10, b.card);
 }
+
+// —— 内置特效 9：蜡块（Wax）——
+// 形态：加载好【立刻】脱轨（autoDetach），在玩家旁边随机落一块蜡；之后固定在原地。
+//   · 没有伤害、不吸引生物（数值里 dmg=0，特性里没有 attractMobs）；
+//   · 有碰撞箱：实体半径 = 该稀有度的 radius（见 b.cr），会挡住生物；
+//   · 卡面跟着实体走，实体死了才重新装填（holdReloadUntilDeath）。
+// 「玩家推它很轻、生物推它按同等级重量」由 server 的分离代码按推者阵营取值。
+// 96.svg 的正六边形（归一化，外接圆半径 = 1）—— 见 detach 里的源码推导注释。
+const WAX_HEX = [
+  [0.540, 0.842], [-0.459, 0.889], [-0.999, 0.047],
+  [-0.540, -0.842], [0.459, -0.889], [0.999, -0.047]
+];
+
+PetalFX.register('wax', {
+  detach(ctx) {
+    const b = ctx.petal, p = ctx.player;
+    const st = petalStatsFor(ctx.type, ctx.rarity);
+    const R = st.radius || 0;
+    // 落点：贴着玩家外缘一圈，随机挑一个"不卡墙"的角度（最多试 16 次）。
+    const map = p && p._mapRef;
+    const dist = (p ? p.r : 16) + R * 0.86;
+    const base = (p ? p.facing : 0) + Math.PI;      // 默认落在身后，避免糊脸
+    let placed = false;
+    // 【生成空间校验】：蜡块是 R 大小的实体，落点周围 R 内都不能有墙。
+    // 先按正确角度找；找到后还要过一遍"沿半径采样"的校验（只查中心点会一半陷进墙里）。
+    const fits = (cx, cy) => {
+      if (!map || !map.solidAtPoint) return true;
+      if (map.solidAtPoint(cx, cy)) return false;
+      const rr = R * 0.92;
+      for (let k = 0; k < 8; k++) {
+        const th = (k / 8) * TAU;
+        if (map.solidAtPoint(cx + Math.cos(th) * rr, cy + Math.sin(th) * rr)) return false;
+      }
+      return true;
+    };
+    for (let i = 0; i < 16; i++) {
+      const a = base + (b.slotIndex || 0) * 1.7 + rand(-1.1, 1.1);
+      const x = p.x + Math.cos(a) * dist;
+      const y = p.y + Math.sin(a) * dist;
+      if (!fits(x, y)) continue;
+      b.x = x; b.y = y; placed = true;
+      break;
+    }
+    // 一圈都放不下（会被墙卡住且小幅偏移也躲不开）-> 【放弃这次生成，立刻重新装填】。
+    // 引擎看到 cancelSpawn 会销毁这个实体并把该槽的装填清零，而不是硬塞一块蜡在墙里。
+    if (!placed) {
+      b.cancelSpawn = true;
+      return { vx: 0, vy: 0, holdReload: false };
+    }
+    // 碰撞外形 = 【素材里的正六边形】，从 96.svg 源码抄出来的顶点：
+    //   g translate(0 7.143)，path d="m66.578 65.889-21.405 1.01-11.578-18.03
+    //                                      9.827-19.043 21.405-1.011 11.578 18.031z"
+    //   六个绝对顶点（减去 translate）相对包围盒中心 (55,55)，除以外接圆半径 21.43 归一化。
+    // 这样碰撞箱严格贴合形状，而不是笼统一个圆。
+    b.shapePoly = WAX_HEX;
+    b.cr = R;                 // 外接圆半径 = 数据表的 Radius
+    b.artSize = R * 2;        // 绘制直径 = 2 × Radius
+    b.anchor = true;          // 固定落地：不绕圈、不采信服务端位置插值
+    b.selfRot = 0;            // 蜡块不转
+    // ---- 【统一实体接口】：与生物完全同构的碰撞字段 ----
+    // 生物的碰撞表示是  shape = { pts: 归一化多边形, r: 外接圆半径 }, collSize = 实际尺寸。
+    // Wax 用同一套表示（WAX_HEX 本来就是归一化顶点）之后：
+    //   mobHitTest(wax, x, y, r) / physicsPushMob(ent, wax) / physicsPush(a, wax)
+    // 全部【原样可用】—— 玩家碰蜡块和玩家碰生物走的是同一个函数，零特判。
+    // 蜡块不旋转：facing/artRot 恒 0，_mobRot 的旋转矩阵就是单位阵。
+    // 从 assets/crbs/petals/96.crb 读【同一份硬编码轮廓】；
+    // 物理判定、F3 调试箱、渲染尺寸都以此为准，不会再"大一圈"。
+    const crb = (typeof CRB !== 'undefined' && CRB.getPetal)
+      ? CRB.getPetal(String(ctx.type.svg)) : null;
+    b.shape = crb || { pts: WAX_HEX, r: 1 };
+    b.shapePoly = crb ? crb.pts : WAX_HEX;
+    b.collSize = R;
+    b.r = R;                  // 等面积圆半径（粗判/网格用）
+    b.facing = 0; b.artRot = 0;
+    b.weight = (typeof rarityWeight === 'function') ? rarityWeight(ctx.rarity) : 1;
+    // 重量：与生物完全同一规则（按稀有度）—— 所有实体一视同仁，
+    // 玩家/生物推它的差异只来自各自的 weight（统一物理的反质量分配），没有任何特判。
+    return { vx: 0, vy: 0, holdReload: true };
+  }
+});
 
 // 蛛网【自己画的】素材（放射线 + 内凹环），不用 Web 花瓣本身的贴图。
 // 懒加载一次，未就绪时返回 null（调用方不画）。

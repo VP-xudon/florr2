@@ -391,7 +391,9 @@ class LocalServer {
       m.plateStyle = m.isHeadSeg ? 'classic' : 'player';
       // 经验按节数均分：打完整条合计 = 表里给的 XP Reward（否则 8~60 节会翻好几倍）
       if (rs && rs.exp) m.exp = Math.max(1, Math.round(rs.exp / n));
-      const sp = (m.r || 12) * 1.4;                      // 相邻两节的出生间距
+      // 出生间距与 _solveChains 的 GLUE 保持同一口径（两节刚好相接），
+      // 否则出生时就摆出一段空隙，链解算要花好几帧才收拢。
+      const sp = ((prev && prev.r > 0 ? prev.r : (m.r || 12)) + (m.r || 12)) * 1.002;
       m.x = px; m.y = py;
       // 【朝向必须显式给】：Mob 构造里是随机 facing。不设的话头会"歪着"长在身体上
       // （身体沿固定方向铺开、头却朝任意方向）—— 这就是看起来"头部分离"的原因。
@@ -536,9 +538,12 @@ class LocalServer {
     const MAX_PTS = 400;                       // 轨迹点数硬上限（兜底）
 
     // 节半径只跟 drawSize/shape.r 有关，提到循环外算一次，避免每条链重建闭包
-    const radOf = (e) => (e.shape && e.shape.r)
-      ? e.shape.r * e.drawSize
-      : (e.drawSize || 24) * 0.35;
+    // 用【等面积圆半径】而不是外接半径：外接半径会把尖角/触角也算进去，
+    // 相邻两节的间距被撑大 -> 体节之间出现明显空隙。
+    // e.r 就是 Mob._ensureShape 里按同一份轮廓算出的等面积半径（px）。
+    const radOf = (e) => (e && e.r > 0)
+      ? e.r
+      : ((e && e.shape && e.shape.r) ? e.shape.r * e.drawSize : ((e && e.drawSize) || 24) * 0.35);
 
     // 只遍历【醒着】的个体（this._awake 由 step() 建好）：全图 4000+ 只里绝大多数是休眠的，
     // 以前每步都要为它们整表扫一遍再 continue，纯属白扫。
@@ -942,6 +947,7 @@ class LocalServer {
         if (m.ultHold) continue;
         // 与伤害结算 / F3 碰撞箱同一套几何：生物的 SVG 轮廓（physicsPushMob 内部按轮廓推挤）。
         // 被粘合的链节【只推玩家】：节的位置每帧末由轨迹刚性解算，推它会被覆盖并撕开整条。
+        if (m.noPush) continue;                  // 原地放置的实体（Pollen）不参与推动
         if (m._chainLocked) physicsPushPlayerOnly(p, m);
         else physicsPushMob(p, m);
       }
@@ -986,10 +992,48 @@ class LocalServer {
             // 它们本来就是故意重叠的（见 _solveChains 的 GLUE），
             // 推挤会把链硬生生推开 -> 错位、拉伸、尾节脱节、并给速度顶出巨大冲量。
             if (a._next === b || b._next === a) continue;
+            // 原地放置的实体（Bumble Bee 的 Pollen）：不被推着滑走
+            if (a.noPush || b.noPush) continue;
             physicsPush(a, b);
           }
         }
       }
+    }
+
+    // 4b) 带 shape 的花瓣实体（Wax）：同一个 physicsPush，按【推者阵营】只改两个输入：
+    //   · 玩家阵营推：w.static=false, w.weight≈0 —— 蜡块无限轻，一碰就被推走，
+    //     玩家自己几乎不被顶开（用户口径"重量为 0"）。weight 取极小正数，因为
+    //     physicsPush 的 `weight || 1` 会把 0 当成缺省值 1。
+    //   · 生物推：w.static=true —— inv=0，生物吃下【全部】重叠修正，蜡块纹丝不动，
+    //     于是生物被硬阻挡，不可能从蜡块底下穿过去。
+    //   · 蜡块 ↔ 蜡块：双方 static=false、按 weight 反质量分配，正常互相挤压。
+    // 全部走同一个 physicsPush；没有第二套碰撞函数。
+    if (p && !p.dead && p.petals) {
+      const waxes = p.petals.filter((w) => w && !w.dead && w.shape);
+      const map = this.map;
+      for (const w of waxes) {
+        // 玩家的推力必须【过地形】：physicsPushOnMap 会先算实体重叠，再用地形解算重走位移，
+        // 于是蜡块只会被推到墙边停住，不会被推进墙里。
+        w.static = false; w.weight = 1e-4;
+        physicsPushOnMap(p, w, map);
+        w.static = true;
+        for (let i = 0; i < awake.length; i++) {
+          const m = awake[i];
+          if (!m || m.dead) continue;
+          physicsPush(m, w);
+        }
+      }
+      for (let i = 0; i < waxes.length; i++) {
+        for (let j = i + 1; j < waxes.length; j++) {
+          const a = waxes[i], b = waxes[j];
+          a.static = false; b.static = false;
+          a.weight = b.weight = rarityWeight(a.card && a.card.rarity) || 1;
+          // 蜡块互相挤压同样要过地形：互推不能把对方顶进墙。
+          // physicsPush 本身就是双向分配（a、b 各动一份），只调一次。
+          physicsPushOnMap(a, b, map);
+        }
+      }
+      for (const w of waxes) w.static = true;
     }
 
     // 5) 战斗结算：25 tick/s 固定步长
@@ -1010,6 +1054,11 @@ class LocalServer {
     // 7) 场地型实体（玩家的 Web 网 / Legend+ 蜘蛛自铺网）：状态施加 + 网的寿命推进。
     // 放在坐标全部定稿之后 —— 否则算出来的是"上一步的位置"。
     this._fieldTick(dt);
+
+    // 8) Bumble Bee：每 0.6s 在尾部生一颗同等级 Pollen。
+    // 放在【最后】：前面任何一步早退（玩家死亡等）都不该让它停产；
+    // 而且生成位置要用本步定稿后的坐标。
+    this._bumbleTick(dt);
     _mk('chain+field');
     _pr.n++;
   }
@@ -1030,6 +1079,56 @@ class LocalServer {
       };
     }
     return this._fctx;
+  }
+
+  // Bumble Bee：尾部定时产 Pollen。
+  // Pollen 走【通用实体链路】—— 生成一个静止的敌对 Mob（hp/dmg 取该稀有度 Pollen 的数值），
+  // 于是花瓣能打碎它、它会咬玩家、快照/绘制全部复用现成管线，不需要新的网络字段。
+  _bumbleTick(dt) {
+    const src = this._awake || this.ents;
+    const pollen = (typeof PETAL_TYPES !== 'undefined')
+      ? PETAL_TYPES.find((t) => t && t.slug === 'pollen') : null;
+    if (!pollen || !pollen.svg) return;
+    for (const m of src) {
+      // 已生成的 Pollen 是有寿命的（10s），否则一波怪能在地上堆几百颗
+      if (m.pollenShot && !m.dead) {
+        m.life = (m.life || 0) + dt;
+        if (m.life >= 10) { m.dead = true; EntityFX.despawn(m); }
+        continue;
+      }
+      if (m.dead || !m.type || !m.type.pollenEvery) continue;
+      m.pollenT = (m.pollenT || 0) + dt;
+      if (m.pollenT < m.type.pollenEvery) continue;
+      m.pollenT = 0;
+      // 尾部位置：本体朝向的反方向
+      const a = (m.facing || 0) + Math.PI;
+      const off = (m.drawSize || 30) * 0.45;
+      const x = m.x + Math.cos(a) * off;
+      const y = m.y + Math.sin(a) * off;
+      const st = petalStatsFor(pollen, m.rarity);
+      // 临时类型：与 Mob 的接口一致，但数值来自 Pollen 花瓣表
+      // 必须用正式登记的类型（data.js 的 POLLEN_SHOT_TYPE）：客户端按 typeId 建视图，
+      // 临时对象没有 id 的话快照里 typeId=undefined，客户端直接 continue -> 永远看不见。
+      // 尺寸口径：common 的 Pollen 与玩家放出来的 Pollen 【视觉上】一样大（PETAL_ENT_SIZE），
+      // 之后按【生物体型比例】MOB_DIAM[rarity] 递增 —— 由 sizeScale 一次性给出。
+      // 【除以内容占比】：生物贴图走 SpriteStore 的固定裁剪框，图形只占画布约 30%
+      //（花瓣管线 artCanvas 是按内容包围盒裁满的）。不补偿这一项，
+      // 实际画出来只有目标的一半 —— 表现为"common 太小、rare 才刚好"。
+      const type = Object.assign({}, POLLEN_SHOT_TYPE, {
+        sizeScale: PETAL_ENT_SIZE / (PLAYER_VISUAL_D * MOB_DIAM_BASE * MOB_ART_FILL),
+        rarityStats: { [m.rarity]: { hp: st.hp || 1, dmg: st.dmg || 0, armor: 0, exp: 0 } }
+      });
+      const shot = new Mob(type, x, y, 1, m.rarity);
+      shot.netId = this.nextId++;          // 没有 netId 就进不了快照，客户端看不到它
+      shot.artSvg = 'pollen';             // 快照下发，客户端据此画 mobpollen 贴图
+      shot.hostility = 'hostile';
+      shot.wanderSpeed = 0; shot.chaseSpeed = 0; shot.speed = 0;   // 停在原地
+      shot.pollenShot = true;
+      shot.noPush = true;                 // 放在原地，不被推挤滑走
+      shot.vx = 0; shot.vy = 0;
+      shot.life = 0;
+      this.ents.push(shot);
+    }
   }
 
   // 场地型实体的判定：与放置者敌对的生物进入半径 -> 获得对应状态效果。
@@ -1162,30 +1261,48 @@ class LocalServer {
     // 休眠生物距玩家 > MOB_ACTIVE_R(2200)，而花瓣射程远小于它，不可能接触 ——
     // 跳过它们等于省掉全图 4500+ 只 × 花瓣数 × 25Hz 的轮廓判定。
     const awake = this._awake || this.ents;
+    // 尾针是"可被花瓣伤害的实体"，和生物一样走【同一套结算链路】：
+    //   · 碰撞判定用实体自己的 shape（11_missile.crb）
+    //   · 伤害 = 花瓣 dmg - 目标 armor（this._dmg）
+    //   · 扣血 / 红闪 / 飘字 / 退场 全部交给 MobFX.hurtStinger + EntityFX
+    // 发射前（st.missile）和发射后（st.projectiles）都算 —— 它们是同一个实体。
+    const stingerCrb = (typeof CRB !== 'undefined') ? CRB.get('11_missile') : null;
     for (const m of awake) {
       if (m.dead) continue;
-      const hornetMissile = m.hornet && m.hornet.missile;
-      if (hornetMissile && !hornetMissile.dead && !hornetMissile.exiting) {
-        const radius = hornetMissile.radius || 8;
+      const st = m.hornet;
+      const stingers = [];
+      if (st && st.missile) stingers.push(st.missile);
+      if (st && st.projectiles) for (const pr of st.projectiles) stingers.push(pr);
+      for (const stinger of stingers) {
+        if (!stinger || stinger.dead || stinger.exiting) continue;
+        const radius = stinger.radius || 8;
+        const sc = stinger.shape || stingerCrb;
         for (const b of p.petals) {
           if (b.dead || b.fxNoCombat) continue;
-          const dx = b.x - hornetMissile.x, dy = b.y - hornetMissile.y;
+          const dx = b.x - stinger.x, dy = b.y - stinger.y;
           const rr = PETAL_R + radius;
-          if (dx * dx + dy * dy > rr * rr) continue;
+          if (dx * dx + dy * dy > rr * rr * 4) continue;      // 粗判
+          if (sc && typeof polyVsCircle === 'function') {
+            const h = polyVsCircle(sc.pts, stinger.x, stinger.y,
+              stinger.collSize || radius, b.x, b.y, PETAL_R);
+            if (!h) continue;
+          } else if (dx * dx + dy * dy > rr * rr) continue;
           const stats = petalStatsFor(b.card.type, b.card.rarity);
-          const hitDamage = this._dmg(PetalFX.damageOf(b, m, p, stats.dmg), hornetMissile.armor || 0);
-          if (hitDamage > 0) {
-            const applied = MobFX.hitMissile(m, hitDamage);
-            if (applied > 0) {
-              this._events.push({ kind: 'dmg', x: hornetMissile.x, y: hornetMissile.y,
-                r: radius, text: String(Math.round(applied)), color: DAMAGE_TEXT_COLOR });
+          const applied = this._dmg(PetalFX.damageOf(b, m, p, stats.dmg), stinger.armor || 0);
+          if (applied > 0) {
+            const dealt = MobFX.hurtStinger(m, stinger, applied);
+            if (dealt > 0) {
+              this._events.push({ kind: 'dmg', x: stinger.x, y: stinger.y,
+                r: radius, text: String(Math.round(dealt)), color: DAMAGE_TEXT_COLOR });
             }
           }
         }
-        const pdx = p.x - hornetMissile.x, pdy = p.y - hornetMissile.y;
+        // 尾针 → 玩家：与生物撞玩家同一套（this._dmg 减护甲、p.hurt 带无敌、
+        // 统一击退份额、统一退场）。飞行中才接触伤害。
+        const pdx = p.x - stinger.x, pdy = p.y - stinger.y;
         const hitPlayer = pdx * pdx + pdy * pdy <= (radius + p.r) * (radius + p.r);
-        if (hornetMissile.flight && hitPlayer) {
-          const damage = this._dmg(hornetMissile.dmg, p.armor);
+        if (stinger.flight && hitPlayer) {
+          const damage = this._dmg(stinger.dmg, p.armor);
           if (damage > 0) {
             const hurt = p.hurt(damage, m);
             if (hurt) {
@@ -1195,9 +1312,9 @@ class LocalServer {
               applyKnockback(p, pdx / d, pdy / d, total * share);
               this._events.push({ kind: 'hurt', ux: pdx / d, uy: pdy / d, total: total * share, shake: true });
             }
-            hornetMissile.exiting = true;
-            hornetMissile.dead = true;
-            ExitFX.begin(hornetMissile);
+            stinger.exiting = true;
+            stinger.dead = true;
+            EntityFX.despawn(stinger);
           }
         }
       }
@@ -1207,7 +1324,7 @@ class LocalServer {
         // Peas 喷射中的实体【照常参与伤害结算】：它此刻只是 stationary + 有自己的速度，
         // 仍是一个正常实体，血量/命中/伤害全部走下面这条通用链路。
         // 2s 后的移除由 Player._syncPetals 负责（服务端副本同样跑那套，因此两侧一致）。
-        const hit = mobHitTest(m, b.x, b.y, PETAL_R);
+        const hit = entityHitMob(m, b);          // Wax 用自己的六边形，其余用圆
         if (!hit) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
         if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
@@ -1237,7 +1354,9 @@ class LocalServer {
         // ---- ① 物理分离（"生物一侧"）：生物被推出花瓣轮廓 ----
         // 花瓣一侧的分离在 Player._separatePetalFromMobs 里做（两端同源），
         // 这里只动生物（生物只有服务端能动）。两边加起来 = 完整的一对多体碰撞。
-        this._separateMobFromPetal(m, b, hit);
+        // 带 shape 的花瓣（Wax）的碰撞统一由 physicsTick 的物理段处理，
+        // 这里只分离普通花瓣（战斗系统的接触分离）—— 一个实体只进一套体系。
+        if (!b.shape) this._separateMobFromPetal(m, b, hit);
         // ---- ② 接触传能（撞上去那一下的击退 / 揉搓），所有花瓣同一套 ----
         PetalFX.onHit(b, p, {
           dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
@@ -1371,7 +1490,10 @@ class LocalServer {
     const invP = 1 / (b.weight || 1);
     const invM = 1 / (m.weight || 1);
     const shareM = invM / ((invP + invM) || 1);
-    const push = Math.min((hit.depth - PETAL_CONTACT_SKIN) * PETAL_SEP_K * shareM, 16);
+    // 落位型实体（Wax）是【不可推动的障碍】：单帧分离上限提高到 40px，
+    // 否则生物 200px/s（8px/帧）能靠持续挤压慢慢"蹭"进蜡块里（表现为没有碰撞）。
+    const cap = b.anchor ? 40 : 16;
+    const push = Math.min((hit.depth - PETAL_CONTACT_SKIN) * PETAL_SEP_K * shareM, cap);
     if (push > 0) { m.x -= hit.nx * push; m.y -= hit.ny * push; }
   }
 
@@ -1781,6 +1903,7 @@ class LocalServer {
       o.vx = m.vx || 0; o.vy = m.vy || 0;
       // 多节生物：头节(12_h 带触角) / 身体节(12_b) 用不同贴图，必须下发否则客户端画不出区分
       o.artSvg = m.artSvg || null;
+      o.pollenShot = !!m.pollenShot;      // Bumble Bee 产出的 Pollen，客户端据此标记视图
       // 多节生物的节序号：客户端据此不做逐节插值（见 game.js），保证整条刚性对齐、顺序不错
       o.segIdx = (m.segIdx != null) ? m.segIdx : null;
       // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 entities.js Mob.draw

@@ -116,12 +116,15 @@ const CardRenderer = (function () {
     return bb;
   }
 
-  // 统一窗口 viewBox：[cx, cy] 处放 refW×refH 的窗口；内容 (bw×bh) 更大则放大窗口防裁切。
+  // 统一窗口 viewBox：[cx, cy] 处放【正方形】窗口，边长取 ref 与内容的较大者。
+  // 【必须是正方形】：这个窗口会改写成 viewBox，随后 <img> 被 drawImage(img,0,0,S,S)
+  // 画进正方形画布 —— 而 drawImage 带显式目标尺寸时会【拉伸】，
+  // 所以非正方形窗口会把瘦长的素材横向压扁（Missile 看起来"扁"就是这么来的）。
+  // 正方形窗口 = 内在宽高比 1:1，drawImage 不再变形；素材自身的宽高比由 SVG 内部
+  // 的 xMidYMid meet 保住。
   function uniformWindow(cx, cy, bw, bh, refW, refH) {
-    let w = refW, h = refH;
-    if (bw > w) w = bw;      // 防裁切：只放大不缩小
-    if (bh > h) h = bh;
-    return [cx - w / 2, cy - h / 2, w, h];
+    const s = Math.max(refW || 0, refH || 0, bw || 0, bh || 0);
+    return [cx - s / 2, cy - s / 2, s, s];
   }
 
   // ---- 多体花瓣（Light）----
@@ -359,10 +362,21 @@ const CardRenderer = (function () {
     _artSvg[svgId] = loadRaw(svgId).then((txt) => {
       if (!txt) return null;
       let out = txt;
-      const bb = measureBox(svgId, txt);
+      let bb = measureBox(svgId, txt);
+      // 【描边外扩】getBBox() 只算几何、不算 stroke —— 像 Missile(9.svg) 那种
+      // stroke-width=7.143 的素材，按裸 bbox 裁窗口会把描边切掉一半，
+      // 渲染出来就是"尖端参差不齐 / 底边被啃掉"。这里按 stroke-width/2 把窗口撑开。
+      if (bb) {
+        const m = /stroke-width="([\d.]+)"/.exec(txt);
+        const pad = m ? parseFloat(m[1]) / 2 : 0;
+        if (pad > 0) bb = [bb[0] - pad, bb[1] - pad, bb[2] + pad * 2, bb[3] + pad * 2];
+      }
       if (bb) {
         // 统一基准：PETAL_ENT_REF（Basic 内容包围盒，离线实测常量 —— 与 svgId 无关、无竞态）
         const rw = PETAL_ENT_REF[0], rh = PETAL_ENT_REF[1];
+        // 窗口一律以【内容框中心】为准、边长取内容尺寸 —— 这样实体在画面上的大小
+        // 与卡面一致。"自转轴心不在中心"的素材（Wing）改用绘制偏移处理
+        //（见 drawArt 的 ox/oy），不要再动窗口，否则素材会被缩得很小。
         const v = uniformWindow(bb[0] + bb[2] / 2, bb[1] + bb[3] / 2, bb[2], bb[3], rw, rh);
         _entWinW[svgId] = v[2];    // 实体窗口宽：多体花瓣直径换算基准
         _entWin[svgId] = v;        // 完整窗口（供按素材坐标对位的绘制方使用）

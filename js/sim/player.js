@@ -185,8 +185,15 @@ class Player {
       if (f.exiting) continue;                // 正在退场：不再计时，也不再挂效果
       f.t += dt;
       f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      // 到期 -> 进入通用退场（放大 + 渐隐，与生物死亡同一套曲线）
-      if (f.t >= f.dur) ExitFX.begin(f);
+      // 到期 -> 统一实体引擎的离场入口（与生物/花瓣同一套渐大渐隐）
+      if (f.t >= f.dur) {
+        const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
+        EntityFX.despawn(f, {
+          ghost: (ent) => {
+            if (img) this.petalGhosts.push({ img, x: ent.x, y: ent.y, size: ent.r * 2, alpha: 0.9, age: 0 });
+          }
+        });
+      }
     }
     // 唯一的回收点：退场播完才移除（受控实体表，外部拿不到原始数组）
     arr.sweep(dt);
@@ -304,6 +311,8 @@ class Player {
     const modeRate = 1 / 0.15;  // 0.15秒完成过渡
     this.modeT = damp(this.modeT, targetT, modeRate, dt);
     this._tickWebs(dt);                 // 场地型实体（网）的计时与弹出动画进度
+    // 落位型花瓣（Wax）要在脱轨那一刻找一个"不卡墙"的位置，需要地图
+    this._mapRef = map;
     this._syncPetals(dt, map, mobs);
   }
 
@@ -323,6 +332,7 @@ class Player {
     // 先问引擎（与服务端同一套语义）：飞行途中的 Web 被打碎要立刻成网
     if (typeof PetalFX !== 'undefined' && PetalFX.onPop) PetalFX.onPop(b, this);
     b.dead = true;
+    EntityFX.despawn(b);                 // 入场/退场/红闪统一由实体引擎打标记
     // 与服务端 _destroyPetal 同一规则：放在地上的滞留实体（Pollen / Honey）碎了就是碎了，
     // 不触发卡片重装。少了这一条，客户端会把该槽冷却重置一遍 -> 之后每次装填都比服务端慢一拍。
     // 但退场表现要走同一条路：原地放大渐隐（否则 Web 飞完就"凭空消失"）。
@@ -507,9 +517,9 @@ class Player {
       // 逐片花瓣 × 每只近邻都跑轮廓求交是纯浪费（轮廓有近百条边）。
       // 半径取法与 circleVsMobPoly 内部完全一致（poly.r × collSize），不会漏判。
       const dx = m.x - b.x, dy = m.y - b.y;
-      const bound = ((m.shape && m.shape.r) ? m.shape.r * m.collSize : (m.r || 0)) + PETAL_R;
+      const bound = ((m.shape && m.shape.r) ? m.shape.r * m.collSize : (m.r || 0)) + (b.cr || PETAL_R);
       if (dx * dx + dy * dy > bound * bound) continue;
-      const hit = mobHitTest(m, b.x, b.y, PETAL_R);
+      const hit = entityHitMob(m, b);
       if (!hit || hit.depth <= PETAL_CONTACT_SKIN) continue;
       const invP = 1 / (b.weight || 1);
       const invM = m._chainLocked ? 0 : 1 / (m.weight || 1);
@@ -688,13 +698,36 @@ class Player {
         const launchMode = PetalFX.trait(card.type, 'launchMode');
         const launchDelay = PetalFX.trait(card.type, 'launchDelay') || 0;
         let detachReady = this._detachReady();
+        // 自动落地型（Wax）：加载好就脱轨，不需要 reach/detect ——
+        // 它自己会在玩家旁边找位置（见 PetalFX 的 wax.detach）。
+        // 【必须同时进入外层条件】只改 detachReady 没用：外层原本要求
+        // detachAfter > 0 或 launchMode，Wax 两个都没有 -> 永远走不进脱轨分支。
+        const autoDetach = !!PetalFX.trait(card.type, 'autoDetach');
+        if (autoDetach) detachReady = true;
         if (launchMode) {
           body.launchModeT = this.mode === launchMode ? (body.launchModeT || 0) + dt : 0;
-          detachReady = body.launchModeT >= launchDelay;
+          // 【必须真的在 launchMode 里】才允许脱轨：launchDelay 默认 0，
+          // 只判 launchModeT >= 0 的话，normal 模式下第一次同步就满足条件
+          // —— 表现就是"没按空格导弹自己飞出去了"（Missile 的老 bug）。
+          detachReady = (this.mode === launchMode) && body.launchModeT >= launchDelay;
         }
-        if ((detachAt > 0 || launchMode) && !body.dead
+        if ((detachAt > 0 || launchMode || autoDetach) && !body.dead
           && body.age >= detachAt && detachReady) {
-          const plan = PetalFX.detach(body, this, mobs);
+          // 把【当前轨道角】一并交给引擎：Missile 要沿"它此刻指向的方向"飞出去，
+          // 而它可能刚生成（位置还在本体中心），光看坐标算不出方向。
+          const plan = PetalFX.detach(body, this, mobs,
+            this.spin + (body.spot || 0) * spotStep);
+          // 落位型实体（Wax）判定"这块地方放不下"：销毁实体、该槽立刻重新装填，
+          // 绝不把半块蜡塞进墙里（这是"生成空间不足就重新加载"的落点）。
+          if (body.cancelSpawn) {
+            body.dead = true;
+            this._petalGen[slotIndex] = gen + 1;
+            this.reload[slotIndex] = {
+              card, age: 0,
+              dur: (card.type.reload != null) ? card.type.reload : 0
+            };
+            continue;
+          }
           body.stationary = true;                   // 脱离轨道：不再跟随
           body.life = 0;
           if (plan) {
@@ -771,7 +804,7 @@ class Player {
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       // 自转：独立于公转，从加载好起持续转动（喷射飞行的实体也照样转）
-      if (!b.card.type.orientOutward) {
+      if (!b.card.type.orientOutward && !b.anchor) {
         b.selfRot = (b.selfRot || 0) + this._petalSelfRate(b) * dtc;
       }
 
@@ -801,6 +834,16 @@ class Player {
             if (Math.abs(b.vx) < 1 && Math.abs(b.vy) < 1) { b.vx = 0; b.vy = 0; }
           }
           if (b.vx || b.vy) this._resolvePetal(b, (b.vx || 0) * dtc, (b.vy || 0) * dtc);
+          continue;
+        }
+        // 落位型实体（Wax）：自己就"长"在原地，不采信服务端位置插值
+        //（两端各自落点，插值反而会把它拽来拽去）。
+        if (b.shape) {
+          // 玩家阵营推蜡块：重量≈0（一碰就动），与服务端 4b 段同一口径、同一函数。
+          // 位移必须过地形（physicsPushOnMap）：否则会被一路推进墙里。
+          b.static = false; b.weight = 1e-4;
+          if (typeof physicsPushOnMap === 'function') physicsPushOnMap(this, b, this._mapRef);
+          else if (typeof physicsPushMob === 'function') physicsPushMob(this, b);
           continue;
         }
         // 服务端权威位置插值（25Hz 快照 -> 每帧）：这是"推动时一卡一卡"的主因，
@@ -834,7 +877,26 @@ class Player {
       // 之前只把倍率钳到 1、却照样加 reachBonus，表现就是"玫瑰还是被 reach 出去了，只是短一点"。
       const rb = noReach ? 0 : (this.reachBonus || 0) * (this.mode === 'reach' ? this.modeT : 0);
       const formationOffset = (ptype && ptype.formationOrbitOffset || 0) * PETAL_D;
-      const reach = baseReach * mult + rb + formationOffset;
+      // orbitK：贴花系数（Missile 这类需要紧贴本体的花瓣），只缩放基础轨道半径，
+      // 不吃 reach 加成（它本身也是 reach 免疫的）。
+      const orbitK = (ptype && ptype.orbitK) || 1;
+      // reachWave（Wing）：reach 模式下轨道距离在
+      //   [正常reach距离, 正常reach距离 + spanK×天然reach距离]
+      // 之间按三角函数平滑往复，period 秒一个周期。
+      // 天然reach距离 = baseReach（未加任何附加效果的默认值）。
+      // 用 modeT 做进出 reach 的收敛，退出时不会瞬移回基础距离。
+      let waveAdd = 0;
+      const wv = ptype && ptype.reachWave;
+      if (wv) {
+        if (this.mode === 'reach') {
+          b._waveT = (b._waveT || 0) + dtc;
+          waveAdd = baseReach * wv.spanK * (0.5 - 0.5 * Math.cos(b._waveT / wv.period * TAU));
+        } else {
+          b._waveT = 0;
+        }
+        waveAdd *= (this.mode === 'reach' ? 1 : 0) * (typeof this.modeT === 'number' ? this.modeT : 1);
+      }
+      const reach = baseReach * mult * orbitK + rb + formationOffset + waveAdd;
       const ang = this.spin + (b.spot || 0) * spotStep;
       let tx = this.x + Math.cos(ang) * reach;
       let ty = this.y + Math.sin(ang) * reach;
@@ -950,7 +1012,7 @@ class Player {
     // 供绘制与碰撞使用（hurtT：花瓣受伤红滤镜；fxActive：特效驱动中，图层在主角之上；
     // dead：该实体已碎、正在独立重装填 —— 不绘制）
     this.petalWorld = this.petals.map((b) => ({
-      x: b.x, y: b.y, r: PETAL_R, index: b.slotIndex, age: b.age,
+      x: b.x, y: b.y, r: (b.cr || PETAL_R), index: b.slotIndex, age: b.age,
       hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead,
       stationary: !!b.stationary,
       // 阵型型子实体：整体朝向由更新阶段算好（基准 + 布局朝向，如 Ultra Stinger 尖端向心）
@@ -963,6 +1025,9 @@ class Player {
       selfRot: b.selfRot || 0,
       // 自带贴图键：滞留实体可能在卡片被卸下之后还存在，不能再依赖 slots[index]
       svg: (b.card && b.card.type) ? b.card.type.svg : null,
+      spinOrigin: (b.card && b.card.type) ? b.card.type.spinOrigin : null,
+      // 落位型大实体（Wax）：按自己的半径画、不旋转、不参与公转
+      artSize: b.artSize || 0, anchor: !!b.anchor, shapePoly: b.shapePoly || null,
       hp: b.hp, maxHp: b.maxHp
     }));
   }
@@ -1030,7 +1095,21 @@ class Player {
     for (const pp of this.petalWorld) {
       if (pp.fxActive || pp.dead) continue;         // 已碎实体不绘制（等独立重装填）
       const p = this.slots[pp.index];
-      const size = PETAL_ENT_SIZE;                        // 13.5：花瓣视觉缩至原 0.9
+      // 落位型实体（Wax）：直径 = 2×radius、不旋转、也不做出场缩放
+      const size = pp.artSize || PETAL_ENT_SIZE;          // 普通花瓣 13.5
+      if (pp.anchor) {
+        const waxSvg = pp.svg || (this.slots[pp.index] && this.slots[pp.index].type
+          ? this.slots[pp.index].type.svg : null);
+        // 【矢量渲染】：优先用 SVG <img>（浏览器按目标尺寸实时栅格化），
+        // 不再用 128px 离屏位图 —— 大蜡块放大后会糊边。
+        const cv0 = waxSvg
+          ? (CardRenderer.artImage(waxSvg) || CardRenderer.artCanvas(waxSvg, 256))
+          : null;
+        if (cv0) drawPetalArt(ctx, cv0, size, pp.x, pp.y, 0, 1, 1);
+        // 红闪 = 它的【真实六边形】（不是圆圈：圆会溢出到六边形外面）
+        EntityFX.drawHurtPoly(ctx, pp, pp.x, pp.y, pp.shapePoly, pp.r);
+        continue;
+      }
       // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
       // 滞留实体（放在地上的 Pollen/Honey）固定正向、不做出场渐显
       const svgKey = pp.svg || (p && p.type && p.type.svg);
@@ -1042,17 +1121,16 @@ class Player {
       // 与其它花瓣（Stinger）同一条管线：svg 已经指向正确素材，直接用
       const cv = svgKey ? CardRenderer.artCanvas(svgKey, 128) : null;
       // 子体尺寸同样乘 k（与卡面一致，k 一处修改两边同时生效）
-      if (cv) drawPetalArt(ctx, cv, size * (pp.formK != null ? pp.formK : 1), pp.x, pp.y, rot, spawnPop(pp.age), a);
+      // spinOrigin：自转轴心不在图形中心的素材（Wing = 外弧圆心），按偏移画
+      const so = pp.spinOrigin;
+      if (cv) {
+        drawPetalArt(ctx, cv, size * (pp.formK != null ? pp.formK : 1), pp.x, pp.y, rot,
+          spawnPop(pp.age), a, so ? so.x : 0, so ? so.y : 0);
+      }
       // 未就绪【不画】也不能回退 drawSprite：那按原始 viewBox contain 绘制，
       // 图形会缩得极小（"错误加载的大小"），就绪后由 artCanvas 统一管线补上。
       // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
-      if (pp.hurtT > 0) {
-        ctx.save();
-        ctx.globalAlpha = clamp(pp.hurtT / 0.3, 0, 1) * 0.4;
-        ctx.fillStyle = '#ff4040';
-        ctx.beginPath(); ctx.arc(pp.x, pp.y, size / 2, 0, TAU); ctx.fill();
-        ctx.restore();
-      }
+      EntityFX.drawHurt(ctx, pp, pp.x, pp.y, size / 2);
     }
     // 被卸下/移除的花瓣：留在原地平滑放大并渐隐（0.2s 快速消失）
     // 放大到 1.5 倍不会盖住主角：轨道半径约 43px、主角半径 15.6px，

@@ -27,6 +27,7 @@ const MOB_ART_ROT = {
   '3': Math.PI * 3 / 4,       // 瓢虫：头中心在图内朝 -135°，补偿 +135°
   '4': Math.PI * 3 / 4,       // 蜜蜂：尾针在右下角(76.8,76.8)，头同样朝左上，补偿相同
   '11': Math.PI * 3 / 4,      // Hornet：头部朝向与蜜蜂一致
+  '11_empty': Math.PI * 3 / 4,   // 去掉尾针后的本体（同一张图，同一补偿）
   '11_body': Math.PI * 3 / 4,
   // 蜈蚣（含头节 12_h / 身体节 12_b，两张同朝向）：
   // 侧面那两个黑点是【脚】，分列左右两侧 -> 前方垂直于它们的连线，也就是贴图的"上方"。
@@ -39,6 +40,10 @@ const MOB_ART_ROT = {
   '12_b': Math.PI * 3 / 4,
   // 蜘蛛：头在图内朝【左上 45°】（= -135°，与瓢虫/蜜蜂/蜈蚣一致），补偿 +135°
   '21': Math.PI * 3 / 4,
+  // Bumble Bee：整套生物素材统一口径，头同样朝【左上 45°】，补偿 +135°
+  '27': Math.PI * 3 / 4,
+  // Bumble Bee 尾部产出的 Pollen（球状，无头，保持 0）—— 显式登记避免漏补
+  'pollen': 0,
 };
 // 瓢虫描边圈独立图层（assets/entities/3_ring.svg，main.js 预加载）：
 // 渲染专用的生物素材统一放在 assets/entities/，assets/mobs/ 只存原始贴图。
@@ -155,6 +160,88 @@ function mobHitTest(m, cx, cy, cr) {
   // 纯矢量碰撞：只认外形多边形，不回退外接圆（避免膨胀圆导致碰撞箱过大 / 隔很远就打到人）
   if (!(poly && poly.pts && poly.pts.length >= 3)) return null;   // 无矢量外形则无碰撞
   return circleVsMobPoly(m, cx, cy, cr);
+}
+
+// ---- 任意实体（可带自己的多边形外形）vs 生物外形 ----
+// Wax 这类"大块落位实体"的碰撞箱必须严格等于它的形状，不能笼统用外接圆。
+// shapePoly = 归一化顶点数组（相对实体中心，×cr 得到世界尺寸）；不带就退回圆形判定。
+function entityHitMob(m, ent) {
+  if (!ent) return null;
+  const sp = ent.shapePoly;
+  if (sp && sp.length >= 3) return polyVsMobPoly(m, sp, ent.x, ent.y, ent.cr || ent.r || 10);
+  return mobHitTest(m, ent.x, ent.y, ent.cr || PETAL_R);
+}
+
+// 分离轴定理（SAT）：两个凸多边形是否相交，返回与 circleVsMobPoly 同口径的 {nx, ny, depth}
+// （法线由生物指向实体），用于后续的推挤分离与伤害判定。
+// 凸多边形 vs 圆：Wax（六边形）与玩家/生物的碰撞用这个，
+// 而不是"半径相加"的圆判定 —— 六边形的角与边到中心的距离差 13%，用圆会提前或滞后接触。
+// 返回 { depth, nx, ny }（法线由多边形指向圆心），未接触返回 null。
+function polyVsCircle(sp, cx, cy, scale, px, py, pr) {
+  if (!sp || sp.length < 3) return null;
+  const pts = sp.map(([vx, vy]) => [cx + vx * scale, cy + vy * scale]);
+  let inside = true;
+  let bestD = Infinity, bx = 0, by = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p1 = pts[i], p2 = pts[(i + 1) % pts.length];
+    const ex = p2[0] - p1[0], ey = p2[1] - p1[1];
+    const len2 = ex * ex + ey * ey || 1;
+    let t = ((px - p1[0]) * ex + (py - p1[1]) * ey) / len2;
+    t = clamp(t, 0, 1);
+    const qx = p1[0] + ex * t, qy = p1[1] + ey * t;
+    const d = Math.hypot(px - qx, py - qy);
+    if (d < bestD) { bestD = d; bx = qx; by = qy; }
+    // 点是否在所有边内侧（凸多边形）
+    const cross = ex * (py - p1[1]) - ey * (px - p1[0]);
+    if (cross < 0) inside = false;
+  }
+  if (!inside && bestD >= pr) return null;             // 完全在外且没接触
+  let nx, ny, depth;
+  if (bestD > 1e-6) {
+    nx = (px - bx) / bestD; ny = (py - by) / bestD;
+    if (inside) { nx = -nx; ny = -ny; depth = pr + bestD; } else depth = pr - bestD;
+  } else { nx = 1; ny = 0; depth = pr; }
+  if (depth <= 0) return null;
+  return { depth, nx, ny };
+}
+
+function polyVsMobPoly(m, sp, cx, cy, scale) {
+  const poly = m.shape;
+  if (!poly || !poly.pts || poly.pts.length < 3) return null;
+  const D = m.collSize;
+  const { c, s } = _mobRot(m);
+  // 生物轮廓：本地归一化坐标 -> 世界
+  const A = poly.pts.map(([px, py]) => {
+    const wx = px * D, wy = py * D;
+    return [m.x + wx * c - wy * s, m.y + wx * s + wy * c];
+  });
+  const B = sp.map(([px, py]) => [cx + px * scale, cy + py * scale]);
+  // 粗判：两个外接圆
+  const ar = D * poly.r, br = scale;
+  const dx = cx - m.x, dy = cy - m.y;
+  if (dx * dx + dy * dy > (ar + br) * (ar + br)) return null;
+  let minOverlap = Infinity, nx = 0, ny = 0;
+  for (const P of [A, B]) {
+    for (let i = 0; i < P.length; i++) {
+      const p1 = P[i], p2 = P[(i + 1) % P.length];
+      const ex = p2[0] - p1[0], ey = p2[1] - p1[1];
+      const len = Math.hypot(ex, ey);
+      if (len < 1e-6) continue;
+      const ax = -ey / len, ay = ex / len;
+      let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+      for (const q of A) { const d = q[0] * ax + q[1] * ay; if (d < a0) a0 = d; if (d > a1) a1 = d; }
+      for (const q of B) { const d = q[0] * ax + q[1] * ay; if (d < b0) b0 = d; if (d > b1) b1 = d; }
+      const ov = Math.min(a1, b1) - Math.max(a0, b0);
+      if (ov <= 0) return null;                    // 找到一条分离轴 -> 不相交
+      if (ov < minOverlap) {
+        minOverlap = ov;
+        // 法线统一由生物(A)指向实体(B)
+        const sign = (b0 + b1 > a0 + a1) ? 1 : -1;
+        nx = ax * sign; ny = ay * sign;
+      }
+    }
+  }
+  return (minOverlap < Infinity) ? { nx, ny, depth: minOverlap } : null;
 }
 
 // 多节生物（蜈蚣每一节）的碰撞箱：【本节自己的贴图】的轮廓，而不是整个物种的贴图。

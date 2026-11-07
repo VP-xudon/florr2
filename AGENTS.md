@@ -261,6 +261,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - **Orange（id 50）是三实体阵型花瓣**：单果素材从三果 SVG 变体提取，实体尺寸保持与 Basic 相当；卡面单体放大 1.3 倍，紧凑三角可轻微重叠，单体额外朝向由布局数量自动均分。实体两颗底瓣沿玩家标准轨道半径形成弧形，中心距为单体直径 5 倍；第三颗按等边三角形顶点计算，不再把整组外推。整组仍预留 8 个轨道角位。reload 为 1.5s。每只生物分别记录各玩家最近一次实际非毒单击伤害；Orange 单体伤害按 `min(Orange 面板基础伤害 + 0.5 × 该玩家对该生物的上次实际单击伤害, Max Damage)` 计算，再走统一护甲结算；Orange 自己造成的实际伤害也更新记录。Max Damage 在悬浮框显示并走 `i18n-extra.js`。
 - **Missile（id 9）**：Unusual 起有伤害/血量；reload 1.5s，tooltip 显示 `1.5s + 0.5s`。仅在 reach 连续保持 0.5s 后发射，速度与 Peas 相同，生存 2s；发射时只在玩家朝向 ±10°、300px 范围内选目标并微调一次，之后严格直线飞行、正常参与实体碰撞与战斗。轨道时尖端朝外。
 - **Hornet（id 11）**：Hostile；Common~Unique 属性按覆盖表，追击速度为玩家的 0.95 倍、游荡复用 Bee 的 S 型 AI。尾部 Missile 是 MobFX 子实体：独立 HP/Damage、无血条、可单独受击；飞行直线 2~10 秒按稀有度数值，命中玩家按统一护甲结算。Missile 消失后退场并等待 0.5s 重生；Missile/Magic Missile 掉率表相同，Magic Missile 按 Magic Leaf 规则隐藏。
+  **尾针的两个必踩坑**（都表现为"尾针不显示"，改这里务必一并保留）：
+  ① `MobFX.drawMob` 必须在 `Mob.draw` 里**身体贴图之后**调用 —— 放在之前会被身体整块盖住；
+  ② 挂载态**不能走出场渐显**：客户端视图不跑 `tick`，`missile.age` 恒为 0，`spawnFade(0)=0` → 全透明。
+  偏移按 `11.svg` 源码推导：尾针尖 (96.896,96.896)、viewBox 中心 (53.86,53.86) → `0.55×drawSize`。
 - **可自然生成的生物 5 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider, hornet`。
   蜘蛛是 aggressive：`MOB_TRAITS.spider.sightR = 500`，AI `spider` 把追击压成 1.10×（游荡 = 追击 × 0.9）。
 - **生物特性走 `MobFX` 引擎**（`js/mob-fx.js`，与 `PetalFX` 对称）：

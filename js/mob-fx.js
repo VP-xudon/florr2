@@ -42,19 +42,178 @@ const MobFX = {
     if (this._assetsReady) return true;
     const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
     if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
-    const source = await response.text();
+    const raw = await response.text();
+    // 11.svg 顶部保留着旧版（已注释）：先剥掉，否则解析出来是空的
+    let source = raw;
+    const cmt = source.indexOf('-->');
+    if (source.trim().startsWith('<!--') && cmt >= 0) source = source.slice(cmt + 3).trim();
     const parser = new DOMParser();
     const doc = parser.parseFromString(source, 'image/svg+xml');
     const root = doc.documentElement;
     const group = root.querySelector('g');
     const paths = group ? Array.from(group.children).filter((node) => node.localName === 'path') : [];
     if (!group || paths.length < 2) throw new Error('Hornet tail paths not found');
+    // 【关键】去掉尾针后必须保持【原裁剪窗口不变】，否则 11_empty 会按更小的内容框
+    // 重新居中 —— 本体被放大、而尾针位置还按原图算，两者坐标系错位
+    //（表现就是"尾针偏后 / 偏内"）。这里补一个不可见矩形占住原内容框。
+    const measure = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    measure.setAttribute('viewBox', root.getAttribute('viewBox') || '0 0 110 110');
+    measure.setAttribute('width', '200'); measure.setAttribute('height', '200');
+    measure.style.cssText = 'position:absolute;left:-9999px;top:0';
+    measure.appendChild(document.importNode(root, true));
+    document.body.appendChild(measure);
+    let bb = null;
+    let tailBox = null;
+    try {
+      const b = measure.lastElementChild.getBBox();
+      bb = { x: b.x, y: b.y, w: b.width, h: b.height };
+      // 尾针（前两个 path）的包围盒：它的中心就是"尾针应该挂的位置"——
+      // 【运行时从素材测出来】，不写任何偏移常量；素材一改自动跟随。
+      // 尾针是前两个 path（三角形 + 带圆头的一根），取它们的【合并包围盒】
+      const ps = measure.lastElementChild.querySelectorAll('path');
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < Math.min(2, ps.length); k++) {
+        const q = ps[k].getBBox();
+        x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y);
+        x1 = Math.max(x1, q.x + q.width); y1 = Math.max(y1, q.y + q.height);
+      }
+      tailBox = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+    } catch (e) { bb = null; }
+    measure.remove();
+    if (bb && tailBox) {
+      const winW = Math.max(bb.w, bb.h);
+      const ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
+      // 尾针【尖端】= 尾针包围盒离贴图中心最远的角（11.svg 里 = (99.6,99.6)）
+      const tipDx = Math.max(
+        Math.abs(tailBox.cx - tailBox.w / 2 - ccx), Math.abs(tailBox.cx + tailBox.w / 2 - ccx));
+      const tipDy = Math.max(
+        Math.abs(tailBox.cy - tailBox.h / 2 - ccy), Math.abs(tailBox.cy + tailBox.h / 2 - ccy));
+      this.hornetTail = {
+        // 尾针【中心】挂点（贴图中心 -> 尾针中心）
+        off: Math.hypot(tailBox.cx - ccx, tailBox.cy - ccy) / winW,
+        // 尾针【尖端】挂点（贴图中心 -> 尾针尖端）—— 用于与 9.svg 的尖端对齐
+        tipOut: Math.hypot(tipDx, tipDy) / winW,
+        size: Math.max(tailBox.w, tailBox.h) / winW
+      };
+    }
+
     const emptyRoot = root.cloneNode(true);
     const emptyGroup = emptyRoot.querySelector('g');
     Array.from(emptyGroup.children).filter((node) => node.localName === 'path').slice(0, 2)
       .forEach((node) => node.remove());
+    if (bb) {
+      const keep = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      keep.setAttribute('x', bb.x); keep.setAttribute('y', bb.y);
+      keep.setAttribute('width', bb.w); keep.setAttribute('height', bb.h);
+      keep.setAttribute('fill', 'none'); keep.setAttribute('stroke', 'none');
+      emptyGroup.appendChild(keep);
+    }
     const serialize = (node) => 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(node));
-    await SpriteStore.load('mob11_empty', serialize(emptyRoot));
+    // 【不 await】：prepareAssets 若阻塞在某个素材上，boot 的 loading 蒙版永远不撤
+    // —— 表现就是整个游戏"停摆"。素材加载完会自动可用，晚一两帧毫无影响。
+    SpriteStore.load('mob11_empty', serialize(emptyRoot));
+    // Bumble Bee 尾部产出的 Pollen 走【生物实体】链路（有碰撞箱/红闪/退场/F3），
+    // 所以要把 Pollen 花瓣的素材也注册进 SpriteStore 的 mob 键空间，否则它既画不出来、
+    // 也提取不到轮廓（mobHitTest 直接返回 null -> 打不到玩家、花瓣也打不到它）。
+    const pollen = (typeof PETAL_TYPES !== 'undefined')
+      ? PETAL_TYPES.find((t) => t && t.slug === 'pollen') : null;
+    if (pollen && pollen.svg != null) {
+      SpriteStore.load('mobpollen', 'assets/petals/' + pollen.svg + '.svg?v=' + ASSET_VER);
+    }
+    // Wax 是落位实体：首次 draw 时 artCanvas 会返回 null（异步加载），
+    // 表现为"装备后第一帧什么都不显示"。这里统一预热，保证一落地就能画出来。
+    // 【碰撞箱只算身体】Hornet(11) / Bumble Bee(27)：把触角（stroke path）从素材里删掉，
+    // 生成一份"只有中间椭圆身体"的素材，碰撞轮廓改用它 —— 触角不该撑大碰撞箱。
+    for (const id of ['11', '27']) {
+      try {
+        const res = await fetch('assets/mobs/' + id + '.svg?v=' + ASSET_VER);
+        if (!res.ok) continue;
+        const txt = await res.text();
+        let src = txt;
+        const close = src.indexOf('-->');
+        if (src.trim().startsWith('<!--') && close >= 0) src = src.slice(close + 3).trim();
+        const doc2 = parser.parseFromString(src, 'image/svg+xml');
+        const root2 = doc2.documentElement;
+        const g2 = root2.querySelector('g') || root2;
+        let removed = 0;
+        for (const node of Array.from(g2.children)) {
+          if (node.localName !== 'path') continue;
+          const d = node.getAttribute('d') || '';
+          // 触角 = 没有 fill（fill="none"）+ 有 stroke 的细线
+          const isAntenna = node.getAttribute('stroke') && node.getAttribute('fill') === 'none';
+          // 尾针 = fill #333 且紧贴右下角（Hornet 专属，x/y 都 > 70）
+          const isTail = node.getAttribute('fill') === '#333'
+            && /^M9[0-9.]+\s+9[0-9.]+/.test(d.trim());
+          if (isAntenna || isTail) { node.remove(); removed++; }
+        }
+        if (removed > 0) {
+          // 与 11_empty 同理：补一个不可见矩形占住原内容框，
+          // 保证"碰撞素材"和"本体素材"用【同一个裁剪窗口】——
+          // 否则碰撞轮廓会按更小的框重新居中，半径偏大、与画面对不上。
+          const wrap = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          wrap.setAttribute('viewBox', root2.getAttribute('viewBox') || '0 0 110 110');
+          wrap.setAttribute('width', '200'); wrap.setAttribute('height', '200');
+          wrap.style.cssText = 'position:absolute;left:-9999px;top:0';
+          const probe = document.importNode(root2, true);
+          wrap.appendChild(probe);
+          document.body.appendChild(wrap);
+          let bb2 = null;
+          try {
+            const b2 = probe.getBBox();
+            bb2 = { x: b2.x, y: b2.y, w: b2.width, h: b2.height };
+          } catch (e) { bb2 = null; }
+          wrap.remove();
+          if (bb2) {
+            const keep2 = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            keep2.setAttribute('x', bb2.x); keep2.setAttribute('y', bb2.y);
+            keep2.setAttribute('width', bb2.w); keep2.setAttribute('height', bb2.h);
+            keep2.setAttribute('fill', 'none'); keep2.setAttribute('stroke', 'none');
+            g2.appendChild(keep2);
+          }
+          SpriteStore.load('mob' + id + '_body',
+            'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(root2)));
+        }
+      } catch (e) { /* 失败就退回整张图，不影响游戏 */ }
+    }
+    // 9.svg：运行时测"画布中心 -> 尖端"的比例（d 是小写 m + 相对 lineto，必须累计）。
+    // 挂点公式：off = drawSize×tail.tipOut − size×tipBack
+    //   = 让 9.svg 画出来的尖端正好落在 11.svg 尾针尖端的位置。
+    try {
+      const r9 = await fetch('assets/petals/9.svg?v=' + ASSET_VER);
+      if (r9.ok) {
+        let s9 = await r9.text();
+        const c9 = s9.indexOf('-->');
+        if (s9.trim().startsWith('<!--') && c9 >= 0) s9 = s9.slice(c9 + 3).trim();
+        const d9 = parser.parseFromString(s9, 'image/svg+xml');
+        const svg9 = document.importNode(d9.documentElement, true);
+        svg9.style.cssText = 'position:absolute;left:-9999px;top:0';
+        document.body.appendChild(svg9);
+        const p9 = svg9.querySelectorAll('path');
+        if (p9.length) {
+          const bb9 = svg9.getBBox();
+          const sw9 = parseFloat(p9[0].getAttribute('stroke-width') || '0') / 2;
+          const win9 = Math.max(bb9.width + sw9 * 2, bb9.height + sw9 * 2);
+          const nums = (p9[0].getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g) || [];
+          const tr = /translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/.exec(s9) || null;
+          const ox = tr ? parseFloat(tr[1]) : 0, oy = tr ? parseFloat(tr[2]) : 0;
+          const mx = bb9.x + bb9.width / 2, my = bb9.y + bb9.height / 2;
+          let px = 0, py = 0, tip = 0;
+          for (let i = 0; i + 1 < nums.length; i += 2) {
+            const a = parseFloat(nums[i]), b = parseFloat(nums[i + 1]);
+            if (i === 0) { px = a; py = b; } else { px += a; py += b; }
+            tip = Math.max(tip, Math.hypot(px + ox - mx, py + oy - my));
+          }
+          this.missileTipBack = tip / win9;
+        }
+        svg9.remove();
+      }
+    } catch (e) { /* 测量失败 -> 挂点用中心，影响只是一点视觉偏差 */ }
+
+    const wax = (typeof PETAL_TYPES !== 'undefined')
+      ? PETAL_TYPES.find((t) => t && t.slug === 'wax') : null;
+    if (wax && wax.svg != null && typeof CardRenderer !== 'undefined') {
+      CardRenderer.artCanvas(wax.svg, 128);
+    }
     this._assetsReady = true;
     return true;
   },
@@ -67,13 +226,23 @@ const MobFX = {
 
   createMissile(mob) {
     const stats = (mob.type.rarityStats && mob.type.rarityStats[mob.rarity]) || {};
+    // 尾针也是实体：碰撞箱同样来自硬编码 .crb（11_missile），
+    // 走与生物/花瓣完全相同的 shape/collSize 接口，F3 才能画出一致的轮廓。
+    const crb = (typeof CRB !== 'undefined' && CRB.get) ? CRB.get('11_missile') : null;
     return {
+      shape: crb || null,
+      collSize: crb ? (mob.drawSize * (this.hornetTail ? this.hornetTail.size : 0.3)) : 0,
+      artRot: 0,
       id: mob.netId + ':missile:' + (this._projectileSeq++),
       parentId: mob.netId, x: mob.x, y: mob.y, facing: mob.facing + Math.PI,
       vx: 0, vy: 0, hp: stats.missileHp || 1, maxHp: stats.missileHp || 1,
       dmg: stats.missileDmg || 0, armor: mob.armor, life: stats.missileDur || 2,
       age: 0, hurtT: 0, flight: false, dead: false, exiting: false,
-      radius: mob.drawSize * 0.12
+      radius: mob.drawSize * 0.12,
+      // 视觉尺寸随【母体稀有度】固定：发射前挂在尾巴上、发射后在飞，都是同一个实体。
+      // 尺寸比例来自素材实测（hornetTail），prepareAssets 没跑完时用 0.3 兜底。
+      drawSize: (this.hornetTail ? mob.drawSize * this.hornetTail.size : mob.drawSize * 0.3)
+        // 与挂载态同尺寸：发射前后是同一个实体
     };
   },
 
@@ -82,22 +251,40 @@ const MobFX = {
     if (def && def.init) def.init(mob);
   },
 
-  hitMissile(mob, damage) {
-    const st = mob && mob.hornet;
-    const missile = st && st.missile;
+  // 尾针受击【统一入口】：不区分"挂在尾巴上"还是"飞出去"——
+  // 发射前后是同一个实体对象（只切 flight 标记），受击结算必须一视同仁。
+  // 旧实现只认 st.missile（挂载态），发射后移进 projectiles 的那枚完全打不到。
+  hurtStinger(mob, missile, damage) {
     if (!missile || missile.dead || missile.exiting || !(damage > 0)) return 0;
     const applied = Math.min(damage, missile.hp);
     missile.hp -= applied;
-    missile.hurtT = 0.3;
+    EntityFX.hurt(missile);                 // 统一红闪时长/强度
     if (missile.hp <= 0) {
       missile.hp = 0;
       missile.dead = true;
-      missile.exiting = true;
-      ExitFX.begin(missile);
-      st.reloadT = 0;
-      mob.ai.hornetMode = 'reload';
+      EntityFX.despawn(missile);
+      const st = mob && mob.hornet;
+      if (st) {
+        if (st.missile === missile) st.missile = null;
+        st.reloadT = 0;
+      }
+      if (mob && mob.ai) mob.ai.hornetMode = 'reload';
     }
     return applied;
+  },
+
+  // 兼容旧签名（挂载态）
+  hitMissile(mob, damage) {
+    return this.hurtStinger(mob, mob && mob.hornet && mob.hornet.missile, damage);
+  },
+
+  // 尾针挂点（唯一来源，绘制 / tick / F3 全读它）：
+  //   ① 先让 9.svg 的尖端落在 11.svg 尾针尖端的位置（尖端对齐）
+  //   ② 再沿"尾巴方向"向本体中心收 0.5×尾针长度（用户口径：更贴近身体）
+  hornetTailOffset(mob, size) {
+    const ht = this.hornetTail;
+    if (!ht) return mob.drawSize * 0.39;
+    return mob.drawSize * ht.tipOut - (this.missileTipBack || 0) * size - size * 0.5;
   },
   registerField(kind, def) {
     this.fields[kind] = def || {};
@@ -135,15 +322,41 @@ const MobFX = {
 
   drawMissile(ctx, missile, size, alpha) {
     if (!missile || (missile.dead && !missile.exiting)) return;
-    let scale = spawnPop(missile.age || 0);
-    let a = alpha * spawnFade(missile.age || 0);
+    MobFX.drawMissileAt(ctx, missile, missile.x, missile.y,
+      missile.facing || 0, size, alpha);
+  },
+
+  // 在【指定位置/朝向】画一枚导弹（同一张素材、同一个尖端角）：
+  //   · 挂载在尾巴上时用本体的姿态；
+  //   · 飞出去后用实体自己的坐标与朝向。
+  // 受伤红闪与其它实体同一套（红色蒙层），不再是"贴图不会闪"。
+  drawMissileAt(ctx, missile, x, y, facing, size, alpha) {
+    if (!missile || (missile.dead && !missile.exiting)) return;
+    // 【挂载态不做出生渐显】：它一直贴着本体，本体自己已经有出场动画了。
+    // 客户端视图不走 tick，missile.age 恒为 0 -> spawnFade(0)=0 -> 尾针永远全透明，
+    // 这就是"发射前的 Missile 不显示"的第二个原因。
+    // 挂载态：入场动画跟【本体】走（missile.age 在客户端恒为 0，用它就永远透明）；
+    // 飞行态：用自己的 age（发射那一刻开始渐显）。
+    const attached = !missile.flight;
+    let scale = spawnPop(attached ? (missile.hostAge || missile.age || 0) : (missile.age || 0));
+    let a = (alpha == null ? 1 : alpha)
+      * spawnFade(attached ? (missile.hostAge || missile.age || 0) : (missile.age || 0));
     if (missile.exiting) {
       scale *= ExitFX.scale(missile);
       a = ExitFX.alpha(missile);
     }
-    const art = CardRenderer.artCanvas('9', 128);
-    if (art) drawPetalArt(ctx, art, size * scale, missile.x, missile.y,
-      (missile.facing || 0) - MISSILE_TIP_ANGLE, 1, a);
+    // 【矢量】优先：128px 位图放大到高稀有度尺寸会糊成"千疮百孔"的一团
+    const art = CardRenderer.artImage('9') || CardRenderer.artCanvas('9', 128);
+    if (!art) return;
+    // 尖端始终对准朝向（挂载/飞行同一条口径）；位置由素材实测的挂点决定。
+    drawPetalArt(ctx, art, size * scale, x, y, facing - MISSILE_TIP_ANGLE, 1, a);
+    // 红闪：与所有实体共用 EntityFX.drawHurt（同一时长、同一强度）
+    if (EntityFX.hurtAlpha(missile) > 0) {
+      ctx.save();
+      ctx.globalAlpha = a;
+      EntityFX.drawHurt(ctx, missile, x, y, size * 0.32 * scale);
+      ctx.restore();
+    }
   },
 
   // ---------------- 大招：稀有度门槛 ----------------
@@ -307,25 +520,68 @@ MobFX.register('spider', {
 });
 
 MobFX.register('hornet', {
+  // 本体永远用【去掉尾针】的贴图：尾针不是画死在图里的，而是一个跟随的子实体
+  //（见 draw）。这样发射前后是同一个实体、同一张素材、同一尺寸，不会"一发射就变样"。
   artSvgOf(mob) {
-    const missile = mob.hornet && mob.hornet.missile;
-    return missile && !missile.dead && !missile.exiting ? '11' : '11_empty';
+    return '11_empty';
   },
   facingLocked(mob) {
     const phase = mob.hornet && mob.hornet.spinPhase;
     return phase === 'aim' || phase === 'return';
   },
+  // 尾针（Missile 子实体）绘制：挂载时按本体姿态算位置，飞出去后按自身坐标画。
+  // 两者用【同一张素材、同一个尺寸、同一个尖端角】，所以观感完全连续。
   draw(ctx, mob, scale, alpha) {
-    const attached = (mob.hornet && mob.hornet.missile) || mob.hornetMissile;
-    if (attached && (attached.flight || attached.exiting)) {
-      MobFX.drawMissile(ctx, attached, attached.drawSize || mob.drawSize * 0.4, alpha == null ? 1 : alpha);
+    const st = mob.hornet;
+    // 【快照优先】真实游戏里客户端视图是 _applySnap 重建的：它自带的 hornet.missile
+    // 永远是"刚生成、未发射"的占位对象，如果用它就会一直画挂载尾针（发射后也不消失）。
+    // 权威状态在 mob.hornetMissile（服务端每帧下发）；只有完全没收到快照时
+    //（离屏/刚创建）才回退到占位对象。
+    const snap = mob.hornetMissile;
+    // 【this 陷阱】这个 draw 是 register('hornet', {...}) 的注册对象方法，
+    // MobFX.drawMob 用 def.draw(...) 调它 —— this 是 def，不是 MobFX。
+    // 之前写成 this.hornetTail 恒为 undefined -> `if (!ht) return`
+    // -> 挂载尾针【永远不画】；而发射出去的那枚由 game.js 直接调
+    // MobFX.drawMissile（不经过 def.draw）所以能看见。这正是用户看到的现象。
+    const ht = MobFX.hornetTail;
+    if (!ht) return;                      // 素材几何还没测好（前一两帧），下一帧自动出现
+    // 不再合成"假尾针"占位：没有实体就不画。发射后服务端把 st.missile 移进
+    // projectiles，快照的 hornetMissile 变 null，客户端视图的占位也会同步清掉。
+    const missile = snap || (st && st.missile);
+    if (!missile || (missile.dead && !missile.exiting)) return;
+    // 已经发射：挂载态尾针不再画（飞出去的那枚由 hornetProjectiles 独立绘制）
+    if (missile.flight) return;
+    // 入场动画跟本体：客户端视图的 missile.age 恒为 0，用它就永远透明
+    missile.hostAge = mob.age || 0;
+    const size = missile.drawSize || (mob.drawSize * ht.size);
+    if (!missile.exiting) {
+      // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
+      // 偏移/尺寸按【11.svg 源码】重新推导（viewBox 0 0 110 110，中心 (55,55)）：
+      //   尾针三角形 (96.896,96.896) (84.64,75.447) (75.447,84.64)
+      //   -> 质心 (85.66, 85.66)，距中心 43.36 = 0.394×视口；尖端 59.25 = 0.539×视口
+      //   三角形斜边长 24.7 = 0.225×视口
+      // 取"尾针中心 = 0.394×视口、画幅 = 0.29×视口"。
+      // 【换算到 drawSize】：drawSize 对应的是 SpriteStore 的【裁剪窗口】，不是 viewBox 110；
+      // 直接拿 0.394×drawSize 会让尾针比素材里更靠近身体中心（表现就是"整体右偏"）。
+      // k = 110 / 窗口宽，把"视口比例"换成"裁剪框比例"。
+      // 挂点 = 尖端对齐：让 9.svg 画出来的尖端正好落在 11.svg 尾针尖端的位置。
+      //   off = drawSize×tipOut(本体侧实测) − size×tipBack(尾针素材侧实测)
+      // 两个量都来自素材 getBBox，没有任何手写常数。
+      const tailA = mob.facing + Math.PI;
+      const off = MobFX.hornetTailOffset(mob, size);
+      MobFX.drawMissileAt(ctx, missile, mob.x + Math.cos(tailA) * off,
+        mob.y + Math.sin(tailA) * off, tailA, size, alpha);
+      return;
     }
+    MobFX.drawMissile(ctx, missile, size, alpha);
   },
   init(mob) {
     mob.hornet = { mode: 'approach', missile: MobFX.createMissile(mob), projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 };
   },
   tick(mob, dt) {
     const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
+    // 射击冷却：只影响"能不能开下一枪"，不影响走位与瞄准回转
+    if (st.cooldown > 0) st.cooldown = Math.max(0, st.cooldown - dt);
     if (st.missile) {
       const missile = st.missile;
       if (missile.exiting) {
@@ -336,7 +592,9 @@ MobFX.register('hornet', {
       missile.hurtT = Math.max(0, missile.hurtT - dt);
       if (!missile.flight && !missile.exiting) {
         const tailA = mob.facing + Math.PI;
-        const offset = mob.drawSize * 0.39;
+        // 与 def.draw 用同一个挂点函数：F3 / 受击判定 / 绘制位置三者永远一致
+        const offset = MobFX.hornetTailOffset(
+          mob, missile.drawSize || mob.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3));
         missile.x = mob.x + Math.cos(tailA) * offset;
         missile.y = mob.y + Math.sin(tailA) * offset;
         missile.facing = tailA;
@@ -354,35 +612,45 @@ MobFX.register('hornet', {
     const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
     const spinRate = TAU * 3;
     if (st.spinPhase === 'return') {
-      const back = MobAI._util.angNorm(st.baseFacing - mob.facing);
+      // 射击完【转身面对玩家】（用户口径）：目标 = 发射角（尾针指向玩家的反方向 +π 即面对玩家）
+      const back = MobAI._util.angNorm(wrapAngle(st.launchAngle) - mob.facing);
       const step = Math.sign(back) * Math.min(Math.abs(back), spinRate * dt);
       mob.facing = wrapAngle(mob.facing + step);
       if (Math.abs(back) <= spinRate * dt) st.spinPhase = null;
       return { x: 0, y: 0 };
     }
-    if (st.spinPhase === 'aim') {
-      const turn = MobAI._util.angNorm(st.aimFacing - mob.facing);
-      const step = Math.sign(turn) * Math.min(Math.abs(turn), spinRate * dt);
-      mob.facing = wrapAngle(mob.facing + step);
-      if (Math.abs(turn) <= spinRate * dt) {
-        const missile = st.missile;
-        if (missile && !missile.dead && !missile.exiting) {
-          const speed = 1.3 * PLAYER_BASE_SPEED;
-          missile.flight = true;
-          missile.facing = st.launchAngle;
-          missile.vx = Math.cos(st.launchAngle) * speed;
-          missile.vy = Math.sin(st.launchAngle) * speed;
-          missile.life = (mob.type.rarityStats[mob.rarity] || {}).missileDur || 2;
-          (st.projectiles || (st.projectiles = [])).push(missile);
-          st.missile = null;
-          mob.ai.hornetMode = 'reload';
-          st.reloadT = 0;
-        } else {
-          st.spinPhase = 'return';
-          return { x: 0, y: 0 };
-        }
-        st.spinPhase = 'return';
+    if (st.spinPhase === 'aim' || st.spinPhase === 'hold') {
+      // ① 完全转向：把本体转到"尾巴正对玩家"的角度（不是转一半就开火）
+      if (st.spinPhase === 'aim') {
+        const turn = MobAI._util.angNorm(st.aimFacing - mob.facing);
+        const step = Math.sign(turn) * Math.min(Math.abs(turn), spinRate * dt);
+        mob.facing = wrapAngle(mob.facing + step);
+        if (Math.abs(turn) > spinRate * dt) return { x: 0, y: 0 };
+        st.spinPhase = 'hold';
+        st.holdT = 0;
       }
+      // ② 停住 0.3s：让尾部那枚实体尾针稳稳指向玩家（0.2~0.4s 口径）
+      st.holdT = (st.holdT || 0) + dt;
+      if (st.holdT < HORNET_AIM_HOLD) return { x: 0, y: 0 };
+      // ③ 发射：用的就是原来挂在尾部的【同一个实体】，只切 flight 标记
+      const missile = st.missile;
+      if (missile && !missile.dead && !missile.exiting) {
+        const speed = 1.3 * PLAYER_BASE_SPEED;
+        missile.flight = true;
+        missile.facing = st.launchAngle;
+        missile.vx = Math.cos(st.launchAngle) * speed;
+        missile.vy = Math.sin(st.launchAngle) * speed;
+        missile.life = (mob.type.rarityStats[mob.rarity] || {}).missileDur || 2;
+        (st.projectiles || (st.projectiles = [])).push(missile);
+        st.missile = null;
+        mob.ai.hornetMode = 'reload';
+        st.reloadT = 0;
+        const cds = mob.type.shootCd || null;
+        st.cooldown = (cds && cds[mob.rarity] != null) ? cds[mob.rarity] : 3;
+        st.retreat = false;
+      }
+      // ④ 完全转回原朝向
+      st.spinPhase = 'return';
       return { x: 0, y: 0 };
     }
     if (st.missile && st.missile.exiting) return { x: 0, y: 0 };
@@ -391,29 +659,34 @@ MobFX.register('hornet', {
       mob.ai.hornetMode = 'wander';
       return MobAI.defs.bee.step(mob.ai, dt, mob, player);
     }
-    if (!st.missile || st.missile.exiting || st.missile.dead) {
-      mob.ai.hornetMode = 'reload';
-      const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
-      const distance = Math.hypot(dx, dy) || 1;
-      const desiredRange = Math.max(220, mob.drawSize * 1.8);
-      if (distance > desiredRange + 12) {
-        return { x: dx / distance * mob.chaseSpeed, y: dy / distance * mob.chaseSpeed };
-      }
-      if (distance < desiredRange - 12) {
-        return { x: -dx / distance * mob.chaseSpeed, y: -dy / distance * mob.chaseSpeed };
-      }
-      return { x: 0, y: 0 };
-    }
     const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
     const d = Math.hypot(dx, dy) || 1;
-    const desiredRange = Math.max(220, mob.drawSize * 1.8);
+    const desiredRange = Math.max(220, mob.drawSize * 1.8) * HORNET_RANGE_K;
+    // ---- 距离控制（用户口径）----
+    // 只有【近到射击距离的 20%】才会后撤；而且一撤就撤到标准射击距离，
+    // 后撤速度 = 1.10× 玩家最高速（比平时的追击/游荡都快）。其余情况一律按原速移动。
+    if (st.retreat) {
+      if (d >= desiredRange) st.retreat = false;
+    } else if (d < desiredRange * 0.2) {
+      st.retreat = true;
+    }
+    if (st.retreat) {
+      mob.ai.hornetMode = 'retreat';
+      const sp = 1.1 * PLAYER_BASE_SPEED;
+      return { x: -dx / d * sp, y: -dy / d * sp };
+    }
     if (d > desiredRange + 12) {
       mob.ai.hornetMode = 'approach';
       return { x: dx / d * mob.chaseSpeed, y: dy / d * mob.chaseSpeed };
     }
-    if (d < desiredRange - 12) {
-      mob.ai.hornetMode = 'approach';
-      return { x: -dx / d * mob.chaseSpeed, y: -dy / d * mob.chaseSpeed };
+    // 导弹还在装填 / 射击冷却没好：原地等，不瞄也不射
+    if (!st.missile || st.missile.exiting || st.missile.dead) {
+      mob.ai.hornetMode = 'reload';
+      return { x: 0, y: 0 };
+    }
+    if (st.cooldown > 0) {
+      mob.ai.hornetMode = 'cooldown';
+      return { x: 0, y: 0 };
     }
     if (Math.hypot(mob.vx || 0, mob.vy || 0) > 8) {
       mob.ai.hornetMode = 'stop';

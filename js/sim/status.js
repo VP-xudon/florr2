@@ -43,7 +43,9 @@ const StatusFX = {
 
   // 获得/刷新一个效果。opt = { dur, value }
   // 返回值 = 该效果的记录（调用方偶尔需要读 value）。
+  // ent.immuneStatus = { web: true, ... } 时直接忽略（物种自带的免疫，见 data.js MOB_TRAITS）。
   add(ent, id, opt) {
+    if (ent && ent.immuneStatus && ent.immuneStatus[id]) return null;
     const arr = this._arr(ent);
     if (!arr) return null;
     const o = opt || {};

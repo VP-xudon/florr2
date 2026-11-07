@@ -5,6 +5,9 @@ class Mob {
   constructor(type, x, y, level, rarity) {
     this.type = type; this.name = type.name; this.svg = type.svg; this.zh = type.zh || '';
     this.hideHpBar = !!type.hideHpBar;
+    // 物种级状态免疫（data.js MOB_TRAITS[x].immuneStatus）：例如蜘蛛不会被自己的蛛网减速。
+    // 统一在 StatusFX.add 里拦掉，结算侧不需要各自判断"这只怪怕不怕网"。
+    this.immuneStatus = type.immuneStatus || null;
     this.level = level || 1;
     this.rarity = rarity || 'common';
     this.aiConf = type.ai || null;      // 官方 AI 配置（aggro/chase/flee/retaliate…）
@@ -140,7 +143,7 @@ class Mob {
     if (this.dead || dmg <= 0) return { applied: 0, killed: false };
     const applied = Math.min(dmg, this.hp);
     this.hp -= applied;
-    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈；不缩放，缩放只留给死亡退场）
+    EntityFX.hurt(this);                // 红闪统一走实体引擎（时长/强度只有一个来源）
     // 【被墙后的敌人偷袭 -> 逃开一段】：判定必须在 noteThreat 之前做，
     // 因为记完仇恨 topThreat() 就会返回攻击者（若可见）。
     // 条件：① 攻击者与它之间隔着【墙】（视野 360° 无死角，只有墙会挡视线）
@@ -239,17 +242,20 @@ class Mob {
     const now = this.age || 0;
     const c = this._seeCache;
     if (c && c.ent === ent && now - c.t < 0.15) return c.ok;
-    const ok = !map.lineBlocked(this.x, this.y, ent.x, ent.y);
+    const ok = !map.lineBlocked(this.x, this.y, ent.x, ent.y,
+      (this.r || 12) + 8, (ent.r || 12) + 8);
     this._seeCache = { ent, t: now, ok };
     return ok;
   }
 
   // 视线是否被【墙】挡住。与 canSee 分开：canSee 还带距离限制，
   // 而"偷袭"只认墙（被墙后打 = 措手不及；正面隔着再远也看得见）。
+  // 两端按各自半径跳过采样：贴着墙站 ≠ 被墙挡住（否则一挨打就往反方向跑）。
   wallBlocked(ent) {
     const map = this._map;
     if (!ent || !map || !map.lineBlocked) return false;
-    return !!map.lineBlocked(this.x, this.y, ent.x, ent.y);
+    return !!map.lineBlocked(this.x, this.y, ent.x, ent.y,
+      (this.r || 12) + 8, (ent.r || 12) + 8);
   }
 
   // 瓢虫鞘翅斑点（贴图上的圆点已删除，全部改为运行时随机生成）：
@@ -285,8 +291,18 @@ class Mob {
   // 视图 Mob 不跑 update（只做插值/动画计时），不在 draw 里建的话 shape 永远是空的，
   // 调试碰撞箱(/pending crash)就会显示空或残留的旧外形。
   _ensureShape() {
-    if (this.shape) return;
+    if (this.shape && this._crbApplied === CRB.ready) return;
     let ct = null;
+    // ---- 1) 硬编码碰撞箱 .crb（唯一权威来源）----
+    // 生物/花瓣/F3 都读同一份文件，不存在"素材提取"和"手写"两套口径。
+    if (typeof CRB !== 'undefined' && CRB.ready) {
+      // artSvg 可能是派生贴图（Hornet 的 '11_empty'）：先按它找，
+      // 找不到再回落到物种 id（'11'）—— crb 文件是按素材 id 命名的。
+      ct = CRB.get(this.artSvg || this.svg) || CRB.get(this.svg);
+      if (ct) this._crbApplied = true;
+    }
+    // ---- 2) 没实装的物种 / crb 加载失败：退回素材轮廓（仅兜底）----
+    if (!ct) {
     // ---- 手写碰撞箱（可选覆盖，默认【不走】）----
     // 默认口径 = 从【素材】提取轮廓（蜘蛛走"去掉腿的身体"素材，见下）。
     // 只有物种显式声明 MOB_TRAITS[slug].collider = { type:'circle', k } 时才手写：
@@ -308,6 +324,10 @@ class Mob {
       // 腿只是表现，计入轮廓会让碰撞箱大出近 3 倍、还会随步态抖动。
       // 身体检材由 SpiderGait.bodyUrl() 现场生成（同一次素材解析），加载就绪后才用。
       let shapeKey = 'mob' + (this.artSvg || this.svg);
+      // 【碰撞箱只算身体】Hornet / Bumble Bee：触角（stroke 细线）和尾针不属于碰撞体，
+      // 用 MobFX 预先生成的"只有中间椭圆"的素材（mob11_body / mob27_body）。
+      const bodyKey = 'mob' + this.svg + '_body';
+      if (!this.gaitSprite && SpriteStore.ready(bodyKey)) shapeKey = bodyKey;
       if (this.gaitSprite && typeof SpiderGait !== 'undefined') {
         const url = SpiderGait.bodyUrl();
         if (url) {
@@ -334,6 +354,7 @@ class Mob {
       if (!ct && this.artSvg && this.artSvg !== this.svg) {
         ct = SpriteStore.contour('mob' + this.svg, this.drawSize);
       }
+    }
     }
     if (!ct) return;                       // 素材未就绪：不缓存失败，下一帧再试
     this.shape = ct;
@@ -534,11 +555,6 @@ class Mob {
       key = 'mob' + this.svg;
     }
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
-    if (!this.dead && typeof MobFX !== 'undefined') {
-      this._drawScale = scale; this._drawAlpha = alpha;
-      MobFX.drawMob(ctx, this);
-      this._drawScale = null; this._drawAlpha = null;
-    }
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
     let bodyAlpha = alpha;
     // 步态（蜘蛛等）：按本帧位移累计 gait，站立不动时腿就停住。
@@ -588,6 +604,13 @@ class Mob {
       // ② 身体（无腿贴图，压在腿上面）
       drawMob(ctx, keyBody, this.drawSize, this.x, this.y, rot, scale, alpha, false);
     } else {
+      // 挂在身上的子实体（Hornet 尾针）：图层在【身体之下】（用户口径：尾针应在身体下面）。
+      // 偏移已按素材推到体外（0.55×drawSize），露出体外的部分照样看得见。
+      if (!this.dead && typeof MobFX !== 'undefined') {
+        this._drawScale = scale; this._drawAlpha = alpha;
+        MobFX.drawMob(ctx, this);
+        this._drawScale = null; this._drawAlpha = null;
+      }
       drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
     }
     // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。

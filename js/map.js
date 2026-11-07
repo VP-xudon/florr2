@@ -867,15 +867,23 @@ function createGardenMap(data) {
     return false;
   }
 
-  // 视线：两点之间是否被墙挡住（只看实心瓦片，减速瓦片不挡视线 ——
-  // 但玩家站在减速瓦片里时，生物本来就"看不见"他，那条规则在 Mob.canSee 里）。
-  function lineBlocked(x1, y1, x2, y2) {
+  // 视线：两点之间是否被墙挡住（只看实心瓦片，减速瓦片不挡视线）。
+  // 【skipA / skipB】= 两端各跳过多少距离不采样（世界像素）。
+  // 为什么需要：生物被击退/推挤后经常【贴着墙站】甚至半个身子陷进几何体，
+  // 这时从它中心出发的第一个采样点就落在墙里 -> 任何一次受击都被判成"墙后偷袭"
+  // -> 莫名其妙逃跑。跳过自身半径（+余量）之后，只有"中间真的隔着墙"才算挡视线。
+  function lineBlocked(x1, y1, x2, y2, skipA, skipB) {
     const dx = x2 - x1, dy = y2 - y1;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) return false;
+    const a = Math.max(0, skipA || 0), b = Math.max(0, skipB || 0);
+    const from = a / len, to = 1 - b / len;
+    if (to <= from) return false;                 // 两端互相贴住：中间没有墙可言
     const n = Math.max(2, Math.ceil(len / 10));
     for (let i = 1; i < n; i++) {
-      if (solidAtPoint(x1 + dx * (i / n), y1 + dy * (i / n))) return true;
+      const t = i / n;
+      if (t <= from || t >= to) continue;
+      if (solidAtPoint(x1 + dx * t, y1 + dy * t)) return true;
     }
     return false;
   }

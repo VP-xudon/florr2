@@ -55,9 +55,10 @@ async function boot() {
     } catch (e) {
       console.error('[loadGardenData]', e);
       UI.refs.loading.textContent = 'Failed to load garden.tmj. Open the game through a local HTTP server.';
-      await loadSelftest();   // 即便初始化失败也让自测输出一份可判定的失败报告
       return;
     }
+    // 碰撞箱数据必须在实体创建前就位（生物/花瓣/F3 全读同一份 .crb）
+    await Promise.race([CRB.loadAll(), new Promise((r) => setTimeout(r, 5000))]);
     const canvas = document.getElementById('game');
     game = new Game(canvas);
     game.init();
@@ -76,7 +77,9 @@ async function boot() {
     if (window.GARDEN_DATA && UI.showLoadingWarn) UI.showLoadingWarn();
   }, 20000);
   try {
-    await MobFX.prepareAssets();
+    // prepareAssets 最多等 8s：它内部只做"解析/测量 + 触发素材加载"，
+    // 不允许任何网络抖动把 loading 蒙版挂死（素材晚到会自动补上，不影响游戏）。
+    await Promise.race([MobFX.prepareAssets(), new Promise((r) => setTimeout(r, 8000))]);
     await Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s)));
   } catch (e) { /* 单个素材失败不影响其他 */ }
   // 小地图位图预热：在 Loading 阶段就构建好，避免首次悬浮缩放时现场绘制整张大图而卡顿
@@ -89,24 +92,6 @@ async function boot() {
   } catch (e) { /* 预热失败不影响进入游戏 */ }
   clearTimeout(slowWarn);
   if (window.GARDEN_DATA) UI.hideLoading();
-  await loadSelftest();
-}
-
-// 自测脚本按需挂载：正常游玩完全不加载，也不会产生额外请求。
-async function loadSelftest() {
-  if (!SELFTEST_ENABLED) return;
-  try {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'js/selftest.js?v=70';
-      s.async = true;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('js/selftest.js 加载失败'));
-      document.body.appendChild(s);
-    });
-  } catch (e) {
-    console.error('[selftest]', e);
-  }
 }
 
 // 脚本已置于 body 末尾，DOM 就绪即可启动（不依赖 window.load 等待全部子资源）

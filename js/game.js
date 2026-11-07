@@ -465,6 +465,7 @@ class Game {
       v.hp = e.hp; v.maxHp = e.maxHp; v.dead = e.dead;
       v.vx = e.vx || 0; v.vy = e.vy || 0;   // 只用于推挤的动能项（视图实体不积分位置）
       if (e.artSvg) v.artSvg = e.artSvg;   // 多节生物：头节/身体节贴图区分
+      if (e.pollenShot) v.pollenShot = true;   // Bumble Bee 尾部产出的 Pollen
       if (e.typeId === 11 && e.artSvg && v.artSvg !== e.artSvg) {
         v.artSvg = e.artSvg;
         v.artRot = MOB_ART_ROT[e.artSvg] || MOB_ART_ROT['11'] || 0;
@@ -490,6 +491,12 @@ class Game {
           v.hornetMissile.exiting = true;
           ExitFX.begin(v.hornetMissile);
         }
+      }
+      // 快照里没有挂载尾针（已发射 / 尾针被击碎）时，客户端视图构造阶段创建的
+      // 占位 missile 也必须一起失效 —— 否则 def.draw 会一直画一根"永远不发射"的
+      // 挂载尾针，表现为发射后还留着一根针。
+      if (v.hornet && e.hornetMissile == null && v.hornet.missile) {
+        if (!v.hornet.missile.exiting) v.hornet.missile = null;
       }
       if (Array.isArray(e.hornetProjectiles)) {
         const old = v.hornetProjectiles || [];
@@ -617,13 +624,15 @@ class Game {
   _tickMobViews(dt) {
     const projectileKeep = [];
     for (const [id, projectile] of this.hornetProjectiles) {
-      if (projectile.exiting) ExitFX.tick(projectile, dt);
-      else if (projectile.blend < 1) {
+      // 所有动画计时走统一实体引擎；退场播完才由引擎判定回收
+      EntityFX.tickEntity(projectile, dt);
+      EntityFX.advanceExit(projectile, dt);       // Map 不在受控列表里，手动推进退场
+      if (!projectile.exiting && projectile.blend < 1) {
         projectile.blend = Math.min(1, projectile.blend + dt / (this._snapDt || SNAP_DT));
         projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
         projectile.y = projectile.py + (projectile.ty - projectile.py) * projectile.blend;
       }
-      if (projectile.exiting && ExitFX.done(projectile)) this.hornetProjectiles.delete(id);
+      if (projectile.exiting && EntityFX.done(projectile)) this.hornetProjectiles.delete(id);
       else projectileKeep.push(projectile);
     }
     // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：客户端镜像一份用于绘制。
@@ -635,7 +644,7 @@ class Game {
       if (f.exiting) continue;                 // 正在退场：不再计时
       f.t += dt;
       f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      if (f.t >= f.dur) ExitFX.begin(f);
+      if (f.t >= f.dur) EntityFX.despawn(f);
     }
     webs.sweep(dt);                             // 唯一的回收点
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
@@ -872,6 +881,21 @@ class Game {
         const dx = m.x - p.x, dy = m.y - p.y;
         if (dx * dx + dy * dy > R2) continue;
         near.push(m);
+      }
+    }
+
+    // 场地型实体（敌方蛛网）：站在网里的【本地玩家】也要挂"蛛网减速"。
+    // 状态效果不进快照，服务端那份只管权威结算；本地这份负责
+    //   ① 预测移动速度（否则本地比服务端快半拍、贴网时会被拉回）
+    //   ② 卡槽上方的状态图标（用户看到的就是它）。
+    // 蜘蛛免疫网（immuneStatus），玩家不免疫。
+    if (p && !p.dead && this.mobWebs.length && typeof StatusFX !== 'undefined') {
+      for (const w of this.mobWebs) {
+        const dx = p.x - w.x, dy = p.y - w.y;
+        if (dx * dx + dy * dy <= w.r * w.r) {
+          StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
+          break;
+        }
       }
     }
 
@@ -1407,6 +1431,57 @@ class Game {
         for (const f of webs) ctx.fillRect(f.x - 1.5, f.y - 1.5, 3, 3);
         ctx.restore();
       }
+
+      // 落位实体（Wax）：画它真实的【多边形】碰撞箱，不是外接圆
+      for (const w of p.petalWorld || []) {
+        if (!w.shapePoly || !w.anchor) continue;
+        ctx.save();
+        ctx.strokeStyle = '#ffd24a';
+        ctx.beginPath();
+        w.shapePoly.forEach(([vx, vy], i) => {
+          const X = w.x + vx * w.r, Y = w.y + vy * w.r;
+          if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Hornet 尾针：发射前（挂载）和发射后（飞行）是【同一个实体】，
+      // F3 都要画出它真正的碰撞箱（11_missile.crb 的三角形，不是外接圆）。
+      const stingerCrb = (typeof CRB !== 'undefined') ? CRB.get('11_missile') : null;
+      const drawStinger = (s, facing) => {
+        if (!s || s.dead) return;
+        const sz = s.drawSize || 16;
+        const rot = (facing || 0) - MISSILE_TIP_ANGLE;
+        const c = Math.cos(rot), sn = Math.sin(rot);
+        ctx.beginPath();
+        if (stingerCrb) {
+          stingerCrb.pts.forEach(([px, py], i) => {
+            const X = s.x + (px * c - py * sn) * sz;
+            const Y = s.y + (px * sn + py * c) * sz;
+            if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+          });
+          ctx.closePath();
+        } else {
+          ctx.arc(s.x, s.y, s.radius || 8, 0, TAU);
+        }
+        ctx.stroke();
+      };
+      ctx.save();
+      ctx.strokeStyle = '#ff9a5b';
+      for (const m of mobs) {                       // 挂载态（每只 Hornet 的尾针）
+        if (!m || m.dead || !m.hornetMissile) continue;
+        drawStinger(m.hornetMissile, m.facing + Math.PI);
+      }
+      const shots = this.hornetProjectiles;        // 飞行态
+      if (shots && shots.size) {
+        for (const s of shots.values()) {
+          if (!s || s.exiting || s.dead) continue;
+          drawStinger(s, s.facing);
+        }
+      }
+      ctx.restore();
     }
     ctx.restore();
   }

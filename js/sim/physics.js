@@ -1,80 +1,128 @@
-// sim/physics.js — 实体推挤与地形位移解算（无 DOM）
-'use strict';
+// sim/physics.js — 统一物理世界：所有实体（玩家 / 生物 / 花瓣 / 落位实体）共用一套碰撞解算
+// 'use strict';
+//
+// 【统一实体接口】参与物理的实体只需要这些字段：
+//   x, y              位置
+//   r                 等面积圆半径（粗判 / 网格用）
+//   vx, vy            速度
+//   weight            重量（反质量分配：越重越难被推动）
+//   static            可选：true = 不可推动（硬碰撞，对方承担全部修正）
+//   shape             可选：生物轮廓 { pts: 归一化多边形, r: 外接圆半径 }，随 facing+artRot 旋转
+//   collSize          可选：shape 的世界尺寸（shape.pts × collSize = 世界半径）
+//   shapePoly         可选：静态多边形（不随朝向旋转，如 Wax），归一化顶点 × cr
+//   cr                可选：shapePoly 的世界半径
+//
+// 判定优先级（一个函数内分派，任何实体对都走这一条路）：
+//   ① 轮廓 vs 圆（mobHitTest，随朝向旋转 —— 生物）
+//   ② 多边形 vs 圆（polyVsCircle，不旋转 —— Wax 这类落位实体）
+//   ③ 圆 vs 圆（兜底）
+// 位置修正与冲量对【所有实体对】同一套反质量公式；static 方 inv=0，对方承担全部修正
+// —— "硬碰撞"由此而来，不需要任何调用方写特判。
+
+function _pairHit(a, b) {
+  // 判定优先级（一旦选定就返回该结果，绝不 fall through 到更粗的圆）：
+  //   ① 静态多边形（shapePoly，Wax 这类落位实体）优先 —— 它的形状是"墙"，
+  //     对方（玩家/生物）必须被这个真实多边形挡住；
+  //   ② 生物轮廓（shape，随朝向旋转）；
+  //   ③ 圆 vs 圆兜底。
+  // 早期把生物轮廓放在最前，于是 physicsPush(生物, 蜡块) 实际用的是
+  // "蜡块的外接圆 vs 生物轮廓"—— 圆比六边形大一圈，视觉上就是"碰撞箱比 F3 大"。
+  if (b && b.shapePoly && b.shapePoly.length >= 3 && typeof polyVsCircle === 'function') {
+    // polyVsCircle 的法线是 多边形 -> 圆心(a)，即 b -> a，取反成 a -> b
+    const h = polyVsCircle(b.shapePoly, b.x, b.y, b.cr || b.r || 1, a.x, a.y, a.r || 0);
+    return h ? { nx: -h.nx, ny: -h.ny, depth: h.depth } : null;
+  }
+  if (a && a.shapePoly && a.shapePoly.length >= 3 && typeof polyVsCircle === 'function') {
+    return polyVsCircle(a.shapePoly, a.x, a.y, a.cr || a.r || 1, b.x, b.y, b.r || 0);
+  }
+  if (a && a.shape && a.shape.pts && a.shape.pts.length >= 3
+    && typeof mobHitTest === 'function') {
+    return mobHitTest(a, b.x, b.y, b.r || 0);
+  }
+  if (b && b.shape && b.shape.pts && b.shape.pts.length >= 3
+    && typeof mobHitTest === 'function') {
+    const h = mobHitTest(b, a.x, a.y, a.r || 0);
+    return h ? { nx: -h.nx, ny: -h.ny, depth: h.depth } : null;
+  }
+  // ⑤ 圆 vs 圆
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const rr = (a.r || 0) + (b.r || 0);
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr || d2 <= 1e-6) return null;
+  const d = Math.sqrt(d2);
+  return { nx: dx / d, ny: dy / d, depth: rr - d };
+}
 
 function physicsPush(a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const rr = a.r + b.r;
-  const d2 = dx * dx + dy * dy;
-  if (d2 >= rr * rr || d2 <= 1e-6) return;
-  const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
-  const overlap = rr - d;
-  const invA = 1 / (a.weight || 1), invB = 1 / (b.weight || 1), sum = invA + invB;
-  // 位置修正：按反质量分配（重 = 少动）
-  const pa = overlap * invA / sum, pb = overlap * invB / sum;
+  const hit = _pairHit(a, b);
+  if (!hit || !(hit.depth > 0)) return;
+  const nx = hit.nx, ny = hit.ny;                       // 统一为 a -> b
+  const invA = a.static ? 0 : 1 / (a.weight || 1);
+  const invB = b.static ? 0 : 1 / (b.weight || 1);
+  const sum = (invA + invB) || 1;
+  // 位置修正：按反质量分配（static 方不动，对方吃下全部重叠）
+  const pa = hit.depth * invA / sum, pb = hit.depth * invB / sum;
   a.x -= nx * pa; a.y -= ny * pa;
   b.x += nx * pb; b.y += ny * pb;
-  // 冲量：接近速度 -> 低恢复推挤（快 = 推动更重的；重 = 难被推动）
-  const closing = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+  // 冲量：接近速度 -> 低恢复推挤（static 方不吃冲量）
+  const closing = ((a.vx || 0) - (b.vx || 0)) * nx + ((a.vy || 0) - (b.vy || 0)) * ny;
   if (closing > 0) {
     const j = (1 + PUSH_RESTITUTION) * closing / sum;
-    a.vx -= j * invA * nx; a.vy -= j * invA * ny;
-    b.vx += j * invB * nx; b.vy += j * invB * ny;
+    a.vx = (a.vx || 0) - j * invA * nx; a.vy = (a.vy || 0) - j * invA * ny;
+    b.vx = (b.vx || 0) + j * invB * nx; b.vy = (b.vy || 0) + j * invB * ny;
   }
 }
 
-// 实体 vs 生物：优先用生物的【SVG 轮廓】判定（与伤害结算、F3 碰撞箱同一套）。
-// 以前一律按两圆（e.r + m.r）推挤，而 m.r 是"等面积圆"——对大型生物来说它比外形小得多：
-// 玩家能走进生物身体里、F3 画出来的外形和实际推挤完全对不上（"大型生物尤为明显"）。
-// 轮廓还没就绪（贴图未加载）时才退回两圆，保证不会完全不碰撞。
+// 实体 vs 生物：等价于 physicsPush（保留旧名字，内部已统一）。
 function physicsPushMob(e, m) {
-  if (!e || !m) return;
-  const sh = m.shape;
-  if (sh && sh.pts && sh.pts.length >= 3 && typeof mobHitTest === 'function') {
-    const hit = mobHitTest(m, e.x, e.y, e.r || 0);
-    if (!hit || !(hit.depth > 0)) return;
-    const nx = hit.nx, ny = hit.ny;                    // 由生物表面指向实体圆心
-    const invA = 1 / (e.weight || 1), invB = 1 / (m.weight || 1), sum = (invA + invB) || 1;
-    const pa = hit.depth * invA / sum, pb = hit.depth * invB / sum;
-    e.x += nx * pa; e.y += ny * pa;
-    m.x -= nx * pb; m.y -= ny * pb;
-    // 冲量：接近速度 -> 低恢复推挤（与两圆版本同一套反质量分配）
-    const closing = ((m.vx || 0) - (e.vx || 0)) * nx + ((m.vy || 0) - (e.vy || 0)) * ny;
-    if (closing > 0) {
-      const j = (1 + PUSH_RESTITUTION) * closing / sum;
-      e.vx = (e.vx || 0) + j * invA * nx; e.vy = (e.vy || 0) + j * invA * ny;
-      m.vx -= j * invB * nx; m.vy -= j * invB * ny;
-    }
-    return;
-  }
   physicsPush(e, m);
 }
 
-// 只把【玩家】推出生物轮廓，不反向推动生物。
-// 多节生物的每一节都是刚性链上的节点：推它会和每帧末的轨迹解算打架，
-// 客户端表现为"一帧被顶开、下一帧被拉回"的整条抖动/错位；服务端表现为链被撕开。
-// 所以链节与玩家的分离只推玩家（身体扫到花朵时，花朵被顶开）。
+// 只把【玩家】推出生物轮廓，不反向推动生物（多节生物链节专用）。
 function physicsPushPlayerOnly(e, m) {
   if (!e || !m) return;
-  const sh = m.shape;
-  if (!sh || !sh.pts || sh.pts.length < 3 || typeof mobHitTest !== 'function') return;
-  const hit = mobHitTest(m, e.x, e.y, e.r || 0);
+  const hit = _pairHit(m, e);                    // 法线统一为 m -> e（由生物指向玩家）
   if (!hit || !(hit.depth > 0)) return;
-  e.x += hit.nx * hit.depth;
-  e.y += hit.ny * hit.depth;
+  e.x += hit.nx * hit.depth; e.y += hit.ny * hit.depth;
 }
 
+// 把一次【物理推挤产生的位移】过一遍地形：有墙就不动 / 沿墙滑动。
+// physicsPush 只解实体之间的重叠，不管地形 —— 所以 Wax 这类"会被玩家推"的落位实体
+// 必须在推完之后经这里落地，否则会被一路推进墙里。
+function physicsMoveWithWall(ent, dx, dy, map) {
+  if (!ent || !map || (!dx && !dy)) return;
+  if (ent.shapePoly && ent.shapePoly.length >= 3 && typeof map.moveShape === 'function') {
+    const pos = map.moveShape(ent.x, ent.y, dx, dy, ent.shapePoly, ent.cr || ent.r || 1);
+    ent.x = pos.x; ent.y = pos.y;
+    return;
+  }
+  if (typeof map.move === 'function') {
+    const pos = map.move(ent.x, ent.y, dx, dy, ent.r || 0);
+    ent.x = pos.x; ent.y = pos.y;
+    return;
+  }
+  ent.x += dx; ent.y += dy;
+}
+
+// 推挤 + 地形：先让 physicsPush 算出"纯实体间的位移"，回退后用地形解算重走一遍。
+// 所有会移动的实体都走这一条，墙体与实体碰撞不会互相打架。
+function physicsPushOnMap(a, b, map) {
+  const bx = b.x, by = b.y;
+  physicsPush(a, b);
+  const dx = b.x - bx, dy = b.y - by;
+  if (!dx && !dy) return;
+  b.x = bx; b.y = by;
+  physicsMoveWithWall(b, dx, dy, map);
+}
+
+// 位移解算（自主速度 + 反弹冲量），并处理墙体碰撞。
+// 与上面的推挤同属"物理世界"：所有实体都必须经它移动，才有统一的地形碰撞。
 function moveEntity(entity, dt, map) {
-  // 位移 = 自主移动速度 + 反弹冲量速度（kbX/kbY，由 tickKnockback 衰减）
   const dx = (entity.vx + (entity.kbX || 0)) * dt;
   const dy = (entity.vy + (entity.kbY || 0)) * dt;
-  // 墙体碰撞用【行走碰撞箱】（walkHull/walkSize，见 Mob._ensureShape）：
-  // 它被钳到「1 格瓦片 0.9 倍正方形的内接圆」以内，因此多大体型的生物都能走 1 格通道。
-  // 伤害结算与玩家推挤仍然用 r/shape —— 两套尺寸互不影响。
-  // 没有行走箱的实体（主角、卡片、旧数据）自动回落到原来的 hull / 圆。
   const poly = entity.walkHull || entity.hull;
   const shapeSize = (entity.walkHull && entity.walkSize != null) ? entity.walkSize : entity.drawSize;
   const radius = (entity.walkR != null) ? entity.walkR : entity.r;
-  // 有碰撞外形（生物，外形取自其 SVG 轮廓）就走多边形碰撞；否则按圆形（主角/卡片）
   if (poly && typeof map.moveShape === 'function') {
     const position = map.moveShape(entity.x, entity.y, dx, dy, poly, shapeSize);
     entity.x = position.x; entity.y = position.y;
@@ -93,7 +141,6 @@ function moveEntity(entity, dt, map) {
     entity.x = position[0]; entity.y = position[1];
     return;
   }
-
   const position = map.move(entity.x, entity.y, dx, dy, radius);
   entity.x = position.x; entity.y = position.y;
   for (const normal of position.normals) {

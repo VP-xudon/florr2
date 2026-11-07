@@ -41,12 +41,13 @@ const MOB_POISON_COLOR = '#c58cff';
 //   rose   = id 5（Rose / 玫瑰，治疗属性非常惊人，不过在战斗时就没那么好用了）
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
-  'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile'
+  'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile', 'wax',
+  'rice', 'corn', 'wing'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
 // reach 对它【完全无效】：轨道半径不随空格放大（Peas 另有 fixedReach：恒定 detect 距离）
-const REACH_IMMUNE_SLUGS = new Set(['rose', 'peas']);
+const REACH_IMMUNE_SLUGS = new Set(['rose', 'peas', 'missile']);
 const DISABLED_PETALS = [];   // 未启用的冗余素材清单（含 id/名称，便于日后检索）
 
 // 二创边界（依据 registry 顶部 note）。如需启用某 ID，请手填 registry 后修改此处。
@@ -190,6 +191,59 @@ const PETAL_RARITY_OVERRIDES = {
     eternal:   { dmg: 32805, hp: 32805, radius: 300 },
     unique:    { dmg: 32805, hp: 32805, radius: 300 }
   },
+  // Wax（蜡块）：没有伤害，只有血量 + 半径；加载好立刻在玩家旁边落一块蜡，
+  // 之后它就"长"在原地挡住生物（有碰撞箱，但不吸引、不造成伤害）。
+  wax: {
+    common:    { dmg: 0, hp: 1000,    radius: 30 },
+    unusual:   { dmg: 0, hp: 3000,    radius: 60 },
+    rare:      { dmg: 0, hp: 9000,    radius: 90 },
+    epic:      { dmg: 0, hp: 27000,   radius: 120 },
+    legendary: { dmg: 0, hp: 81000,   radius: 150 },
+    mythic:    { dmg: 0, hp: 243000,  radius: 180 },
+    ultra:     { dmg: 0, hp: 729000,  radius: 210 },
+    super:     { dmg: 0, hp: 2187000, radius: 240 },
+    eternal:   { dmg: 0, hp: 6561000, radius: 270 },
+    unique:    { dmg: 0, hp: 6561000, radius: 270 }
+  },
+  // Rice：高攻速、低单发的普通攻击花瓣（reload 0.05s）
+  rice: {
+    common:    { dmg: 4,     hp: 1 },
+    unusual:   { dmg: 12,    hp: 3 },
+    rare:      { dmg: 36,    hp: 9 },
+    epic:      { dmg: 108,   hp: 27 },
+    legendary: { dmg: 324,   hp: 81 },
+    mythic:    { dmg: 972,   hp: 243 },
+    ultra:     { dmg: 2916,  hp: 729 },
+    super:     { dmg: 8748,  hp: 2187 },
+    eternal:   { dmg: 26244, hp: 6561 },
+    unique:    { dmg: 26244, hp: 6561 }
+  },
+  // Corn：高血量（200 起）、中速（reload 7s）
+  corn: {
+    common:    { dmg: 8,      hp: 200 },
+    unusual:   { dmg: 24,     hp: 600 },
+    rare:      { dmg: 72,     hp: 1800 },
+    epic:      { dmg: 216,    hp: 5400 },
+    legendary: { dmg: 648,    hp: 16200 },
+    mythic:    { dmg: 1944,   hp: 48600 },
+    ultra:     { dmg: 5832,   hp: 145800 },
+    super:     { dmg: 17496,  hp: 437400 },
+    eternal:   { dmg: 52488,  hp: 1312200 },
+    unique:    { dmg: 52488,  hp: 1312200 }
+  },
+  // Wing：低血量、中速（reload 3s）。reach 模式下轨道距离按三角函数摆动（见 PETAL_TRAITS）。
+  wing: {
+    common:    { dmg: 20,     hp: 10 },
+    unusual:   { dmg: 60,     hp: 30 },
+    rare:      { dmg: 180,    hp: 90 },
+    epic:      { dmg: 540,    hp: 270 },
+    legendary: { dmg: 1620,   hp: 810 },
+    mythic:    { dmg: 4860,   hp: 2430 },
+    ultra:     { dmg: 14580,  hp: 7290 },
+    super:     { dmg: 43740,  hp: 21870 },
+    eternal:   { dmg: 131220, hp: 65610 },
+    unique:    { dmg: 131220, hp: 65610 }
+  },
   // Third Eye：装备型饰品，没有伤害/血量，只有 attackRange（reach 模式下多伸出去的距离，px）
   third_eye: {
     common:    { dmg: 0, hp: 0, attackRange: 0 },
@@ -312,9 +366,13 @@ const PETAL_TRAITS = {
     reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 },
     sticky: false, fixedReach: 'detect'
   },
+  // Missile（导弹）：常态绕玩家公转、【尖端朝外】；reach 模式立刻从当前角度尖端朝前飞出，
+  // 飞行中不旋转，2s 后消失。orbitK = 贴花系数（比普通花瓣更靠近本体）。
+  // 不受 reach 影响（noReach），与 Rose 同一类。
   missile: {
     reload: 1.5, launchMode: 'reach',
-    launch: { count: 1, speedK: 1.3, life: 2.0, spinRate: TAU * 2 }, orientOutward: true, sticky: false
+    launch: { count: 1, speedK: 1.3, life: 2.0 },
+    orientOutward: true, noReach: true, orbitK: 0.55, sticky: false
   },
   // 蜜会被生物吸住并贴在表面（吸血式"拉仇恨"的载体），其它花瓣保持轨道运动。
   honey: {
@@ -338,7 +396,30 @@ const PETAL_TRAITS = {
   // Web：reach 模式下脱轨、顺惯性飞出，0.5s 后自毁并原地张开一张网（由 PetalFX 接管）。
   //   web.duration = 网的存在时长（秒）；web.radius 按稀有度在 PETAL_RARITY_OVERRIDES 里。
   //   装填立刻开始（不像 Honey 那样等实体消失），与 Pollen 同款"放下就走"。
-  web: { reload: 3.0, reloadText: '3.0s + 0.5s', detachAfter: 0.05, sticky: false, web: { duration: 10 } }
+  web: { reload: 3.0, reloadText: '3.0s + 0.5s', detachAfter: 0.05, sticky: false, web: { duration: 10 } },
+  // Wax（蜡块）：装填 30s；加载好【立刻】脱轨（不需要 reach），落在玩家旁边；
+  // 卡面跟着实体走，实体死了才重新装填（holdReloadUntilDeath）。
+  // noDamage = 不造成伤害；不吸引生物（没有 attractMobs）。
+  wax: {
+    reload: 30, reloadText: '30.0s', sticky: false, noDamage: true,
+    autoDetach: true, holdReloadUntilDeath: true
+  },
+  // Rice：极快装填的普通攻击花瓣
+  rice: { reload: 0.05, reloadText: '0.05s', sticky: false },
+  // Corn：高血量普通攻击花瓣
+  corn: { reload: 7.0, reloadText: '7.0s', sticky: false },
+  // Wing：reach 模式下轨道距离在 [reach, reach + 2.5×天然reach] 之间按三角函数平滑摆动，
+  //   周期 2s；自转每秒 2 圈（独立于公转）；自转轴心 = 外边缘圆弧的圆心
+  //   （由 wingPivot 在对位时补偿，见 PetalFX）。
+  wing: {
+    reload: 3.0, reloadText: '3.0s', sticky: false,
+    reachWave: { spanK: 5.0, period: 2.0 },
+    selfSpin: TAU * 2,
+    // 自转轴心 = 外边缘圆弧的圆心（SVG 源码拟合：R=41.40、相对误差 2.1%，
+    // 圆心 (33.74,23.24)；内容框中心 (55,55)、窗口宽 39.461）。
+    // 图形中心相对弧心 = (+0.5389, +0.8049)，绘制时按这个偏移画 -> 视觉上绕弧心扇动。
+    spinOrigin: { x: 0.5389, y: 0.8049 }
+  }
 };
 
 function buildPetalTypes() {
@@ -347,8 +428,14 @@ function buildPetalTypes() {
   const PETAL_BY_ID = {};
   for (const p of reg) {
     const id = p.id;
-    // 忽略二创
-    if (id >= FANMADE_PETAL_FROM) { flagManual('petal', id, p.name, '二创内容已忽略（如需启用请手填 registry）'); continue; }
+    // 忽略二创 —— 但【显式列进白名单的优先】：Wax 的 registry id = 96 落在 95+ 区间，
+    // 而它确实是官方花瓣；只看 id 区间会把它误判成二创直接丢掉。
+    const slugDraft = (p.name && String(p.name).trim())
+      ? String(p.name).trim().toLowerCase().replace(/ /g, '_') : '';
+    if (id >= FANMADE_PETAL_FROM && !ENABLED_PETAL_SLUGS.has(slugDraft)) {
+      flagManual('petal', id, p.name, '二创内容已忽略（如需启用请手填 registry）');
+      continue;
+    }
     // 标记为二创的项忽略
     if (p.fanmade) { flagManual('petal', id, p.name, '标记为二创，已忽略'); continue; }
     // 名称缺失：不臆造，登记待手填
@@ -395,6 +482,8 @@ function buildPetalTypes() {
       noDamage: !!tr.noDamage,
       // 场地型（Web）：{ duration } —— 落地那张网的存在时长（半径按稀有度，在 rarityStats 里）
       web: tr.web || null,
+      // 自动落地（Wax）：加载好立刻脱轨，不需要 reach/detect
+      autoDetach: !!tr.autoDetach,
       // 装备型（饰品）：不进入轨道、无装填，固定在人物身上（Third Eye）
       accessory: !!tr.accessory,
       // 同种能否多件同时生效；false = 只有最左边那格生效，其余为暗灰未装填态
@@ -415,8 +504,17 @@ function buildPetalTypes() {
       formationAutoRotate: PETAL_FORMATION_AUTO_ROTATE.has(slug),
       // reach 模式免疫：轨道半径不随空格（reach）放大（见 sim/player.js _syncPetals）
       noReach: REACH_IMMUNE_SLUGS.has(slug),
+      // 轨道半径系数（1 = 标准；< 1 = 更贴近本体，如 Missile 的贴花）
+      orbitK: (tr.orbitK != null) ? tr.orbitK : 1,
       // 固定轨道距离（'detect'）：无论当前模式如何，都按该模式的距离公转
       fixedReach: tr.fixedReach || null,
+      // reach 模式下的轨道距离摆动（Wing）：{ spanK, period }
+      //   区间 = [reach, reach + spanK × 天然reach]，按正弦平滑来回，period 秒一个周期
+      reachWave: tr.reachWave || null,
+      // 自转角速度（Wing = 每秒 2 圈），独立于公转
+      selfSpin: tr.selfSpin || 0,
+      // 自转轴心偏移（图形中心相对轴心的距离，归一化到绘制尺寸）
+      spinOrigin: tr.spinOrigin || null,
       identified: true,
       wiki: p.wiki || null
     };
@@ -485,8 +583,17 @@ const MOB_HOSTILITY = {
   'Neutral': 'neutral',
   'Hostile': 'hostile'
 };
-const MISSILE_TIP_ANGLE = Math.atan2(30.003 - (61.08 + 39.265) / 2,
-  53.722 - (63.49 + 39.297) / 2);
+// Missile 素材（assets/petals/9.svg，已含 translate(3.606 9.458)）的三角形三点：
+//   底边 (67.096,70.538) - (42.903,48.723)，尖端 (57.328,39.461)。
+// 旋转轴心是【内容包围盒中心】(55,55)，所以尖端朝向要按"中心 -> 尖端"算：
+//   以前用"底边中点 -> 尖端"，两者差 1.9°，表现就是"尖端略微偏出瞄准线"。
+// 从 SVG 源码推导（9.svg，viewBox 0 0 110 110，g transform="translate(3.606 9.458)"）：
+//   path d="m63.49 61.08-9.768-31.077-14.425 9.262z" 的三个绝对顶点：
+//     A(67.096, 70.538) / B(57.328, 39.461) / C(42.903, 48.723)
+//   A 的夹角约 30.6°（B、C 各约 74.7°）→ 【A 才是尖端】，在右下方向。
+//   绘制旋转轴心 = 内容包围盒中心 (55,55)，所以尖端角 = 轴心 -> A 的向量角（≈0.91rad，右下方）。
+// 早期误把 B（上方那个点）当尖端，于是尖端一直朝错的方向。
+const MISSILE_TIP_ANGLE = Math.atan2(70.538 - 55, 67.096 - 55);
 // 手工校正的稀有度数值表（键 = 生物 id）。
 // registry 里部分生物是旧版数据或压根缺字段（例如 Bee 的 hp/dmg 全是错的、没有 armor），
 // 这里按官方最新口径整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
@@ -519,6 +626,18 @@ const MOB_RARITY_OVERRIDES = {
     eternal:   { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 },
     unique:    { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 }
   },
+  27: {  // Bumble Bee 大黄蜂（被动、不会产生仇恨）
+    common:    { hp: 25,        dmg: 20,     armor: 1,   exp: 1 },
+    unusual:   { hp: 93.8,      dmg: 60,     armor: 2,   exp: 1 },
+    rare:      { hp: 337.5,     dmg: 180,    armor: 7,   exp: 10 },
+    epic:      { hp: 1350,      dmg: 540,    armor: 22,  exp: 93 },
+    legendary: { hp: 8100,      dmg: 1620,   armor: 65,  exp: 877 },
+    mythic:    { hp: 78975,     dmg: 4860,   armor: 194, exp: 10568 },
+    ultra:     { hp: 3645000,   dmg: 14580,  armor: 583, exp: 492262 },
+    super:     { hp: 109350000, dmg: 43740,  armor: 583, exp: 24350794 },
+    eternal:   { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 },
+    unique:    { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 }
+  },
   11: {  // Hornet 黄蜂
     common:    { hp: 60,         dmg: 50,     armor: 1,   exp: 1,        missileHp: 5,       missileDmg: 10,    missileDur: 2 },
     unusual:   { hp: 225,        dmg: 150,    armor: 2,   exp: 2,        missileHp: 25,      missileDmg: 30,    missileDur: 3 },
@@ -543,7 +662,22 @@ const MOB_RARITY_OVERRIDES = {
 const MOB_TRAITS = {
   ladybug: {},
   bee: { sPath: true, sizeScale: 1.395 * 0.9, chaseMult: 1.05, wanderFactor: 1.2 },
-  hornet: { sizeScale: 1.395 * 0.9, chaseMult: 0.95, hideHpBar: true },
+  // Bumble Bee：被动（永不记仇恨）、S 形游荡【没有停顿】、游荡速度 = 1.5× 玩家移速，
+  // 并且每 0.6s 在尾部生出一颗同等级的 Pollen（数值与卡面召唤的完全一致）。
+  bumble_bee: {
+    sPath: true, sizeScale: 1.395 * 0.9, wanderSpeedK: 1.5,
+    pollenEvery: 0.6
+  },
+  // Hornet：体型同蜜蜂；血量条正常显示（hideHpBar 曾经被误开，看起来像"没做完"）。
+  //   shootCd  = 每次射击后的冷却（秒）：common 3 → super 1（等比例平滑）→ eternal 0.8
+  hornet: {
+    // 直径 1.4x（用户口径）；尾针挂点与画幅都按 drawSize 等比缩放，自动跟随
+    sizeScale: 1.395 * 0.9 * 1.4, chaseMult: 0.95,
+    shootCd: {
+      common: 3.0, unusual: 2.714, rare: 2.429, epic: 2.143, legendary: 1.857,
+      mythic: 1.571, ultra: 1.286, super: 1.0, eternal: 0.8, unique: 0.8
+    }
+  },
   centipede: { segmented: true, sizeScale: 1.4 },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
@@ -556,6 +690,8 @@ const MOB_TRAITS = {
   //     会随描边宽度和采样精度漂；这里要的是"身体那个圆"，手写一个系数最稳。
   spider: {
     sightR: 500, gait: true,
+    // 蜘蛛免疫自己（和同类）铺的蛛网：网是用来困住猎物的，不该拖慢自己
+    immuneStatus: { web: true },
     // 碰撞箱【不手写】：默认从【原 SVG 提取】，且只取"去掉腿的身体"
     // （SpiderGait.bodyUrl() 把 8 条腿的 path 从 SVG 文本里删掉后再提取）。
     // assets/mobs/21.svg：身体 = 两个同心圆（外圈 r≈10.31 / 内圈 r≈7.37 SVG 单位，圆心 55,55），
@@ -622,9 +758,14 @@ function buildMobTypes() {
       sPath: !!mt.sPath,                  // S 型游荡
       sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
       gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
+      immuneStatus: mt.immuneStatus || null,   // 状态免疫（{ web: true } = 不受蛛网减速）
       chaseMult: (mt.chaseMult != null) ? mt.chaseMult : null,   // null = 通用追击倍率
       wanderFactor: (mt.wanderFactor != null) ? mt.wanderFactor : 1,
       hideHpBar: !!mt.hideHpBar,
+      // 弹幕型（Hornet）：每次射击后的冷却秒数，按稀有度给（common 3 → eternal 0.8）
+      shootCd: mt.shootCd || null,
+      // 产卵型（Bumble Bee）：每 pollenEvery 秒在尾部生一颗同等级 Pollen（0 = 不产）
+      pollenEvery: mt.pollenEvery || 0,
       missileHp: 0, missileDmg: 0, missileDur: 0
     };
     for (const rk in t.rarityStats || {}) {
@@ -645,6 +786,19 @@ const PETAL_TYPES = _petals.list;
 const MOB_TYPES = _mobs.list;
 const PETAL_BY_ID = _petals.byId;
 const MOB_BY_ID = _mobs.byId;
+
+// Bumble Bee 尾部产出的 Pollen：它是【静止的敌对实体】，走生物实体链路。
+// 客户端 _applySnap 用 MOB_BY_ID[typeId] 建视图，所以必须在这里正式登记一个类型，
+// 否则服务端生成了、快照也发了，客户端却因为找不到 typeId 直接 continue -> 永远看不见。
+const POLLEN_SHOT_ID = 9901;
+const POLLEN_SHOT_TYPE = {
+  id: POLLEN_SHOT_ID, slug: 'pollen_shot', name: 'Pollen',
+  svg: 'pollen', artSvg: 'pollen', type: 'Hostile',
+  tier: 1, hp: 1, dmg: 0, armor: 0, exp: 0, speed: 0,
+  sizeScale: 0.5, hideHpBar: true,
+  rarityStats: {}
+};
+MOB_BY_ID[POLLEN_SHOT_ID] = POLLEN_SHOT_TYPE;
 
 // ---------------- 掉落物表 ----------------
 // 官方维基口径：【掉落稀有度分布只取决于生物的稀有度】，所有生物共用同一张表。
@@ -674,13 +828,19 @@ const MOB_DROP_ITEMS = {
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
   spider: ['faster', 'web', 'third_eye', 'magic_eye'],
-  hornet: ['missile', 'magic_missile']
+  bumble_bee: ['honey', 'pollen', 'wax'],
+  // Hornet / 黄蜂：Missile + Orange + Antennae（Magic Missile 是魔法变种，仅登记不显示）
+  hornet: ['missile', 'orange', 'antennae', 'magic_missile']
 };
 
 // 个别生物的每种掉落物有【各自】的稀有度分布。蜜蜂的 Stinger / Pollen / Honey 是三张不同的表：
 //   · stinger 没有专属表 -> 沿用 MOB_DROP_TABLE（正好就是官方 Stinger 表）
 //   · pollen / honey 用下面这两张；某档稀有度没写 = 这只生物在这一档不掉这件
 const MOB_DROP_TABLE_ITEM = {
+  // Missile：Hornet 专属掉落。【它的表本来就没有 Common 档】——
+  // common 蜘蛛/蜜蜂那套"Common 59.8%"在这里不存在，最低是 Unusual。
+  // Hornet 的四件掉落【各有自己的表】，全部不走标准表（用户口径）。
+  // Missile / Magic Missile / Orange：三张完全相同 —— 最低档是 Unusual（无 Common 档）。
   missile: {
     common:    [['unusual', 0.164]],
     unusual:   [['unusual', 0.512]],
@@ -692,6 +852,41 @@ const MOB_DROP_TABLE_ITEM = {
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
     unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
+  orange: {
+    common:    [['unusual', 0.164]],
+    unusual:   [['unusual', 0.512]],
+    rare:      [['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
+  magic_missile: {
+    common:    [['unusual', 0.164]],
+    unusual:   [['unusual', 0.512]],
+    rare:      [['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
+  // Antennae：从 Rare 档起才有（common/unusual 档不掉），分布与 Missile 不同
+  antennae: {
+    rare:      [['rare', 0.070]],
+    epic:      [['rare', 0.610], ['epic', 0.051]],
+    legendary: [['rare', 0.349], ['epic', 0.630], ['legendary', 0.020]],
+    mythic:    [['epic', 0.356], ['legendary', 0.641], ['mythic', 0.003]],
+    ultra:     [['legendary', 0.628], ['mythic', 0.371], ['ultra', 0.002]],
+    super:     [['mythic', 0.662], ['ultra', 0.338]],
+    eternal:   [['mythic', 0.662], ['ultra', 0.338]],
+    unique:    [['mythic', 0.662], ['ultra', 0.338]]
   },
   pollen: {
     common:    [['unusual', 0.069]],
@@ -782,6 +977,39 @@ const MOB_DROP_TABLE_ITEM = {
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
     unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
+  // Honey / Pollen / Wax：Bumble Bee 的三张专属表（与通用表不同，逐格录入官方表）。
+  honey: {
+    rare:      [['rare', 0.135]],
+    epic:      [['rare', 0.786], ['epic', 0.100]],
+    legendary: [['rare', 0.122], ['epic', 0.837], ['legendary', 0.041]],
+    mythic:    [['epic', 0.126], ['legendary', 0.867], ['mythic', 0.006]],
+    ultra:     [['legendary', 0.394], ['mythic', 0.603], ['ultra', 0.003]],
+    super:     [['mythic', 0.438], ['ultra', 0.562]],
+    eternal:   [['mythic', 0.438], ['ultra', 0.562]],
+    unique:    [['mythic', 0.438], ['ultra', 0.562]]
+  },
+  pollen: {
+    common:    [['unusual', 0.472]],
+    unusual:   [['unusual', 0.922]],
+    rare:      [['unusual', 0.541], ['rare', 0.459]],
+    epic:      [['unusual', 0.0001], ['rare', 0.640], ['epic', 0.360]],
+    legendary: [['rare', 0.0001], ['epic', 0.839], ['legendary', 0.161]],
+    mythic:    [['epic', 0.0002], ['legendary', 0.974], ['mythic', 0.026]],
+    ultra:     [['legendary', 0.019], ['mythic', 0.968], ['ultra', 0.013]],
+    super:     [['mythic', 0.030], ['ultra', 0.970]],
+    eternal:   [['mythic', 0.030], ['ultra', 0.970]],
+    unique:    [['mythic', 0.030], ['ultra', 0.970]]
+  },
+  wax: {
+    rare:      [['rare', 0.328]],
+    epic:      [['rare', 0.746], ['epic', 0.251]],
+    legendary: [['rare', 0.003], ['epic', 0.889], ['legendary', 0.107]],
+    mythic:    [['epic', 0.003], ['legendary', 0.980], ['mythic', 0.017]],
+    ultra:     [['legendary', 0.077], ['mythic', 0.914], ['ultra', 0.008]],
+    super:     [['mythic', 0.104], ['ultra', 0.896]],
+    eternal:   [['mythic', 0.104], ['ultra', 0.896]],
+    unique:    [['mythic', 0.104], ['ultra', 0.896]]
+  },
   // Third Eye / Magic Eye：蜘蛛专属，Legendary 及以下一档都不掉（Wiki 表只有 Mythic 起）。
   //   Mythic 0.03% / Ultra 4.5% Mythic + 0.02% Ultra / Super+ 96% Mythic + 4% Ultra
   third_eye: {
@@ -862,7 +1090,11 @@ const PETAL_ART_BY_SLUG = {};
 (function buildPetalArtIndex() {
   const reg = (window.REGISTRY && window.REGISTRY.petals) ? window.REGISTRY.petals : [];
   for (const p of reg) {
-    if (p.fanmade || p.id >= FANMADE_PETAL_FROM) continue;
+    // 同上：白名单里的花瓣（Wax）不受 id 区间限制，否则它的掉落物找不到素材
+    {
+      const sl = (p.name ? String(p.name).trim() : '').toLowerCase().replace(/ /g, '_');
+      if (p.fanmade || (p.id >= FANMADE_PETAL_FROM && !ENABLED_PETAL_SLUGS.has(sl))) continue;
+    }
     const nm = p.name ? String(p.name).trim() : (p.zh || '');
     if (!nm) continue;
     const slug = (p.name ? String(p.name).trim() : nm).toLowerCase().replace(/ /g, '_');
@@ -1044,7 +1276,7 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
 // 组内成员写成 [slug, 组内权重]；权重只在组内比较，外层 ":w" 会再乘上来。
 const MOB_GROUPS = {
-  garden: [['ladybug', 3], ['bee', 2], ['spider', 2], ['centipede', 1], ['hornet', 1]]
+  garden: [['ladybug', 3], ['bee', 2], ['bumble_bee', 1], ['spider', 2], ['centipede', 1], ['hornet', 1]]
 };
 
 // 兜底物种（生成区解析不出任何有效物种时使用）
@@ -1073,7 +1305,7 @@ function rollMobRarityByDifficulty(diff) {
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'centipede', 'spider', 'hornet']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet']);
 
 function parseSpawnMobs(str) {
   const out = [];

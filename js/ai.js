@@ -386,6 +386,55 @@ MobAI.register('hornet', {
 });
 
 // ============================================================================
+// 内置 AI：Bumble Bee（bumble_bee）—— 被动、S 形游荡、没有停顿
+// 口径（用户要求）：
+//   · 被动生物：永不产生仇恨（hostility=passive 时 chase() 本来就不会选中玩家）；
+//   · S 形路径，但【没有停顿】—— 不走通用的"走一段->停下->换向"状态机；
+//   · 转向直接转（turnRate 对它是 0，方向每帧由正弦算出）；
+//   · 游荡速度 = 1.5 × 玩家默认最高移速。
+// 尾部产 Pollen 由服务端定时器负责（见 LocalServer._bumbleTick）。
+// ============================================================================
+MobAI.register('bumble_bee', {
+  init(mob) {
+    mob.chaseSpeed = mob.wanderSpeed = BUMBLE_SPEED_K * PLAYER_BASE_SPEED;
+    mob.speed = mob.wanderSpeed;
+    mob.sPath = true;
+    mob.sAmp = BEE_S_AMP;
+    mob.sHz = BEE_S_HZ;
+    mob.turnRate = 0;                    // 不做航向限速：方向就是正弦算出来的那个
+  },
+  create() {
+    const ai = MobAI.defs.wander.create();
+    ai.kind = 'bumble_bee';
+    ai.sT = rand(0, 1);
+    ai.dirA = rand(0, TAU);
+    return ai;
+  },
+  step(ai, dt, mob) {
+    ai.sT = (ai.sT || 0) + dt;
+    // 撞墙：这一帧直接换一个方向（没有状态机、没有停顿）
+    if (ai.blockedT > 0) {
+      ai.blockedT = 0;
+      ai.dirA = wrapAngle((ai.dirA || 0) + Math.PI + rand(-0.6, 0.6));   // 反向离开，别继续顶墙
+    }
+    const a = ai.dirA + Math.sin(ai.sT * (mob.sHz || 0.85) * TAU) * (mob.sAmp || 0.6);
+    ai.dirX = Math.cos(a); ai.dirY = Math.sin(a);
+    return { x: ai.dirX * mob.wanderSpeed, y: ai.dirY * mob.wanderSpeed };
+  },
+  // 撞墙判定：想走却没走动 -> 累计；顶墙超过 0.35s 就【反向】离开（随机方向可能还撞同一面墙）。
+  notifyMoved(ai, d, mob) {
+    const want = mob ? Math.hypot(mob.vx || 0, mob.vy || 0) : 0;
+    if (d < 0.6 && want > 4) ai.stuckT = (ai.stuckT || 0) + 0.04;
+    else ai.stuckT = 0;
+    if ((ai.stuckT || 0) > 0.35) {
+      ai.stuckT = 0;
+      ai.dirA = wrapAngle((ai.dirA || 0) + Math.PI + rand(-0.6, 0.6));
+    }
+  },
+  facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
+});
+
+// ============================================================================
 // 内置 AI 4：蜘蛛（spider）—— aggressive 敌对，追击极快、游荡也很快
 // 口径（用户要求）：
 //   · 仇恨半径 500（数据层 MOB_TRAITS.spider.sightR，比通用 1200 小得多）；

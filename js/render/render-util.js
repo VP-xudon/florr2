@@ -53,6 +53,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
 function drawWebList(ctx, list, img) {
   if (!list || !list.length || !img) return;
   for (const f of list) {
+    if (f.exiting) continue;   // 退场由统一幽灵播放，这里不再重复画静态图
     // 0 -> 1 的弹出：三次缓出 + 一点点过冲，观感是"啪地张开"
     const p = clamp(f.pop, 0, 1);
     const grow = 1 - Math.pow(1 - p, 3);
@@ -111,21 +112,25 @@ function drawSprite(ctx, key, size, x, y, rot, scale, alpha) {
   ctx.restore();
 }
 // 绘制"花瓣实体"画布（已去字母、已收紧画布），支持旋转/缩放/透明
-function drawArt(ctx, cv, size, x, y, rot, scale, alpha) {
+// ox / oy（可选，归一化到 size）：把【图形中心】相对旋转原点偏移一段距离。
+// 用于"自转轴心不在图形中心"的素材（Wing：轴心 = 外边缘圆弧的圆心）。
+// 不传则退化为"绕图形中心旋转"，与旧行为完全一致。
+function drawArt(ctx, cv, size, x, y, rot, scale, alpha, ox, oy) {
   if (!cv) return;
   ctx.save();
   ctx.translate(x, y);
   if (rot) ctx.rotate(rot);
   if (scale && scale !== 1) ctx.scale(scale, scale);
   if (alpha != null) ctx.globalAlpha = alpha;
-  ctx.drawImage(cv, -size / 2, -size / 2, size, size);
+  const dx = (ox || 0) * size, dy = (oy || 0) * size;
+  ctx.drawImage(cv, -size / 2 + dx, -size / 2 + dy, size, size);
   ctx.restore();
 }
 
 // 绘制一片花瓣的图形。多体花瓣（Light）在实体里【不套用卡面的紧凑排布】：
 // 它的每个光点各占一个轨道位（见 _syncPetals 的 b.lights），这里只负责画单个光点。
-function drawPetalArt(ctx, cv, size, x, y, rot, scale, alpha) {
-  drawArt(ctx, cv, size, x, y, rot, scale, alpha);
+function drawPetalArt(ctx, cv, size, x, y, rot, scale, alpha, ox, oy) {
+  drawArt(ctx, cv, size, x, y, rot, scale, alpha, ox, oy);
 }
 
 // 基于重量与动能的实体推挤（玩家↔生物、生物↔生物通用）。
