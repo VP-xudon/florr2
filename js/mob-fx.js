@@ -286,6 +286,22 @@ const MobFX = {
     if (!ht) return mob.drawSize * 0.39;
     return mob.drawSize * ht.tipOut - (this.missileTipBack || 0) * size - size * 0.5;
   },
+
+  // 尾针在【世界坐标】里的位置与朝向（唯一来源：绘制 / 服务端 tick / F3 全用它）。
+  //   纵向：沿尾巴方向 hornetTailOffset（尖端对齐后再向本体中心收 0.5×长度）
+  //   横向：以"头朝上"为基准向左平移 0.4×宽度（用户口径）——
+  //         尾巴方向 tailA 的 +90° 就是"本体的左侧"，对任意朝向都成立。
+  hornetTailPoint(mob, size) {
+    const tailA = mob.facing + Math.PI;
+    const off = this.hornetTailOffset(mob, size);
+    const latA = tailA + Math.PI / 2;
+    const lat = size * 0.4;
+    return {
+      x: mob.x + Math.cos(tailA) * off + Math.cos(latA) * lat,
+      y: mob.y + Math.sin(tailA) * off + Math.sin(latA) * lat,
+      a: tailA
+    };
+  },
   registerField(kind, def) {
     this.fields[kind] = def || {};
     return this.fields[kind];
@@ -567,10 +583,8 @@ MobFX.register('hornet', {
       // 挂点 = 尖端对齐：让 9.svg 画出来的尖端正好落在 11.svg 尾针尖端的位置。
       //   off = drawSize×tipOut(本体侧实测) − size×tipBack(尾针素材侧实测)
       // 两个量都来自素材 getBBox，没有任何手写常数。
-      const tailA = mob.facing + Math.PI;
-      const off = MobFX.hornetTailOffset(mob, size);
-      MobFX.drawMissileAt(ctx, missile, mob.x + Math.cos(tailA) * off,
-        mob.y + Math.sin(tailA) * off, tailA, size, alpha);
+      const p = MobFX.hornetTailPoint(mob, size);
+      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
       return;
     }
     MobFX.drawMissile(ctx, missile, size, alpha);
@@ -591,13 +605,12 @@ MobFX.register('hornet', {
       missile.age += dt;
       missile.hurtT = Math.max(0, missile.hurtT - dt);
       if (!missile.flight && !missile.exiting) {
-        const tailA = mob.facing + Math.PI;
         // 与 def.draw 用同一个挂点函数：F3 / 受击判定 / 绘制位置三者永远一致
-        const offset = MobFX.hornetTailOffset(
-          mob, missile.drawSize || mob.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3));
-        missile.x = mob.x + Math.cos(tailA) * offset;
-        missile.y = mob.y + Math.sin(tailA) * offset;
-        missile.facing = tailA;
+        const sz = missile.drawSize || mob.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3);
+        const pt = MobFX.hornetTailPoint(mob, sz);
+        missile.x = pt.x;
+        missile.y = pt.y;
+        missile.facing = pt.a;
       }
     } else if (mob.ai.hornetMode === 'reload') {
       st.reloadT += dt;

@@ -462,6 +462,9 @@ function buildPetalTypes() {
       dmg: (p.stats && p.stats.dmg) || 0,
       hp: (p.stats && p.stats.hp) || 0,
       heal: (p.stats && p.stats.heal) || 0,      // 治疗量：只有部分花瓣有（如 Rose），0 = 无此属性
+      // stats.spd = 【花瓣自身的移动速度】修正（Wing 44 = 飞得快、Rose -12 = 飞得慢），
+      // 不是玩家移速加成 —— 绝不能累加到 Player.speed 上（装多张 Wing 会让角色越跑越快）。
+      // 玩家侧真正生效的加成只有 PetalFX.bonus 给的 rotSpeed / reach / sight。
       spd: (p.stats && p.stats.spd) || 0,
       // 冷却秒数：优先用显式的 reload；否则回退 stats.spd（历史约定，目前只有 Basic 走这条）。
       // 注意 stats.spd 的本义是移动速度修正值（Rose 为 -12），所以有 reload 字段时以它为准。

@@ -66,7 +66,11 @@ class Player {
 
   recompute() {
     // 花瓣血量独立于人物血量：装备花瓣【不再】增加 maxHp（hp 是花瓣自己的"水缸"）。
-    let spd = 0, dmg = 0;
+    let dmg = 0;
+    // 【不要再累加 type.spd】：spd 是【花瓣自身的移动速度】（Wing 44 = 飞得快、
+    // Rose -12 = 飞得慢），跟玩家移速毫无关系。以前把它加进 this.speed，
+    // 于是装一张 Wing 就 +44、装 5 张 eternal Wing 直接 +220 —— 人物越装越快。
+    // 真正影响玩家的加成只有下面 PetalFX.bonus 给的 rotSpeed / reach / sight。
     // ---- 装备加成（装上就生效，与是否装填完成无关；同类可叠加）----
     //   rotSpeed：Faster  → 加最大转速
     //   reach   ：Third Eye → reach 模式下花瓣再向外伸的距离
@@ -87,7 +91,7 @@ class Player {
       this.slotActive[i] = active;
       if (!p || !active) continue;
       const st = petalStatsFor(p.type, p.rarity);   // 按稀有度取值（倍率/整表）
-      dmg += st.dmg; spd += p.type.spd;
+      dmg += st.dmg;
       if (typeof PetalFX !== 'undefined' && PetalFX.bonus) {
         const b = PetalFX.bonus(p.type, p.rarity);
         rotBonus += b.rotSpeed || 0;
@@ -99,7 +103,8 @@ class Player {
     // 注意：maxHp 不在这里重置——它由构造函数给默认值 100，调试参数 ?hp=N 在之外覆盖。
     // 若在此硬编码写回 FLOWER_BASE_HP，则每次换装 recompute() 都会把 ?hp 覆盖回 100，
     // 表现为"一碰就死 / ?hp 无效"。speed / damage 等依赖装填的字段照常重算。
-    this.speed = Math.max(60, this.baseSpeed + spd);
+    // 移速 = 基础值，不受装备花瓣影响（花瓣的 spd 只描述花瓣自己飞多快）。
+    this.speed = this.baseSpeed;
     this.damage = dmg;
     this.bodyDmg = FLOWER_BODY_DMG;   // 体伤：与 maxHp 同源，重算后稳定为 20
     // 最大转速 = 基础 + 所有 Faster 加成（叠加）。/rot-speed 只能在这个值上打 0.1~1.0 的倍率，
