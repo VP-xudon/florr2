@@ -22,6 +22,10 @@ class Mob {
     //   'player'  = 主角血条模式：只有血条，满血不显示、掉血渐显，不显示名称与稀有度
     // 模式在【生成时】定死：非头节即使后来因被打断而升为一段的头，也仍然是 'player'。
     this.plateStyle = 'classic';
+    // 血条下方的额外标签（召唤物 = 'Summon'；普通生物为 null）
+    this.hpBarTag = null;
+    // 永久显示血条（与普通生物一致的 classic 名牌；召唤物显式置 true）
+    this.permanentHpBar = false;
     this.hpBarA = 0;                    // 'player' 模式的血条淡入淡出透明度
     // 各稀有度数值：有表就整表取用（hp/dmg），否则退回基础值
     const rs = type.rarityStats && type.rarityStats[this.rarity];
@@ -51,7 +55,10 @@ class Mob {
     this.maxHp = baseHp; this.hp = baseHp;
     this.dmg = baseDmg;
     // 障碍型生物（registry type=障碍型生物 或 speed=0）：几乎不可移动
-    this.obstacle = (type.type === 'Obstacle') || !(type.speed > 0);
+    // 速度标记解析：type.speed === 'player' = "与玩家基础移速相同"（data.js 执行时
+    // constants 还没加载，所以只能在这里解析 —— Mob 构造一定晚于 constants）。
+    const rawSpeed = (type.speed === 'player') ? PLAYER_BASE_SPEED : type.speed;
+    this.obstacle = (type.type === 'Obstacle') || !(rawSpeed > 0);
     // 速度统一（瓢虫为原型，全体非障碍生物通用）：
     //   仇恨追击 = 玩家默认最高速度 0.90 倍；随机游荡 = 基准 0.95 × (0.3~0.5)
     //   个别物种的差异走数据表（chaseMult / wanderFactor），这里不再判断 slug：
@@ -92,6 +99,9 @@ class Mob {
     this.seed = (Math.random() * 0x7fffffff) | 0;
     this.dots = (svgKey === '3') ? this._makeDots() : null;   // 瓢虫：程序化随机斑点
     this.hostility = (rs && rs.hostility) || type.hostility || 'neutral';   // 仇恨按稀有度（瓢虫 common/unusual 被动、rare+ 中立）
+    // 阵营：'enemy' = 普通生物（默认）；'player' = 玩家阵营的召唤物（Ant Egg 的内容物）。
+    // AI 的目标按阵营选取，见 _pickTarget —— 不再一律盯着玩家。
+    this.faction = 'enemy';
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
     this.lastHitByPlayer = new Map();   // 每只生物分别记录各玩家最近一次实际非毒单击伤害
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
@@ -376,6 +386,16 @@ class Mob {
     }
     const seqR = Math.sqrt(Math.abs(area2) * 0.5 / Math.PI);
     this.r = (seqR > 0 ? seqR : ct.r) * this.drawSize;
+    // 【顶点平均半径】= 轮廓在"任意方向"的典型半径（外接半径 r 是最大值，
+    // 等面积半径会偏小 1~2%）。链式生物（蜈蚣）的节间距必须按它来排，
+    // 否则相邻两节之间会留一道随体型放大的细缝（高等级一眼就能看出来）。
+    {
+      let sumR = 0;
+      for (let i = 0; i < ct.pts.length; i++) {
+        sumR += Math.hypot(ct.pts[i][0], ct.pts[i][1]);
+      }
+      this.rMean = (sumR / ct.pts.length) * this.drawSize;
+    }
     // ---- 行走碰撞箱 ----
     // 同一份凸包，但尺寸换成 min(视觉直径, 1 格瓦片 0.9 倍)：
     // 反推方式 = 让"凸包外接圆半径"不超过 MOB_WALK_LIMIT_R（= 0.45 格 = 0.9 格正方形的内接圆半径），
@@ -404,7 +424,30 @@ class Mob {
 
   get hiddenHpBar() { return !!this.type.hideHpBar; }
 
-  update(dt, player, map) {
+  // 阵营与目标：所有生物都按"非本方阵营"选目标，而不是一律盯着玩家。
+  //   · faction = 'enemy'（默认，普通生物）：目标 = 玩家 + 玩家阵营的召唤物，取更近的
+  //   · faction = 'player'（召唤物）：目标 = 最近的敌对生物（不打玩家、不互殴）
+  _pickTarget(player, others) {
+    const mine = this.faction || 'enemy';
+    let best = null, bestD = Infinity;
+    if (mine !== 'player') {
+      if (player && !player.dead) {
+        best = player;
+        bestD = Math.hypot(player.x - this.x, player.y - this.y);
+      }
+    }
+    for (const m of others || []) {
+      if (!m || m === this || m.dead) continue;
+      if ((m.faction || 'enemy') === mine) continue;      // 同阵营不互打
+      const d = Math.hypot(m.x - this.x, m.y - this.y);
+      if (d < bestD) { best = m; bestD = d; }
+    }
+    // 玩家阵营（召唤物）绝不把玩家当目标：没有敌人就原地待命。
+    if (mine === 'player') return best || null;
+    return best || (player && !player.dead ? player : null);
+  }
+
+  update(dt, player, map, others) {
     // 死亡：只推进退场动画（放大渐隐），退场播完才由 ExitFX.sweep 回收。
     if (this.dead) { ExitFX.tick(this, dt); return; }
     this.age += dt;
@@ -453,10 +496,12 @@ class Mob {
     // 位置全部由 _solveChains 沿头的真实路径解算（不是"跟随前一节"）。
     // 敌对型（aggressive，如蜘蛛）：看见即仇 —— 不必先挨打才反击。
     // 只记 0 伤害的"存在感"：优先级仍由真实伤害决定，不会抢走真正仇恨目标的位次。
-    if (this.hostility === 'hostile' && player && !player.dead && this.canSee(player)) {
-      this._addThreat(player, 0);
+    // 目标按阵营选取（见 _pickTarget）：敌对生物同时仇视玩家与玩家阵营召唤物。
+    const target = this._pickTarget(player, others);
+    if (this.hostility === 'hostile' && target && !target.dead && this.canSee(target)) {
+      this._addThreat(target, 0);
     }
-    const want = MobAI.step(this.ai, dt, this, player);
+    const want = MobAI.step(this.ai, dt, this, target || player || this);
     // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
     // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
     MobAI.limitSpeed(this, want);
@@ -746,6 +791,18 @@ class Mob {
       ctx.strokeText(rarName, br, rarY);
       ctx.fillStyle = rarCol;
       ctx.fillText(rarName, br, rarY);
+
+      // 额外标签（召唤物 = "Summon"）：与稀有度同一行、同一字号/描边，
+      // 稀有度右对齐到血条右端，这个【左对齐】到血条左端，颜色固定 Unusual。
+      if (this.hpBarTag) {
+        const tagCol = (typeof RARITIES !== 'undefined' && RARITIES.unusual)
+          ? RARITIES.unusual.color : '#5ee06a';
+        ctx.textAlign = 'left';
+        ctx.lineWidth = fs * 0.16;
+        ctx.strokeText(this.hpBarTag, bx, rarY);
+        ctx.fillStyle = tagCol;
+        ctx.fillText(this.hpBarTag, bx, rarY);
+      }
       ctx.restore();
     } else if (!this.dead && !this.hiddenHpBar && (this.hpBarA || 0) > 0.001) {
       // 【主角血条模式】（多节生物的非头节，且生成后即使升为一段的头也保持此模式）：

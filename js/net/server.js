@@ -527,10 +527,11 @@ class LocalServer {
   // 断裂处理：某一节死亡后，_lead 被置空，它后面那一节自动成为新一段的起点，
   // 于是整条被切成多段，每段各自独立解算（配合各自的 AI 驱动）。
   _solveChains() {
-    // 相邻两节的标称间距系数：1.002 => 两圆【刚好相切】、留 0.2% 的缝。
-    // 旧值是 0.92（故意重叠 8% 假装"软身体"），用户要求体节一律不许重合，故取消。
-    // 代价是整条链变成"刚性相切链"，弯道时内弯侧必须由下面的硬挤压把非相邻节也推开。
-    const GLUE = 1.002;
+    // 相邻两节的标称间距系数：1.0 => 两节【刚好相接】（不留缝、也不重叠）。
+    // 之前是 1.002（留 0.2% 的缝）配合"等面积半径"，两者都偏小一点点，
+    // 叠起来就是一道随体型放大的细缝 —— 高等级蜈蚣一眼能看出来。
+    // 现在半径改用 rMean（顶点平均半径，见 Mob._ensureShape），系数取 1.0。
+    const GLUE = 1.0;
     // 轨迹采样间距(px)：4px 已经足够平滑，点数只有 1px 时的四分之一。
     // 1px 采样在 45~60 节的超长个体上会产生上千个采样点，再叠加"每节从头查找"
     // 的 O(节数 × 点数) —— 这是帧率被打爆的主因之一。
@@ -541,9 +542,15 @@ class LocalServer {
     // 用【等面积圆半径】而不是外接半径：外接半径会把尖角/触角也算进去，
     // 相邻两节的间距被撑大 -> 体节之间出现明显空隙。
     // e.r 就是 Mob._ensureShape 里按同一份轮廓算出的等面积半径（px）。
-    const radOf = (e) => (e && e.r > 0)
-      ? e.r
-      : ((e && e.shape && e.shape.r) ? e.shape.r * e.drawSize : ((e && e.drawSize) || 24) * 0.35);
+    // 链节间距用【顶点平均半径 rMean】（轮廓在任意方向的典型半径），
+    // 不是等面积半径（偏小 1~2%）也不是外接半径（被尖角撑大）。
+    const radOf = (e) => {
+      if (!e) return 12;
+      if (e.rMean > 0) return e.rMean;
+      if (e.r > 0) return e.r;
+      if (e.shape && e.shape.r) return e.shape.r * e.drawSize;
+      return (e.drawSize || 24) * 0.35;
+    };
 
     // 只遍历【醒着】的个体（this._awake 由 step() 建好）：全图 4000+ 只里绝大多数是休眠的，
     // 以前每步都要为它们整表扫一遍再 continue，纯属白扫。
@@ -840,12 +847,38 @@ class LocalServer {
     this.cpAcc = (this.cpAcc || 0) + dt;
     if (this.cpAcc >= 0.2) { this.cpAcc = 0; this._checkCheckpoints(); }
 
+    // 1.45) 召唤物跟随卡槽：主人把 Ant Egg 换下去，它的召唤物一起退场。
+    // 之前卸下卡片只移除了花瓣实体，召唤物会一直留在场上。
+    if (p && p.slots) {
+      for (const m of this.ents) {
+        if (!m || !m.isSummon || !m.summonFrom || m.dead) continue;
+        const sc = m.summonFrom;
+        const c = p.slots[sc.slotIndex];
+        if (!c || (c.type && c.type.slug) !== sc.slug) {
+          m.dead = true;
+          EntityFX.despawn(m);
+        }
+      }
+    }
+
     // 1.5) 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
     // 【必须把坐标拉回花朵中心】：实体死亡时就地冻结，若复活时沿用旧坐标，
     // 它会在"死掉的那个位置"（往往正贴着生物）凭空出现并立刻判定命中 ——
     // 表现为"新装填的 light 从生物身上/背后冒出，玩家拉开距离也照样打得到"。
     for (const b of p.petals) {
       if (!b.dead || !(b.respawnT > 0)) continue;
+      // 内容物还活着：这个蛋的重装填被挂起（召唤物死亡时才解除）
+      if (b.holdRespawn) {
+        const u = b.summonUnit;
+        const gone = !u || u.dead || this.ents.indexOf(u) < 0;
+        if (gone) {
+          b.holdRespawn = false;
+          b.summonUnit = null;
+          b.respawnT = (b.card.type.reload != null) ? b.card.type.reload : 60;
+        } else {
+          continue;
+        }
+      }
       b.respawnT -= dt;
       if (b.respawnT <= 0) {
         b.respawnT = 0;
@@ -909,7 +942,9 @@ class LocalServer {
       // 位置一律由 _solveChains 沿头的【实际路径】解算，不再使用"跟随前一节"那套
       // （跟随=被头拽着走，与轨迹法冲突，已彻底移除）。
       m._followPt = null;
-      m.update(dt, p, this.map);
+      // 传入本帧醒着的个体：AI 的目标按【阵营】从"玩家 + 其它实体"里选最近的，
+      // 而不是固定盯着玩家（召唤物要打敌对生物，敌对生物也会打召唤物）。
+      m.update(dt, p, this.map, this._awake);
       if (m.hornet && m.hornet.projectiles && m.hornet.projectiles.length) {
         for (const projectile of m.hornet.projectiles) {
           projectile.owner = m;
@@ -1034,6 +1069,38 @@ class LocalServer {
         }
       }
       for (const w of waxes) w.static = true;
+    }
+
+    // 4c) 玩家阵营实体（Ant Egg 的召唤物）：
+    //   · 与敌对生物、玩家之间是【硬碰撞】—— 判定走同一个 _pairHit
+    //     （轮廓/多边形/圆自动分派，与所有实体同一接口），
+    //     修正时【对方整体让位】：重叠量一帧清零，不存在"按质量慢慢挤进去"。
+    //   · 与敌对生物还有【接触伤害】，公式与"花瓣 vs 生物"完全同一套：
+    //     伤害方 dmg − 受击方 armor，钳 0、全额扣；双向成对出现。
+    if (p && !p.dead) {
+      for (const s of awake) {
+        if (!s || s.dead || s.faction !== 'player') continue;
+        // —— vs 玩家：硬碰撞（同阵营，无伤害）——
+        if (p && !p.dead) {
+          const hit = _pairHit(s, p);            // 法线统一 s -> p
+          if (hit && hit.depth > 0) { p.x += hit.nx * hit.depth; p.y += hit.ny * hit.depth; }
+        }
+        // —— vs 敌对生物：硬碰撞 + 双向接触伤害 ——
+        for (let i = 0; i < awake.length; i++) {
+          const m = awake[i];
+          if (!m || m === s || m.dead || (m.faction || 'enemy') === 'player') continue;
+          const hit = _pairHit(s, m);            // 法线统一 s -> m
+          if (hit && hit.depth > 0) { m.x += hit.nx * hit.depth; m.y += hit.ny * hit.depth; }
+          if (m.faction === 'player') continue;
+          const toEnemy = this._dmg(s.dmg || 0, m.armor || 0);
+          const toSummon = this._dmg(m.dmg || 0, s.armor || 0);
+          if (toEnemy > 0) this._hitMob(m, toEnemy);
+          if (toSummon > 0) {
+            s.hp -= toSummon; s.hurtT = 0.3;
+            if (s.hp <= 0) { s.dead = true; EntityFX.despawn(s); }   // 死亡 -> 蛋解除挂起（1.5 段）
+          }
+        }
+      }
     }
 
     // 5) 战斗结算：25 tick/s 固定步长
@@ -1288,14 +1355,26 @@ class LocalServer {
             if (!h) continue;
           } else if (dx * dx + dy * dy > rr * rr) continue;
           const stats = petalStatsFor(b.card.type, b.card.rarity);
-          const applied = this._dmg(PetalFX.damageOf(b, m, p, stats.dmg), stinger.armor || 0);
-          if (applied > 0) {
-            const dealt = MobFX.hurtStinger(m, stinger, applied);
+          // 【血量必须在这里初始化】：与"花瓣 vs 生物"段同一口径。
+          // 少了这一行，b.hp 为 undefined -> b.hp -= dmg 变成 NaN -> 永远 > 0
+          // -> 花瓣既不显示掉血也不会碎（Peas 脱轨后"掉完血还继续飞"就是这个）。
+          if (b.hp == null) { b.hp = b.maxHp = (stats.hp || 30); }
+          // 【双向结算】与"花瓣 vs 生物"完全同一个公式：伤害方 dmg − 受击方 armor，
+          // 钳到 0、全额扣、不做削峰；两侧永远成对出现。
+          const attack = PetalFX.damageOf(b, m, p, stats.dmg);
+          const toStinger = this._dmg(attack, stinger.armor || 0);
+          const toPetal = this._dmg(stinger.dmg || 0, b.armor);
+          if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
+          if (toStinger > 0) {
+            const dealt = MobFX.hurtStinger(m, stinger, toStinger);
             if (dealt > 0) {
               this._events.push({ kind: 'dmg', x: stinger.x, y: stinger.y,
                 r: radius, text: String(Math.round(dealt)), color: DAMAGE_TEXT_COLOR });
             }
           }
+          // 攻击磨损：与撞生物同一口径（按最大耐久的固定比例，每 tick 一次）
+          b.hp -= b.maxHp * PETAL_ATTACK_DUR;
+          if (b.hp <= 0) { this._destroyPetal(b); continue; }
         }
         // 尾针 → 玩家：与生物撞玩家同一套（this._dmg 减护甲、p.hurt 带无敌、
         // 统一击退份额、统一退场）。飞行中才接触伤害。
@@ -1319,6 +1398,8 @@ class LocalServer {
         }
       }
       // —— 花瓣 vs 昆虫（严格按 SVG 轮廓多边形判定，不再用外接圆）——
+      // 玩家阵营的召唤物不与玩家、玩家的花瓣交战（同阵营）。
+      if (m.faction === 'player') continue;
       for (const b of p.petals) {
         if (b.dead || b.fxNoCombat) continue;
         // Peas 喷射中的实体【照常参与伤害结算】：它此刻只是 stationary + 有自己的速度，
@@ -1521,6 +1602,8 @@ class LocalServer {
         kind: 'kill', id: m.netId, mobId: (m.type.id != null ? m.type.id : m.name),
         level: m.level, rarity: m.rarity,
         chain: !!m.chainLong,                // 超长蜈蚣的节：客户端据此追加【隐藏掉落】
+        // 玩家阵营的生物（Ant Egg 召唤物）不产生任何掉落物
+        noDrop: (m.faction === 'player'),
         x: m.x, y: m.y                       // 掉落物出现在生物死亡位置
       });
     }
@@ -1598,6 +1681,46 @@ class LocalServer {
   //   · 单体卡（一张卡 = 一个实体）-> 整槽进入 reload（卡面扇形阴影）；
   //   · 多体卡（Light 等：一张卡 = N 个实体）-> 只让【这一个实体】进入自己的重装填
   //     （respawnT），卡片本身【不】进入 reload —— 其余实体继续正常飞舞。
+  // 从花瓣实体召唤内容物（Ant Egg -> Soldier Ant）。
+  // 数值：同稀有度该物种 × summon.scale；大小（长度）同样 × scale。
+  // 数值表缺失时返回 null（调用方退回普通重装填），绝不编造数值让怪 hp=0。
+  _spawnSummon(src, card, def) {
+    const type = MOB_TYPES.find((t) => t && t.slug === def.slug);
+    if (!type) {
+      if (!this._warnedSummon) { this._warnedSummon = {}; console.warn('[summon] 未知物种', def.slug); this._warnedSummon[def.slug] = 1; }
+      return null;
+    }
+    const base = (type.rarityStats && type.rarityStats[card.rarity]) || null;
+    if (!base || !(base.hp > 0)) {
+      if (!this._warnedSummon) { this._warnedSummon = {}; }
+      const key = def.slug + ':' + card.rarity;
+      if (!this._warnedSummon[key]) {
+        this._warnedSummon[key] = 1;
+        console.warn('[summon] 缺少数值表：', def.slug, card.rarity, '（需补 MOB_RARITY_OVERRIDES）');
+      }
+      return null;
+    }
+    const k = def.scale || 1;
+    const st = Object.assign({}, base, {
+      hp: base.hp * k, dmg: (base.dmg || 0) * k, exp: 0
+    });
+    const type2 = Object.assign({}, type, {
+      rarityStats: Object.assign({}, type.rarityStats, { [card.rarity]: st }),
+      sizeScale: (type.sizeScale || 1) * k
+    });
+    const mob = new Mob(type2, src.x, src.y, 1, card.rarity);
+    mob.netId = this.nextId++;
+    // 玩家阵营：与玩家、其它召唤物同阵营；敌对一切非本方阵营实体
+    mob.faction = 'player';
+    mob.isSummon = true;
+    mob.summonFrom = { slotIndex: src.slotIndex, rarity: card.rarity, slug: card.type.slug };
+    // 血条永久显示 + 血条下方的 "Summon" 标签（Unusual 颜色、左对齐）
+    mob.permanentHpBar = true;
+    mob.hpBarTag = 'Summon';
+    this._addEnt(mob);
+    return mob;
+  }
+
   _destroyPetal(b) {
     const p = this.player;
     // 先问引擎：某些实体"碎了"要留下东西（Web 在飞行途中被打碎 -> 原地立刻张网）。
@@ -1615,6 +1738,19 @@ class LocalServer {
     if (b.stationary) return;
     const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
       ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
+    // 内容物型花瓣（Ant Egg）：死亡 -> 原地召唤一只召唤物，
+    // 并且【这一个蛋】的重装填被挂起，直到它的召唤物死亡（见 1.5) 段与 _onSummonDead）。
+    const summon = c.type && c.type.summon;
+    if (summon) {
+      const unit = this._spawnSummon(b, c, summon);
+      if (unit) {
+        b.holdRespawn = true;
+        b.respawnT = dur;
+        b.summonUnit = unit;
+        return;
+      }
+      // 召唤失败（物种数值表缺失等）：退回普通重装填，避免卡片永久卡死
+    }
     if (cnt > 1) { b.respawnT = dur; return; }
     p.reload[b.slotIndex] = { card: c, age: 0, dur };
   }
@@ -1908,6 +2044,10 @@ class LocalServer {
       o.segIdx = (m.segIdx != null) ? m.segIdx : null;
       // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 entities.js Mob.draw
       o.plateStyle = m.plateStyle || null;
+      // 血条下方额外标签（召唤物 = 'Summon'）与阵营：客户端只负责画/选目标，不做玩法判断
+      o.hpBarTag = m.hpBarTag || null;
+      o.faction = m.faction || 'enemy';
+      o.isSummon = !!m.isSummon;
       // 表现层状态全部由服务端权威置位，必须下发，否则客户端视图实体这些字段恒为 0：
       //   hurtT  = 受伤红闪（0.3s 渐隐）
       //   flash  = 白闪（0.14s 白色剪影）

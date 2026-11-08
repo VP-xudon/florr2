@@ -517,6 +517,9 @@ class Game {
       }
       if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
       if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
+      v.hpBarTag = e.hpBarTag || null;                 // 血条下方额外标签（召唤物 = 'Summon'）
+      v.faction = e.faction || 'enemy';                // 阵营（客户端只用于表现，不参与判定）
+      v.isSummon = !!e.isSummon;
       // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）
       if (e.hurtT > (v.hurtT || 0)) v.hurtT = e.hurtT;
       if (e.flash > (v.flash || 0)) v.flash = e.flash;
@@ -585,8 +588,11 @@ class Game {
       this.recordDefeat(ev.mobId, ev.rarity);
       // 掉落：在生物死亡位置按【该生物稀有度】的掉落表逐种掷骰（可能与不掉落）
       // ev.chain = 该节属于超长蜈蚣 -> 额外掷一套【隐藏掉落】（不进掉落表、不显示在信息栏）
-      this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y,
-        !!(this.player && this.player.magician), !!ev.chain);
+      // ev.noDrop = 玩家阵营的生物（召唤物）：不产生任何掉落物
+      if (!ev.noDrop) {
+        this.spawnMobDrops(ev.mobId, ev.rarity, ev.x, ev.y,
+          !!(this.player && this.player.magician), !!ev.chain);
+      }
   
     } else if (ev.kind === 'hurt') {
       // 玩家份额的反弹：以【速度冲量】施加到预测实体上（随后指数衰减 -> 平滑滑出去），

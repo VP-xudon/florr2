@@ -114,6 +114,15 @@ Object.assign(UI, {
               labelColor: bonusColor
             });
           }
+          // 内容物（Ant Egg）：与 Radius 同色（官方表里 Contents 与 Radius 一个颜色），
+          // 数值形如 "4x Soldier Ant"，数量随这张卡的子实体数动态变化。
+          if (t.contents) {
+            rows.push({
+              label: statLabel('UI/Petal/ContentsLabel', 'Contents:'),
+              value: t.contents,
+              labelColor: bonusColor
+            });
+          }
           // 场地型（Web）：半径用 Max Mob Rarity 同色，持续时间用 Rare 的稀有度色
           if (t.radius > 0) {
             rows.push({

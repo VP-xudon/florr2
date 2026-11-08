@@ -42,7 +42,7 @@ const MOB_POISON_COLOR = '#c58cff';
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
   'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile', 'wax',
-  'rice', 'corn', 'wing'
+  'rice', 'corn', 'wing', 'ant_egg'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -244,6 +244,20 @@ const PETAL_RARITY_OVERRIDES = {
     eternal:   { dmg: 131220, hp: 65610 },
     unique:    { dmg: 131220, hp: 65610 }
   },
+  // Ant Egg：Health 恒为 1（不随稀有度成长，官方表就是每档 1）；
+  // 不造成伤害（它自己不打人，靠内容物 Soldier Ant）。
+  ant_egg: {
+    common:    { dmg: 0, hp: 1 },
+    unusual:   { dmg: 0, hp: 1 },
+    rare:      { dmg: 0, hp: 1 },
+    epic:      { dmg: 0, hp: 1 },
+    legendary: { dmg: 0, hp: 1 },
+    mythic:    { dmg: 0, hp: 1 },
+    ultra:     { dmg: 0, hp: 1 },
+    super:     { dmg: 0, hp: 1 },
+    eternal:   { dmg: 0, hp: 1 },
+    unique:    { dmg: 0, hp: 1 }
+  },
   // Third Eye：装备型饰品，没有伤害/血量，只有 attackRange（reach 模式下多伸出去的距离，px）
   third_eye: {
     common:    { dmg: 0, hp: 0, attackRange: 0 },
@@ -270,7 +284,9 @@ const PETAL_SUB_COUNT = {
   stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 },
   // Peas：所有稀有度均为 4 个实体（单个绿色小球才是实体，见阵型布局）
   peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 },
-  orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 }
+  orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
+  // Ant Egg：所有稀有度都是 4 个蛋实体 = 4 只 Soldier Ant 的内容物
+  ant_egg: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 }
 };
 
 const PETAL_FORMATION_ORBIT_SPOTS = { orange: 8 };
@@ -292,7 +308,7 @@ const PETAL_FORMATION_AUTO_ROTATE = new Set(['orange']);
 //   2) 在 cards.js 的 FORMATION_LAYOUTS 里登记它的布局：
 //      { <实体数>: [ {x, y, k, rot}, ... ] }  // x/y 单位 = 单体直径 D，k = 相对单体缩放，
 //                                             // rot = 相对"单体朝向"的额外旋转（弧度）
-const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas', 'orange']);
+const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas', 'orange', 'ant_egg']);
 
 // ---------------- 一卡多体的【数值显示口径】----------------
 // 有些花瓣的官方模板是【合并显示】的：卡面/悬浮框上写的是"这一整张卡合计"的数值，
@@ -403,6 +419,14 @@ const PETAL_TRAITS = {
   wax: {
     reload: 30, reloadText: '30.0s', sticky: false, noDamage: true,
     autoDetach: true, holdReloadUntilDeath: true
+  },
+  // Ant Egg：60s 装填；不做伤害；一卡 4 个蛋实体（见 PETAL_SUB_COUNT）。
+  // 单个蛋实体死亡 -> 原地召唤一只【玩家阵营】的同等级 Soldier Ant（0.25 尺寸/数值）；
+  // 该蛋【不立刻重装填】，等召唤物死亡后才开始 60s 冷却。
+  ant_egg: {
+    reload: 60, reloadText: '60.0s', sticky: false, noDamage: true,
+    summon: { slug: 'soldier_ant', scale: 0.25 },
+    holdReloadUntilSummonDead: true
   },
   // Rice：极快装填的普通攻击花瓣
   rice: { reload: 0.05, reloadText: '0.05s', sticky: false },
@@ -518,6 +542,9 @@ function buildPetalTypes() {
       selfSpin: tr.selfSpin || 0,
       // 自转轴心偏移（图形中心相对轴心的距离，归一化到绘制尺寸）
       spinOrigin: tr.spinOrigin || null,
+      // 内容物：本体死亡时召唤的物种（Ant Egg -> Soldier Ant）
+      summon: tr.summon || null,
+      holdReloadUntilSummonDead: !!tr.holdReloadUntilSummonDead,
       identified: true,
       wiki: p.wiki || null
     };
@@ -602,6 +629,22 @@ const MISSILE_TIP_ANGLE = Math.atan2(70.538 - 55, 67.096 - 55);
 // 这里按官方最新口径整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
 // 只覆盖列出的稀有度，其余沿用 registry。
 const MOB_RARITY_OVERRIDES = {
+  // Soldier Ant 兵蚁（id 7）：官方表逐档写实。
+  //   hp 100 → 2.6244e9，dmg 10 → 65610，armor 1/2/7/22/65/194/583(超以上固定)，
+  //   exp 1/2/6/44/400/5437/227398/13608888(超以上固定)。
+  // 它是 Ant Egg 的内容物，也作为普通敌对生物存在（本作只用于召唤，不自然生成）。
+  7: {
+    common:    { hp: 100,        dmg: 10,    armor: 1,   exp: 1 },
+    unusual:   { hp: 375,        dmg: 30,    armor: 2,   exp: 2 },
+    rare:      { hp: 1350,       dmg: 90,    armor: 7,   exp: 6 },
+    epic:      { hp: 5400,       dmg: 270,   armor: 22,  exp: 44 },
+    legendary: { hp: 32400,      dmg: 810,   armor: 65,  exp: 400 },
+    mythic:    { hp: 315900,     dmg: 2430,  armor: 194, exp: 5437 },
+    ultra:     { hp: 14580000,   dmg: 7290,  armor: 583, exp: 227398 },
+    super:     { hp: 437400000,  dmg: 21870, armor: 583, exp: 13608888 },
+    eternal:   { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 },
+    unique:    { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 }
+  },
   // Spider 蜘蛛（id 21）：hp/dmg/armor/exp 全部按官方最新口径整表覆盖；
   //   poison     = 命中玩家后施加的【中毒总量】（总量固定，按 poisonRate 均摊扣完）
   //   poisonRate = 中毒的每秒伤害（每秒掉多少，决定这次中毒持续多久 = 总量 / 速率）
@@ -681,6 +724,11 @@ const MOB_TRAITS = {
       mythic: 1.571, ultra: 1.286, super: 1.0, eternal: 0.8, unique: 0.8
     }
   },
+  // Soldier Ant：敌对、直线追击（默认 wander AI 自带 chase/flee + 限速，与瓢虫同一套）。
+  // 体型用默认值；speed 必须显式给（registry 没写），否则会被判成障碍物而原地不动。
+  // 'player' = 构建类型时解析成"玩家的基础移速"（data.js 执行时常量还没加载，不能直接引用）。
+  // 召唤物在此基础上再乘 0.25（见 LocalServer._spawnSummon 的 sizeScale）。
+  soldier_ant: { speed: 'player' },
   centipede: { segmented: true, sizeScale: 1.4 },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
@@ -746,7 +794,15 @@ function buildMobTypes() {
     const mt = MOB_TRAITS[slug] || {};
     const t = {
       id, slug, name: I18N.t('Mobs/' + slug + '/Name', m.name), zh: m.zh || '', svg: id,
-      hp: m.hp, dmg: m.dmg, speed: m.speed, size: m.size, tier: m.tier,
+      // 速度：优先用 traits 显式声明，否则用 registry。
+      // traits 里 speed === 'player' 是【标记】，表示"与玩家基础移速相同"；
+      // 在 Mob 构造时才解析成 PLAYER_BASE_SPEED —— data.js 的执行早于 constants.js，
+      // 在这里直接引用常量会 ReferenceError（buildMobTypes 是顶层调用）。
+      // registry 里没写 speed 的物种（如 Soldier Ant）必须补上，
+      // 否则 Mob 的 `!(type.speed > 0)` 会把它判为障碍物，wanderSpeed 恒 0 —— 原地摇晃。
+      hp: m.hp, dmg: m.dmg,
+      speed: (mt.speed != null) ? mt.speed : m.speed,
+      size: m.size, tier: m.tier,
       color: m.color || '#888', boss: !!m.boss,
       type: m.type || '', biome: m.biome || '', desc: m.desc || '',
       // 仇恨类型代码：'passive' 被动（永不反击追击）/ 'neutral' 中立（被打才追击）/
@@ -828,6 +884,8 @@ const MOB_DROP_TABLE = {
 const MOB_DROP_ITEMS = {
   ladybug: ['light', 'rose', 'mana_orb'],      // Ladybug / 瓢虫
   bee: ['stinger', 'pollen', 'honey'],         // Bee / 蜜蜂（按此顺序展示与掷骰）
+  // Soldier Ant：不装掉落物（官方表未启用；召唤物本身也不产生掉落，见 kill 事件的 noDrop）
+  soldier_ant: [],
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
   spider: ['faster', 'web', 'third_eye', 'magic_eye'],

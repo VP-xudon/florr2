@@ -83,16 +83,27 @@ const MobFX = {
     if (bb && tailBox) {
       const winW = Math.max(bb.w, bb.h);
       const ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
-      // 尾针【尖端】= 尾针包围盒离贴图中心最远的角（11.svg 里 = (99.6,99.6)）
-      const tipDx = Math.max(
-        Math.abs(tailBox.cx - tailBox.w / 2 - ccx), Math.abs(tailBox.cx + tailBox.w / 2 - ccx));
-      const tipDy = Math.max(
-        Math.abs(tailBox.cy - tailBox.h / 2 - ccy), Math.abs(tailBox.cy + tailBox.h / 2 - ccy));
+      // 【向量法】直接记录"贴图中心 -> 尾针中心"的 x/y 分量，不再拆成
+      // "距离 + 方向 + 横向补偿"。绘制时按精灵自身的旋转角旋转这个向量，
+      // 于是尾针永远落在素材画的那个位置（11.svg 里是 45° 右下方），
+      // 头朝上时横向分量自动归零 —— 不需要任何横向偏移常数。
+      const dx = (tailBox.cx - ccx) / winW;
+      const dy = (tailBox.cy - ccy) / winW;
+      // 尾针中轴：包围盒四角里离贴图中心最远的角 = 尖端（11.svg 是 (99.6,99.6)）
+      let tipX = tailBox.cx, tipY = tailBox.cy, best = -1;
+      const corners = [
+        [tailBox.cx - tailBox.w / 2, tailBox.cy - tailBox.h / 2],
+        [tailBox.cx + tailBox.w / 2, tailBox.cy - tailBox.h / 2],
+        [tailBox.cx - tailBox.w / 2, tailBox.cy + tailBox.h / 2],
+        [tailBox.cx + tailBox.w / 2, tailBox.cy + tailBox.h / 2]
+      ];
+      for (const c of corners) {
+        const d = Math.hypot(c[0] - ccx, c[1] - ccy);
+        if (d > best) { best = d; tipX = c[0]; tipY = c[1]; }
+      }
       this.hornetTail = {
-        // 尾针【中心】挂点（贴图中心 -> 尾针中心）
-        off: Math.hypot(tailBox.cx - ccx, tailBox.cy - ccy) / winW,
-        // 尾针【尖端】挂点（贴图中心 -> 尾针尖端）—— 用于与 9.svg 的尖端对齐
-        tipOut: Math.hypot(tipDx, tipDy) / winW,
+        dx, dy,                                      // 贴图中心 -> 尾针中心（归一化到窗口）
+        axis: Math.atan2(tipY - tailBox.cy, tipX - tailBox.cx),  // 尾针中轴（素材坐标系）
         size: Math.max(tailBox.w, tailBox.h) / winW
       };
     }
@@ -175,39 +186,8 @@ const MobFX = {
         }
       } catch (e) { /* 失败就退回整张图，不影响游戏 */ }
     }
-    // 9.svg：运行时测"画布中心 -> 尖端"的比例（d 是小写 m + 相对 lineto，必须累计）。
-    // 挂点公式：off = drawSize×tail.tipOut − size×tipBack
-    //   = 让 9.svg 画出来的尖端正好落在 11.svg 尾针尖端的位置。
-    try {
-      const r9 = await fetch('assets/petals/9.svg?v=' + ASSET_VER);
-      if (r9.ok) {
-        let s9 = await r9.text();
-        const c9 = s9.indexOf('-->');
-        if (s9.trim().startsWith('<!--') && c9 >= 0) s9 = s9.slice(c9 + 3).trim();
-        const d9 = parser.parseFromString(s9, 'image/svg+xml');
-        const svg9 = document.importNode(d9.documentElement, true);
-        svg9.style.cssText = 'position:absolute;left:-9999px;top:0';
-        document.body.appendChild(svg9);
-        const p9 = svg9.querySelectorAll('path');
-        if (p9.length) {
-          const bb9 = svg9.getBBox();
-          const sw9 = parseFloat(p9[0].getAttribute('stroke-width') || '0') / 2;
-          const win9 = Math.max(bb9.width + sw9 * 2, bb9.height + sw9 * 2);
-          const nums = (p9[0].getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g) || [];
-          const tr = /translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/.exec(s9) || null;
-          const ox = tr ? parseFloat(tr[1]) : 0, oy = tr ? parseFloat(tr[2]) : 0;
-          const mx = bb9.x + bb9.width / 2, my = bb9.y + bb9.height / 2;
-          let px = 0, py = 0, tip = 0;
-          for (let i = 0; i + 1 < nums.length; i += 2) {
-            const a = parseFloat(nums[i]), b = parseFloat(nums[i + 1]);
-            if (i === 0) { px = a; py = b; } else { px += a; py += b; }
-            tip = Math.max(tip, Math.hypot(px + ox - mx, py + oy - my));
-          }
-          this.missileTipBack = tip / win9;
-        }
-        svg9.remove();
-      }
-    } catch (e) { /* 测量失败 -> 挂点用中心，影响只是一点视觉偏差 */ }
+    // 尾针位置只用 11.svg 的向量（hornetTail.dx/dy/axis），
+    // 不再需要 9.svg 的"尖端超出量"—— 那层补偿已被证明会把尾针推进身体。
 
     const wax = (typeof PETAL_TYPES !== 'undefined')
       ? PETAL_TYPES.find((t) => t && t.slug === 'wax') : null;
@@ -278,30 +258,26 @@ const MobFX = {
     return this.hurtStinger(mob, mob && mob.hornet && mob.hornet.missile, damage);
   },
 
-  // 尾针挂点（唯一来源，绘制 / tick / F3 全读它）：
-  //   ① 先让 9.svg 的尖端落在 11.svg 尾针尖端的位置（尖端对齐）
-  //   ② 再沿"尾巴方向"向本体中心收 0.5×尾针长度（用户口径：更贴近身体）
-  hornetTailOffset(mob, size) {
-    const ht = this.hornetTail;
-    if (!ht) return mob.drawSize * 0.39;
-    return mob.drawSize * ht.tipOut - (this.missileTipBack || 0) * size - size * 0.5;
-  },
-
   // 尾针在【世界坐标】里的位置与朝向（唯一来源：绘制 / 服务端 tick / F3 全用它）。
-  //   纵向：沿尾巴方向 hornetTailOffset（尖端对齐后再向本体中心收 0.5×长度）
-  //   横向：以"头朝上"为基准向左平移 0.4×宽度（用户口径）——
-  //         尾巴方向 tailA 的 +90° 就是"本体的左侧"，对任意朝向都成立。
+  // 做法：把素材里"贴图中心 -> 尾针中心"这个【向量】按精灵自身的旋转角旋转。
+  //   · 精灵旋转角 = facing + artRot（与 drawMob 画本体时完全同一个角）
+  //   · 于是尾针落在素材画的那个位置；头朝上时该向量恰好指向正下方，
+  //     横向分量为 0 —— 不存在"横向偏移"这个参数，也就不会再偏。
+  //   · 朝向 = 同一旋转角 + 素材里尾针的中轴角。
   hornetTailPoint(mob, size) {
-    const tailA = mob.facing + Math.PI;
-    const off = this.hornetTailOffset(mob, size);
-    const latA = tailA + Math.PI / 2;
-    const lat = size * 0.4;
+    const ht = this.hornetTail;
+    const rot = mob.facing + (mob.artRot || 0);
+    const c = Math.cos(rot), s = Math.sin(rot);
+    const lx = (ht ? ht.dx : 0) * mob.drawSize;
+    const ly = (ht ? ht.dy : 0) * mob.drawSize;
     return {
-      x: mob.x + Math.cos(tailA) * off + Math.cos(latA) * lat,
-      y: mob.y + Math.sin(tailA) * off + Math.sin(latA) * lat,
-      a: tailA
+      x: mob.x + lx * c - ly * s,
+      y: mob.y + lx * s + ly * c,
+      a: rot + (ht ? ht.axis : 0),
+      size
     };
   },
+
   registerField(kind, def) {
     this.fields[kind] = def || {};
     return this.fields[kind];
@@ -572,17 +548,7 @@ MobFX.register('hornet', {
     const size = missile.drawSize || (mob.drawSize * ht.size);
     if (!missile.exiting) {
       // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
-      // 偏移/尺寸按【11.svg 源码】重新推导（viewBox 0 0 110 110，中心 (55,55)）：
-      //   尾针三角形 (96.896,96.896) (84.64,75.447) (75.447,84.64)
-      //   -> 质心 (85.66, 85.66)，距中心 43.36 = 0.394×视口；尖端 59.25 = 0.539×视口
-      //   三角形斜边长 24.7 = 0.225×视口
-      // 取"尾针中心 = 0.394×视口、画幅 = 0.29×视口"。
-      // 【换算到 drawSize】：drawSize 对应的是 SpriteStore 的【裁剪窗口】，不是 viewBox 110；
-      // 直接拿 0.394×drawSize 会让尾针比素材里更靠近身体中心（表现就是"整体右偏"）。
-      // k = 110 / 窗口宽，把"视口比例"换成"裁剪框比例"。
-      // 挂点 = 尖端对齐：让 9.svg 画出来的尖端正好落在 11.svg 尾针尖端的位置。
-      //   off = drawSize×tipOut(本体侧实测) − size×tipBack(尾针素材侧实测)
-      // 两个量都来自素材 getBBox，没有任何手写常数。
+      // 挂点 = 素材向量(dx,dy)按本体旋转角旋转，见 hornetTailPoint。
       const p = MobFX.hornetTailPoint(mob, size);
       MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
       return;

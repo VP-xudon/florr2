@@ -222,7 +222,14 @@ const CardRenderer = (function () {
     3: evenlyRotated(formRing(3, 0.58 / Math.sqrt(3), 0.72 * 1.3, -Math.PI / 2, false))
   };
   // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
-  const FORMATION_LAYOUTS = { stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS };
+  // Ant Egg：4 个蛋，菱形排布（与 Peas 同一个模型）。
+  // 间距取【原四蛋素材的实测比例】：4 个蛋心距整体中心 14.28、单球直径 40
+  // → r = 14.28 / 40 = 0.357（比 Peas 的 0.5279 紧凑得多，还原官方卡面的紧凑菱形）。
+  const ANT_EGG_LAYOUTS = { 4: formDiamond(0.357, 1) };
+  const FORMATION_LAYOUTS = {
+    stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS,
+    ant_egg: ANT_EGG_LAYOUTS
+  };
 
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。

@@ -1073,7 +1073,9 @@ const UI = {
         this._tipSlide = !!(this._tipOn || (now - (this._tipHideAt || 0) < 120));
         if (this._tipSlide) this._tipAlpha = 1;
         this._tip = {
-          name: type.name || '',
+          // 悬浮框标题用【全名】（官方 i18n 的 FullName 键，如 Ant Egg），
+          // 卡面上画的才是短名（Name = Egg）。没有 FullName 的花瓣回落 Name。
+          name: I18N.t('Petals/' + slug + '/FullName', I18N.t('Petals/' + slug + '/Name', type.name || '')),
           rarityName: I18N.t('Rarities/' + rarity + '/Name', rarity),
           rarityColor: (RARITIES[rarity] && RARITIES[rarity].color) || '#fff',
           desc: I18N.t('Petals/' + slug + '/Description', ''),
@@ -1095,6 +1097,19 @@ const UI = {
           // 场地型（Web）：网半径 + 存在时长
           radius: st.radius || 0,
           duration: st.duration || 0,
+          // 内容物（Ant Egg -> Soldier Ant）：显示 "4x Soldier Ant"。
+          // 数量 = 这张卡【实际的子实体数】（lightSubCount），一个实体对应一个召唤物 ——
+          // 所以以后任何一卡多体的召唤型花瓣都会自动显示正确的数量，不用改这里。
+          contents: (() => {
+            const sm = type.summon;
+            if (!sm || !sm.slug) return null;
+            const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
+              ? CardRenderer.lightSubCount(type, rarity) : 1;
+            const mt = (typeof MOB_TYPES !== 'undefined')
+              ? MOB_TYPES.find((mm) => mm && mm.slug === sm.slug) : null;
+            const nm = mt ? (mt.name || mt.slug) : sm.slug;
+            return cnt + 'x ' + nm;
+          })(),
           // 装备型饰品（Third Eye）：没有装填，右上角改画"淡灰圆 + 加号"
           accessory: !!type.accessory,
           // 不可堆叠（Third Eye）：右上角最右侧再加"灰色梯形 + 白 ×"图标
