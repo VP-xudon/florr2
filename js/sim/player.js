@@ -49,6 +49,8 @@ class Player {
     // 不参与伤害结算；{ x, y, r, t, dur, pop, spin }。
     // 受控实体表（sim/exit.js）：移除只能走通用退场后由 sweep 回收，外部无法直接删。
     this.webFields = createExitList();
+    // 服务端下发的场级实体（网）：玩家的网 + 蜘蛛的网合并成一张表，客户端只渲染它。
+    this.netWebs = null;
     // 一卡多批（Pollen / Honey）：每个槽一个"世代号"。脱轨的实体【继续留在 this.petals】
     // 里（stationary），新一批实体用递增的世代号区分 —— 花瓣实体始终是同一套东西，
     // 不区分"跟着玩家的"和"放在地上的"，绘制/碰撞/战斗/仇恨全部复用同一条路径。
@@ -173,17 +175,25 @@ class Player {
   // 进入通用退场（sim/exit.js 的 ExitFX：放大 + 渐隐），播完才被回收。
   spawnWeb(x, y, radius, duration, card) {
     if (!(radius > 0)) return null;
+    // 唯一 id：客户端按 id 把服务端的网对齐到本地实体（玩家的网 "p<n>"，
+    // 蜘蛛的网 "m<n>"）。没有 id 就只能靠数组下标对齐 —— 一张网到期、
+    // 其余网下标全部前移，客户端就会张冠李戴（"网突然换位置 / 不退场"）。
+    this._webSeq = (this._webSeq || 0) + 1;
     const f = {
+      netId: 'p' + this._webSeq,
       x, y, r: radius, t: 0,
       dur: (duration > 0) ? duration : 10,
-      pop: 0, spin: 0, card: card || null
+      pop: 0, spin: 0, card: card || null,
+      owner: 'player',     // 玩家网：只给【生物】挂减速（server._fieldTick 按 owner 区分）
     };
-    this.webFields.add(f);
+    // 服务端：webSink = server.fields（场级实体单源）；客户端：落回 webFields（兼容旧调用）
+    const sink = this.webSink || this.webFields;
+    sink.add(f);
     return f;
   }
 
   _tickWebs(dt) {
-    const arr = this.webFields;
+    const arr = this.webSink || this.webFields;
     if (!arr || !arr.length) return;
     for (let i = 0; i < arr.length; i++) {
       const f = arr.get(i);
@@ -237,11 +247,13 @@ class Player {
   }
 
   update(dt, dir, map, mobs) {
+    // 场级实体（网）的退场推进：与花瓣/生物同一套 ExitFX 通道
+    if (this.netWebs) this.netWebs.sweep(dt);
     if (this.dead) {
       this.deathTimer += dt;
       // 死亡瞬间放出的花瓣退场幽灵继续播完渐隐（0.2s）
       for (const g of this.petalGhosts) g.age += dt;
-      this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
+      this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
       // 退场中的网也要播完（否则会一直挂到下次重生才被回收）
       if (this.webFields && this.webFields.length) this.webFields.sweep(dt);
       return;
@@ -410,10 +422,13 @@ class Player {
       const ns = this._netPetalFor(b);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
-      // 滞留实体（Pollen / Honey）位置与速度取服务端权威值：它们会被生物硬碰撞推挤，
-      // 客户端必须跟随，否则服务端已经把蜜推开、客户端仍留在原地 ->
-      // 表现为"生物与蜜重合"（看起来像根本没有实体碰撞）。
-      if (b.stationary && ns.x != null) {
+      // 花瓣位置与速度【一律取服务端权威值】：客户端不再本地算花瓣运动
+      // （用户口径："客户端只从服务端接收一切需要渲染的东西，自己什么逻辑都不计算"）。
+      // 之前只有滞留型（Pollen / Honey）走权威位置，在轨/飞行中的花瓣仍由客户端本地模拟，
+      // 于是脱轨飞行的那一段两边算法不一致 —— 客户端先把它拉回轨道、服务端还在飞，
+      // 表现就是"向前飞出去，然后突然闪现回来固定"。
+      // 插值（而不是直接赋值）：快照 25Hz，直接采信会按台阶跳。
+      if (ns.x != null) {
         // 不把坐标硬赋值过去：那样它会跟着 25Hz 的快照台阶跳 —— 被连续推挤时
         // 就是明显的"一卡一卡 / 很粘"。改为记录起终点，由每帧插值还原平滑位移。
         if (b.nToX == null || Math.abs(ns.x - b.nToX) > 0.01 || Math.abs(ns.y - b.nToY) > 0.01) {
@@ -651,6 +666,11 @@ class Player {
         body.cnt = cnt;
         body.spot = (nSpot === 1) ? myBase
           : (card.type.formation ? myBase + (nSpot - 1) * 0.5 : myBase + sub);
+        // 【出生角度】= 装填完成、这一片"蹦出来"那一刻的轨道角。
+        // 喷射类（Missile）必须沿这个角度飞出：如果用 detach 那一刻的当前轨道角，
+        // 实体生成后自转已经转过一段距离 → 导弹会朝"之前的角度"斜着飞出去
+        // （用户口径："发射位置不是它加载好的时候蹦出来那个角度，而是之前的角度"）。
+        body.spawnAng = this.spin + body.spot * spotStep;
         // 出生朝向：【底边朝着花朵】= 公转角度 + 90°（素材默认"下方"指向花心），
         // 自转速率也在这里定死（见 _petalSelfRate），之后公转变化不再影响它。
         if (body.selfRot == null) {
@@ -773,7 +793,7 @@ class Player {
     this._applyNetPetalStates();
     // 幽灵推进，超时即真正移除
     for (const g of this.petalGhosts) g.age += dt;
-    this.petalGhosts = this.petalGhosts.filter((g) => g.age < PETAL_GHOST_T);
+    this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
 
     // 花瓣特效引擎：对每片在轨花瓣跑 detect/update（玫瑰等特殊行为在此触发）。
     // 必须在弹簧之前：激活的特效会直接驱动 b.x/b.y，弹簧随后跳过它们。
@@ -1073,6 +1093,11 @@ class Player {
   // 消失不在这里渐隐 —— 到期走通用退场幽灵，两处都做就是双重动画。
   drawWebs(ctx) {
     const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
+    // 网【一律以服务端下发的为准】（netWebs）：玩家的网与蜘蛛自铺/大招的网
+    // 共用同一套"生成 → 到期 → 退场（ExitFX）"流程 —— 蜘蛛的网也因此有了退场动画。
+    // 本地这张 webFields 只是客户端自己的模拟产物（网不再本地生成），
+    // 画两份会重影，所以只在【还没收到快照】时用它兜底。
+    if (this.netWebs && this.netWebs.length) { drawWebList(ctx, this.netWebs, img); return; }
     drawWebList(ctx, this.webFields, img);
   }
 
@@ -1081,7 +1106,7 @@ class Player {
     if (this.dead) {
       for (const g of this.petalGhosts) {
         const size = PETAL_ENT_SIZE;
-        const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
+        const d = deathFade(clamp(g.age / FADE_T, 0, 1));
         // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
         if (g.img) {
           drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));
@@ -1142,7 +1167,7 @@ class Player {
     // 花瓣放大后半宽 10.1px，内缘仍在 33px 处，离主角边缘还有 17px 余量。
     for (const g of this.petalGhosts) {
       const size = PETAL_ENT_SIZE;                         // 与在场花瓣同尺寸
-      const d = deathFade(clamp(g.age / PETAL_GHOST_T, 0, 1));
+      const d = deathFade(clamp(g.age / FADE_T, 0, 1));
       // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
       if (g.img) {
         drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));

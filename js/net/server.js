@@ -6,6 +6,7 @@ class LocalServer {
     this.t = 0;                 // 服务端累计时间（秒）
     this.nextId = 1;
     this.ents = [];             // 权威 Mob 实体（只增不减由 cull 负责）
+    this.fields = createEntitySet('web');   // 场地型实体单源：玩家网 + 敌方蛛网合并一张表
     this.hornetProjectiles = []; // 已发射的独立 Hornet 导弹，不随母体回收
     this.player = null;         // 玩家权威副本（跑同一套物理，供战斗定位）
     this.map = null;            // 碰撞地图（与客户端同一份）
@@ -43,6 +44,7 @@ class LocalServer {
     // 出生状态统一走 Player.resetForSpawn：出生无敌 + 花瓣实体/世代号/装填 与客户端同源。
     // 少了出生无敌时，服务端副本从第 0 帧起就能被打 -> 客户端被快照置为 dead -> 一碰就死。
     p.resetForSpawn(playerTemplate);
+    p.webSink = this.fields;        // 玩家生成的网（Web 花瓣）统一进 server.fields（场级实体单源）
     this._slotSig = '';
     // 地图/玩家就位后立刻按生成表把全图铺满（等价于 /init <map>），避免开局空场
     this.spawnT = 0;
@@ -819,11 +821,6 @@ class LocalServer {
 
   // 权威推进：玩家副本移动 -> 生物 AI/移动 -> 互斥 -> 战斗（固定 25Hz）
   step(dt) {
-    // ---- TEMP PROFILE ----
-    const _pr = this._prof || (this._prof = { t: {}, n: 0 });
-    let _t0 = performance.now();
-    const _mk = (k) => { const n = performance.now(); _pr.t[k] = (_pr.t[k] || 0) + (n - _t0); _t0 = n; };
-    // ---- END TEMP PROFILE ----
     this.t += dt;
     const p = this.player;
     if (!p || !this.map) return;
@@ -841,7 +838,6 @@ class LocalServer {
       if (!p.dead) p.update(dt, { x: this._input.dx, y: this._input.dy }, this.map, near);
       else p.update(dt, { x: 0, y: 0 }, this.map, near);
     } finally { PetalFX._suppress = _sup; }
-    _mk('player');
 
     // 1.2) 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
     this.cpAcc = (this.cpAcc || 0) + dt;
@@ -934,6 +930,11 @@ class LocalServer {
         // 少了这一步，从中间把头打断后，后半截的威胁表是空的（仇恨只记在头与被打的那一节上），
         // 新头会一脸茫然地继续游荡；继承之后两段都会继续追打它的人。
         m.inheritThreat(m._lead);
+        // 【继承仇恨后不转向】（用户口径："如果天然继承仇恨那就继续沿着前面的路径
+        // 不转向奔向玩家"）：新段首沿打断那一刻的航向继续直行一小段时间。
+        // 旧行为是继承完立刻朝仇恨目标转身 —— 整条会先绕一大圈才扑上来。
+        m.keepCourse = 0.9;   // 保持航向的时长（秒）
+        m.keepDir = { x: Math.cos(m.facing || 0), y: Math.sin(m.facing || 0) };
         m._lead = null;
       }
       // 段首（没有前一节）= 这一段的新头：必须解除"被粘合"标记，否则它会一直
@@ -962,7 +963,6 @@ class LocalServer {
     // 【回收口径】只摘"退场动画已播完"的个体（ExitFX.done）—— 退场没播完就还在场。
     if (needCompact) this.ents = this.ents.filter((m) => !ExitFX.done(m));
     this._tickHornetProjectiles(dt);
-    _mk('mobs');
 
     // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
     this.spawnT = (this.spawnT || 0) + dt;
@@ -1109,7 +1109,6 @@ class LocalServer {
       this._combatAcc -= 1 / 25;
       this._combatTick();
     }
-    _mk('push+combat');
 
     // 6) 多节生物【刚性粘合】—— 必须放在【最后】。
     // 前面所有会改坐标的步骤（AI 移动、玩家推挤、生物两两推挤、战斗击退）都跑完之后
@@ -1126,8 +1125,6 @@ class LocalServer {
     // 放在【最后】：前面任何一步早退（玩家死亡等）都不该让它停产；
     // 而且生成位置要用本步定稿后的坐标。
     this._bumbleTick(dt);
-    _mk('chain+field');
-    _pr.n++;
   }
 
   // 场地实体产出用的"原语"：MobFX 认识要什么（蛛网 / 倍率），服务器只管怎么造。
@@ -1142,7 +1139,12 @@ class LocalServer {
           return self._webType;
         },
         webDur() { return SPIDER_WEB_DUR; },
-        addWeb(ent) { self.mobWebs.add(ent); },
+        addWeb(ent) {
+          // 单调数字 id（与生物/弹体同一 nextId），客户端按 id 对齐，不会下标漂移。
+          ent.netId = self.nextId++;
+          ent.owner = 'mob';          // 敌方蛛网：只给【玩家】挂减速，不给生物
+          self.fields.add(ent);
+        },
       };
     }
     return this._fctx;
@@ -1204,17 +1206,26 @@ class LocalServer {
     const p = this.player;
     if (!p) return;
     const src = this._awake || this.ents;
+    const fields = this.fields;
+    const fieldsLen = fields.length;
 
-    // ---- 玩家的网（Web 花瓣）：给站在上面的生物挂减速 ----
-    const webs = p.webFields;
-    if (webs && webs.length) {
+    // ---- 场地型实体（网）计时 + 退场：一张表，统一推进；退场播完由 sweep 回收 ----
+    for (let i = 0; i < fieldsLen; i++) {
+      const w = fields.get(i);
+      if (!w || w.exiting) continue;
+      w.t = (w.t || 0) + dt;
+      w.pop = Math.min(1, w.pop + dt / WEB_POP_T);
+      if (w.t >= w.dur) EntityFX.despawn(w);
+    }
+    fields.sweep(dt);
+
+    // ---- 玩家的网（Web 花瓣）：给站在上面的【生物】挂减速 ----
+    if (fieldsLen) {
       for (const m of src) {
         if (m.dead || m.sleeping) continue;
-        // 网对【所有生物】生效：生物与玩家永远是不同阵营（被动型只是不主动攻击，
-        // 并不代表它是玩家这边的）。之前按 hostility==='passive' 跳过，
-        // 而 common/unusual 的瓢虫恰好都是 Passive —— 于是"网好像完全不起作用"。
-        for (const w of webs) {
-          if (w.exiting) continue;              // 正在退场的网不再生效
+        for (let i = 0; i < fieldsLen; i++) {
+          const w = fields.get(i);
+          if (!w || w.exiting || w.owner === 'mob') continue;  // 只处理玩家网（owner !== 'mob'）
           const r = w.r || 0;
           if (!(r > 0)) continue;
           const dx = m.x - w.x, dy = m.y - w.y;
@@ -1225,27 +1236,29 @@ class LocalServer {
       }
     }
 
-    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）----
-    // 给踩进去的【玩家】挂减速。蜘蛛自己铺的网不会减自己的速（它根本不在这个判定里）。
-    // 【退场强绑定】网到期不是凭空消失，而是进入通用退场（放大 + 渐隐），
-    // 退场播完才由 ExitFX 回收（受控实体表拿不到原始数组，外部无法直接删）。
-    this.mobWebs = this.mobWebs || createExitList();
-    for (const w of this.mobWebs) {
-      if (w.exiting) continue;                 // 正在退场：不再计时，也不再施加效果
-      w.t += dt;
-      w.pop = Math.min(1, w.pop + dt / WEB_POP_T);
-      if (w.t >= w.dur) ExitFX.begin(w);
+    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：给【玩家】挂减速 ----
+    if (fieldsLen && !p.dead) {
+      for (let i = 0; i < fieldsLen; i++) {
+        const w = fields.get(i);
+        if (!w || w.exiting || w.owner !== 'mob') continue;  // 只处理敌方网
+        const dx = p.x - w.x, dy = p.y - w.y;
+        if (dx * dx + dy * dy <= w.r * w.r) {
+          StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
+          break;
+        }
+      }
     }
-    this.mobWebs.sweep(dt);                     // 唯一的回收点
+
+    // ---- 常规自铺网（Legend+ 蜘蛛）+ 大招产出：走 produceField -> ctx.addWeb -> this.fields ----
     for (const m of src) {
       if (m.dead || m.sleeping) continue;
-      // ---- 大招产出（引擎驱动）：MobFX 认识"蜘蛛要一张 2 倍半径的蛛网"，
-      //      服务器只提供"怎么造一张网"的原语（ctx），物种知识留在 MobFX 里。
+      // 大招产出（引擎驱动）：MobFX 认识"蜘蛛要一张 2 倍半径的蛛网"，
+      // 服务器只提供"怎么造一张网"的原语（ctx），物种知识留在 MobFX 里。
       if (m.ultFieldReq) {
         const req = m.ultFieldReq; m.ultFieldReq = null;
         MobFX.produceField(m, req, this._fieldCtx());
       }
-      // ---- 常规自铺网（Legend+ 蜘蛛）----
+      // 常规自铺网（Legend+ 蜘蛛）
       if (!m.gaitSprite) continue;
       if (RARITY_ORDER.indexOf(m.rarity) < RARITY_ORDER.indexOf('legendary')) continue;
       if (m.ultActive) continue;                // 大招期间不铺普通网（正在放大招）
@@ -1254,16 +1267,6 @@ class LocalServer {
         m.webT = 0;
         // 网的大小 = 该蜘蛛稀有度对应的 Web 花瓣半径（数据表，不硬编码）
         MobFX.produceField(m, { kind: 'web', mul: 1 }, this._fieldCtx());
-      }
-    }
-    if (this.mobWebs.length && !p.dead) {
-      for (const w of this.mobWebs) {
-        if (w.exiting) continue;                 // 正在退场的网不再生效
-        const dx = p.x - w.x, dy = p.y - w.y;
-        if (dx * dx + dy * dy <= w.r * w.r) {
-          StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
-          break;
-        }
       }
     }
   }
@@ -1976,6 +1979,10 @@ class LocalServer {
       // 它们会被生物硬碰撞推挤，客户端若只按自己算的就永远停在原地 ——
       // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
       petals: this._snapPetals(p),
+      // 场级实体（网）：玩家的网 + 蜘蛛自铺/大招的网，全部下发。
+      // 客户端只渲染这里下发的网 —— 不再本地"补一张"，于是两类网共用同一套
+      // 生成 / 到期 / 退场（ExitFX）流程，蜘蛛的网也有退场动画。
+      webs: this._snapWebs(),
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
       ents: this._fillEnts(),
       projectiles: this._fillHornetProjectiles()
@@ -1999,7 +2006,11 @@ class LocalServer {
         slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
         hurtT: b.hurtT || 0, dead: !!b.dead
       };
-      if (b.stationary) { o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0; }
+      // 【所有花瓣都下发位置与速度】—— 客户端不再自己算花瓣运动（用户口径：
+      // "客户端只从服务端接收一切需要渲染的东西"）。只给滞留型下发的后果是
+      // Pollen/Honey 脱轨飞行的那一段仍由客户端本地模拟：客户端把它拉回轨道、
+      // 服务端却还让它在飞 —— 两套物理必然打架，表现为"飞出去又闪现回固定"。
+      o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0;
       out.push(o);
     }
     const slots = p.slots || [];
@@ -2016,6 +2027,25 @@ class LocalServer {
       for (let sub = 0; sub < Math.max(1, cnt); sub++) {
         out.push({ slot: i, sub, gen, hp: 0, maxHp: 0, hurtT: 0, dead: true });
       }
+    }
+    return out;
+  }
+
+  // 快照里的【场级实体】（网）：单一来源 this.fields（玩家网 + 蜘蛛自铺/大招的网合并）。
+  // id 全部来自 nextId++（单调），客户端按 id 对齐，不会下标漂移。
+  _snapWebs() {
+    const out = [];
+    const fields = this.fields;
+    const len = fields.length;
+    for (let i = 0; i < len; i++) {
+      const f = fields.get(i);
+      if (!f) continue;
+      out.push({
+        id: f.netId,
+        x: f.x, y: f.y, r: f.r, t: f.t || 0, dur: f.dur || 0, pop: f.pop || 0,
+        exiting: !!f.exiting,
+        owner: f.owner || null,   // 'mob' = 敌方蛛网（只减速玩家），其它 = 玩家网（只减速生物）
+      });
     }
     return out;
   }
