@@ -2116,18 +2116,19 @@ class LocalServer {
   }
 
   _fillHornetProjectiles() {
-    const src = this.hornetProjectiles || [];
+    const src = this.hornetProjectiles || new Map();
     const out = this._projectileBuf || (this._projectileBuf = []);
-    for (let i = 0; i < src.length; i++) {
-      const p = src[i];
+    let i = 0;
+    for (const p of src.values()) {
       const o = out[i] || (out[i] = {});
       o.id = p.id; o.parentId = p.parentId;
       o.x = p.x; o.y = p.y; o.facing = p.facing;
       o.hp = p.hp; o.maxHp = p.maxHp; o.hurtT = p.hurtT || 0;
       o.age = p.age || 0; o.exiting = !!p.exiting; o.exitT = p.exitT || 0;
       o.dead = !!p.dead; o.radius = p.radius || 0; o.drawSize = p.drawSize || 0;
+      i++;
     }
-    out.length = src.length;
+    out.length = i;
     return out;
   }
 }
