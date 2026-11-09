@@ -70,7 +70,7 @@ class LocalNet extends Net {
   // 与权威同进程，可以同步拿结果（重生点等）
   requestSync(kind, payload) { return this._server.handleRequest(kind, payload); }
 
-  // 调试 / 自测专用：读取权威世界内部状态。业务代码请走 request / 快照。
+  // 调试专用：读取权威世界内部状态。业务代码请走 request / 快照。
   get debugServer() { return this._server; }
 
   // 由客户端主循环驱动：本地实现零延迟，因此每帧都推进服务端。

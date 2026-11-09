@@ -130,12 +130,15 @@ const CardRenderer = (function () {
   // ---- 多体花瓣（Light）----
   // 数量（N）由数据层给出，唯一来源是 data.js 的 PETAL_SUB_COUNT（见 lightSubCount）。
   // 官方维基 + 本作实装口径：common 1 / unusual,rare 2 / epic,legendary 3 /
-  //   mythic,ultra 5 / super,eternal 6（顶层 6 个对应 Duplicator 天赋效果；
-  //   按约定【不存在 4 个】这种排布）。
+  //   mythic,ultra 5 / super,eternal 6（顶层 6 个对应 Duplicator 天赋效果）。
+  //   另外 Ant Egg 是 light 型、每档都是 4 个实体 -> 也需要 4 这一档。
+  // 【卡面数量必须与实体数量一致】：两者都由 lightSubCount() 决定，
+  // 卡面取不到对应档位就会退回"1 个"，看起来像"卡面和实际数量对不上"。
   // 所有排布都以「单个 Light 的直径 D」为单位，卡面与实体共用同一套布局：
   //   1 -> 单个居中
   //   2 -> 平行并排，中间留缝，不越出卡面
   //   3 -> 三角形
+  //   4 -> 正方形（Ant Egg），间距与 2/3 一致，不越出卡面
   //   5 -> 五边形紧贴，中心留空
   //   6 -> 更紧贴、轻微交叠，逐个叠压（风车感）
   function lightRing(n, r, k, start) {
@@ -222,13 +225,8 @@ const CardRenderer = (function () {
     3: evenlyRotated(formRing(3, 0.58 / Math.sqrt(3), 0.72 * 1.3, -Math.PI / 2, false))
   };
   // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
-  // Ant Egg：4 个蛋，菱形排布（与 Peas 同一个模型）。
-  // 间距取【原四蛋素材的实测比例】：4 个蛋心距整体中心 14.28、单球直径 40
-  // → r = 14.28 / 40 = 0.357（比 Peas 的 0.5279 紧凑得多，还原官方卡面的紧凑菱形）。
-  const ANT_EGG_LAYOUTS = { 4: formDiamond(0.357, 1) };
   const FORMATION_LAYOUTS = {
-    stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS,
-    ant_egg: ANT_EGG_LAYOUTS
+    stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS
   };
 
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。

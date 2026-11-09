@@ -79,7 +79,7 @@ const MobAI = {
   // 原来这里有一整套 _ultimateOf / _ultDelay / _ultimateStep，
   // 加上"蜘蛛专属参数"散落在 mob.js / server.js / game.js 三层。
   // 现在统一由 js/mob-fx.js 承担：新增物种的大招只要加一条 MobFX.register。
-  // 保留这两个薄封装只为兼容旧调用点（自测里还在用 MobAI._util / MobAI.defs）。
+  // 保留这两个薄封装只为兼容旧调用点（调试面板与旧代码仍在用 MobAI._util / MobAI.defs）。
   _ultimateOf(def, mob) {
     if (!def || !def.ultimate) return null;
     const probe = { type: { slug: mob && mob.type && mob.type.slug }, rarity: mob && mob.rarity };
@@ -383,6 +383,43 @@ MobAI.register('hornet', {
   },
   notifyMoved(ai, d) { MobAI.defs.bee.notifyMoved(ai, d); },
   facing(ai, mob) { return mob.facing; },
+});
+
+// 召唤物（Soldier Ant）—— 由 Ant Egg 花瓣召唤出来的玩家从属。
+//   规则（用户口径）：
+//   · 离玩家超过 350px：以【1.1× 玩家速度】跟随玩家（不掉队、不乱跑）；
+//   · 距离 < 200px 或【发现了新的仇恨】（仇恨目标不是玩家）：停止跟随，转入通用 AI 作战。
+//   它和普通生物走【同一套】AI / 碰撞 / 渲染管线，只是多了一段"跟随"决策。
+MobAI.register('soldier_ant', {
+  init(mob) {
+    // 【注意】通用 wander 注册项没有 init 方法 —— 直接调 MobAI.defs.wander.init(mob)
+    // 会抛 TypeError，而 Mob 构造函数末尾的 MobAI.attach() 会调用它：
+    // 一次召唤（Ant Egg 死亡）就能让服务端 tick 崩掉、整局卡死。
+    const w = MobAI.defs.wander;
+    if (w && typeof w.init === 'function') w.init(mob);
+    mob.speed = mob.wanderSpeed;
+  },
+  create() {
+    const ai = MobAI.defs.wander.create();
+    ai.kind = 'summon';
+    return ai;
+  },
+  step(ai, dt, mob, player) {
+    if (player && !player.dead) {
+      const dx = player.x - mob.x, dy = player.y - mob.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const threat = mob.topThreat ? mob.topThreat() : null;
+      const newThreat = !!(threat && threat.ent && threat.ent !== player);
+      if (d > 350 && !newThreat) {
+        const sp = 1.1 * PLAYER_BASE_SPEED;
+        ai.dirX = dx / d; ai.dirY = dy / d;
+        return { x: dx / d * sp, y: dy / d * sp };
+      }
+    }
+    return MobAI.defs.wander.step(ai, dt, mob, player);
+  },
+  notifyMoved(ai, d) { MobAI.defs.wander.notifyMoved(ai, d); },
+  facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
 });
 
 // ============================================================================

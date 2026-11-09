@@ -14,13 +14,13 @@ const TouchCtl = {
   _stick: { id: -1, bx: 0, by: 0, size: 120 },
   _held: { A: 0, B: 0 },
 
-  // forceOn：强制启用（?touch=1 与自测走这条路），undefined 时按设备能力自动判断
+  // forceOn：强制启用（?touch=1 走这条路），undefined 时按设备能力自动判断
   init(game, forceOn) {
     this.game = game;
     // 粗指针 / 有触摸点 -> 启用触控层。桌面浏览器（纯鼠标）不创建任何元素。
     const coarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     const touchPoints = (navigator.maxTouchPoints || 0) > 0;
-    // ?touch=1：在桌面浏览器里强制显示触控层（开发/自测用，不影响自动判断）
+    // ?touch=1：在桌面浏览器里强制显示触控层（开发预览用，不影响自动判断）
     const force = /[?&]touch=1(?:&|$)/.test(location.search);
     this.on = !!(forceOn === true || coarse || touchPoints || force);
     if (!this.on) return;

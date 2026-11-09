@@ -342,8 +342,6 @@ const SLOW_TILE_SPEED = 0.4;
 // 再由 ExitFX.sweep() 回收，绝不允许直接 splice/pop（那会让实体凭空消失）。
 const FADE_T      = 0.1;
 const DEATH_SCALE = 1.5;
-// 卸下/被打碎的花瓣退场时长：与全体实体统一的 0.1s 快速渐隐。
-const PETAL_GHOST_T = 0.1;
 function spawnFade(age) { return clamp(age / FADE_T, 0, 1); }                 // 出场：0 -> 1 的 alpha
 // Q 弹出场：easeOutBack 缩放曲线 —— 从小弹出、过冲到 ~1.1 再落回 1，配合 0.1s 时长很有弹性
 function spawnPop(age) {

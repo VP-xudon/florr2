@@ -308,7 +308,9 @@ const PETAL_FORMATION_AUTO_ROTATE = new Set(['orange']);
 //   2) 在 cards.js 的 FORMATION_LAYOUTS 里登记它的布局：
 //      { <实体数>: [ {x, y, k, rot}, ... ] }  // x/y 单位 = 单体直径 D，k = 相对单体缩放，
 //                                             // rot = 相对"单体朝向"的额外旋转（弧度）
-const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas', 'orange', 'ant_egg']);
+// 【Ant Egg 不在这里】：它是【light 型】—— 4 个蛋各占一个轨道位、各自公转，
+// 不保持紧凑阵型（做成 Peas 那种菱形阵型是错的）。
+const PETAL_FORMATION_SLUGS = new Set(['stinger', 'peas', 'orange']);
 
 // ---------------- 一卡多体的【数值显示口径】----------------
 // 有些花瓣的官方模板是【合并显示】的：卡面/悬浮框上写的是"这一整张卡合计"的数值，
@@ -684,17 +686,24 @@ const MOB_RARITY_OVERRIDES = {
     eternal:   { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 },
     unique:    { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 }
   },
+  // Hornet 黄蜂 —— 数值【严格取自官方表 scripts/mobs_real.json（id 11）】：
+  //   官方只有两列：hp 与 dmg。HP 是 x3 档（50->150->450->...->328050），
+  //   伤害是 x5 档（5->25->125->...->1953125）。两列必须各归各位 ——
+  //   旧表把官方 hp 填进了 dmg、官方 dmg 填进了 missileHp，属于整列错位。
+  //   导弹（尾针）是 Hornet 的延伸，官方没单列第三组数，这里取同档的 hp/dmg
+  //   （血量 = 本档 hp，命中伤害 = 本档 dmg），装填时间仍是本地设计（2->10s 递增）。
   11: {  // Hornet 黄蜂
-    common:    { hp: 60,         dmg: 50,     armor: 1,   exp: 1,        missileHp: 5,       missileDmg: 10,    missileDur: 2 },
-    unusual:   { hp: 225,        dmg: 150,    armor: 2,   exp: 2,        missileHp: 25,      missileDmg: 30,    missileDur: 3 },
-    rare:      { hp: 810,        dmg: 450,    armor: 7,   exp: 6,        missileHp: 125,     missileDmg: 90,    missileDur: 4 },
-    epic:      { hp: 3240,       dmg: 1350,   armor: 22,  exp: 53,       missileHp: 625,     missileDmg: 270,   missileDur: 5 },
-    legendary: { hp: 19440,      dmg: 4050,   armor: 65,  exp: 486,      missileHp: 3125,    missileDmg: 810,   missileDur: 6 },
-    mythic:    { hp: 189540,     dmg: 12150,  armor: 194, exp: 6856,     missileHp: 15625,   missileDmg: 2430,  missileDur: 7 },
-    ultra:     { hp: 8748000,    dmg: 36450,  armor: 583, exp: 266727,   missileHp: 78125,   missileDmg: 7290,  missileDur: 8 },
-    super:     { hp: 262440000,  dmg: 109350, armor: 583, exp: 16401473, missileHp: 390625,  missileDmg: 21870, missileDur: 9 },
-    eternal:   { hp: 1574640000, dmg: 328050, armor: 583, exp: 16401473, missileHp: 1953125, missileDmg: 65610, missileDur: 10 },
-    unique:    { hp: 1574640000, dmg: 328050, armor: 583, exp: 16401473, missileHp: 1953125, missileDmg: 65610, missileDur: 10 }
+    common:    { hp: 50,     dmg: 5,       armor: 1,   exp: 1,        missileHp: 50,     missileDmg: 5,      missileDur: 2 },
+    unusual:   { hp: 150,    dmg: 25,      armor: 2,   exp: 2,        missileHp: 150,    missileDmg: 25,     missileDur: 3 },
+    rare:      { hp: 450,    dmg: 125,     armor: 7,   exp: 6,        missileHp: 450,    missileDmg: 125,    missileDur: 4 },
+    epic:      { hp: 1350,   dmg: 625,     armor: 22,  exp: 53,       missileHp: 1350,   missileDmg: 625,    missileDur: 5 },
+    legendary: { hp: 4050,   dmg: 3125,    armor: 65,  exp: 486,      missileHp: 4050,   missileDmg: 3125,   missileDur: 6 },
+    mythic:    { hp: 12150,  dmg: 15625,   armor: 194, exp: 6900,     missileHp: 12150,  missileDmg: 15625,  missileDur: 7 },
+    ultra:     { hp: 36450,  dmg: 78125,   armor: 583, exp: 328000,   missileHp: 36450,  missileDmg: 78125,  missileDur: 8 },
+    super:     { hp: 109350, dmg: 390625,  armor: 583, exp: 16000000, missileHp: 109350, missileDmg: 390625, missileDur: 9 },
+    // 官方表"永恒"档是 0（未收录），按 HP x3 / 伤害 x5 的序列补齐。
+    eternal:   { hp: 984150,  dmg: 9765625, armor: 583, exp: 16000000, missileHp: 984150,  missileDmg: 9765625, missileDur: 10 },
+    unique:    { hp: 328050, dmg: 1953125, armor: 583, exp: 16000000, missileHp: 328050, missileDmg: 1953125, missileDur: 10 }
   }
 };
 
@@ -733,12 +742,10 @@ const MOB_TRAITS = {
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
   //   gait = 有"换帧步态"（八条腿随行进摆动，见 render/spider-gait.js）
-  //   collider = 碰撞箱【手写】：只有中间那一个圆（身体），周边摆动的腿不算。
-  //     k = 圆半径 / 视觉直径。实测身体外接半径 ≈ 0.36 × 视觉直径
-  //     （assets/mobs/21.svg 的身体是一个以 (55,55) 为心、半径 ≈10.3 的圆，
-  //       相对 61.1 宽的 viewBox + 固定裁剪框换算过来正好是这个比例）。
-  //     刻意【不走脚本提取】：脚本提取出来的是"带描边的身体轮廓多边形"，
-  //     会随描边宽度和采样精度漂；这里要的是"身体那个圆"，手写一个系数最稳。
+  //   碰撞箱【不手写】：默认从【原 SVG 提取】，且只取"去掉腿的身体"
+  //     （SpiderGait.bodyUrl() 把 8 条腿的 path 从 SVG 文本里删掉后再提取）。
+  //     assets/mobs/21.svg：身体 = 两个同心圆（外圈 r≈10.31 / 内圈 r≈7.37，圆心 55,55），
+  //     8 条腿却伸到 ~30 —— 用含腿的轮廓会让碰撞箱大出近 3 倍。
   spider: {
     sightR: 500, gait: true,
     // 蜘蛛免疫自己（和同类）铺的蛛网：网是用来困住猎物的，不该拖慢自己

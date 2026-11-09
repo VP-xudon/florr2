@@ -71,7 +71,7 @@ class Mob {
     this.speed = this.wanderSpeed;
     // 物种差异（蜈蚣的慢速游荡 + 高速追击、蜜蜂的 S 型摆头等）
     // 全部由各自的 AI 定义在 init(mob) 里声明，构造函数不再按物种写分支。
-    // 这里只保留一个数据标记，方便自测/调试屏幕识别多节生物。
+    // 这里只保留一个数据标记，方便调试屏幕识别多节生物。
     this._isCentipede = !!type.segmented;
     // 视野半径（px）：超出或中间隔墙 -> 看不见（见 canSee / topThreat）
     this.sightR = type.sightR || MOB_SIGHT_R;
@@ -501,7 +501,16 @@ class Mob {
     if (this.hostility === 'hostile' && target && !target.dead && this.canSee(target)) {
       this._addThreat(target, 0);
     }
-    const want = MobAI.step(this.ai, dt, this, target || player || this);
+    let want;
+    if (this.keepCourse > 0) {
+      // 【保持航向】（蜈蚣断链继承仇恨后）：这段时间不问 AI、不转向新目标，
+      // 沿继承前那一刻的航向直行 —— 打断处自然衔接，不会"绕很大一圈再过来"。
+      this.keepCourse -= dt;
+      const sp = this.chaseSpeed || this.speed || 0;
+      want = { x: this.keepDir.x * sp, y: this.keepDir.y * sp };
+    } else {
+      want = MobAI.step(this.ai, dt, this, target || player || this);
+    }
     // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
     // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
     MobAI.limitSpeed(this, want);

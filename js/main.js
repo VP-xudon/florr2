@@ -1,21 +1,6 @@
 // main.js — 资源加载引导（非阻塞，绝不卡死加载界面）
 'use strict';
 
-// ---- 自测开关（仅 ?selftest=1 生效）----
-// 错误钩子必须在 boot 之前安装，才能捕获初始化阶段的异常；正常游玩时只有一个正则判断。
-const SELFTEST_ENABLED = /[?&,]selftest=1(?:&|$)/.test(location.search);
-window.__selftestErrors = [];
-if (SELFTEST_ENABLED) {
-  window.addEventListener('error', (e) => {
-    const err = e.error;
-    window.__selftestErrors.push('[error] ' + (e.message || (err && err.message) || 'unknown'));
-  });
-  window.addEventListener('unhandledrejection', (e) => {
-    const r = e.reason;
-    window.__selftestErrors.push('[reject] ' + ((r && r.message) || String(r)));
-  });
-}
-
 const ASSET_LIST = [];
 // 花瓣/生物素材带 ASSET_VER：内容换过但文件名没变，必须靠版本号强制浏览器重新拉取
 for (const p of PETAL_TYPES) ASSET_LIST.push(['petal' + p.svg, 'assets/petals/' + p.svg + '.svg?v=' + ASSET_VER]);

@@ -476,10 +476,12 @@ PetalFX.register('orange', {
 PetalFX.register('missile', {
   detach(ctx) {
     const body = ctx.petal, player = ctx.player;
-    // 方向 = 它此刻所在的轨道角（尖端本来就朝这个方向）；
-    // 刚生成时位置可能还在本体中心，所以优先用引擎传进来的轨道角。
-    const ang = (ctx.orbitAngle != null) ? ctx.orbitAngle
-      : Math.atan2(body.y - player.y, body.x - player.x);
+    // 方向 = 它【装填完成、蹦出来那一刻】的轨道角（body.spawnAng）：
+    // 用 detach 时刻的当前轨道角会偏离（自转已经转过一段），表现为"朝之前的角度飞"。
+    // 老实体没有 spawnAng 时才退回引擎传的轨道角 / 坐标夹角。
+    const ang = (body.spawnAng != null) ? body.spawnAng
+      : ((ctx.orbitAngle != null) ? ctx.orbitAngle
+        : Math.atan2(body.y - player.y, body.x - player.x));
     const speed = (ctx.type.launch.speedK || 1.3) * PLAYER_BASE_SPEED;
     body.flightRot = ang - MISSILE_TIP_ANGLE;   // 绘制：尖端对准飞行方向
     body.flightSpin = 0;                        // 飞行中不旋转
