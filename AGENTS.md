@@ -1,7 +1,7 @@
 # florr2 项目记忆
 
 > 给后续开发者 / AI 的项目上下文。改代码前先读本文件；结构、约定或玩法有明显变化时同步更新。
-> 最后核对：2026-11（通用退场通道 ExitFX + 生物大招系统 + 悬浮框属性口径）
+> 最后核对：2026-11（实体生命周期 EntityFX + 网单源 + 生物大招系统 + 悬浮框属性口径）
 
 ## 1. 项目定位
 
@@ -21,27 +21,16 @@ python -m http.server 8000
 # 然后打开 http://localhost:8000/
 ```
 
-- URL 调试参数：`?hp=N`（同时设置当前/最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控摇杆/按钮）、`?selftest=1`（页面自检）。
+- URL 调试参数：`?hp=N`（同时设置当前/最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控摇杆/按钮）。
 - 游戏内热键：`F3` 调试屏幕（坐标 / 移速 / 花瓣转速 / 碰撞箱 / 引擎计数）、`C` 碰撞箱（仅 F3 屏幕打开时）、`M` 小地图档位、`Z` 背包、`R` 主副槽整排互换、`1~0` 换列。
 - 语言、键盘移动、调试模式已移到游戏内 **设置窗口**，存 Cookie（`florr_settings`），不再用 URL 参数。
 - 浏览器控制台可用 `window.__game` 访问 Game 实例；`window.__queryParams` 是解析后的查询参数；`window.__debug` 是调试模式开关。
 
-### 自测（Agent 也可独立执行）
-
 ```powershell
-python dev/selftest.py                       # 起 8080 + 无头 Chrome/Edge(CDP)，断言 + 性能
-python dev/selftest.py --json dev/baseline.json     # 存基线
-python dev/selftest.py --baseline dev/baseline.json # 与基线对比 p95
-python dev/selftest.py --mode dump                  # 回退路径（virtual-time，计时不可信）
-python dev/check_versions.py                        # 静态检查：引用/重名/i18n/版本号
+python dev/check_versions.py   # 静态检查：引用是否存在、跨文件重名、i18n 键、版本号提醒
 ```
 
-- 页面自检只在 `?selftest=1` 时由 `main.js` 动态加载 `js/selftest.js`，正常运行零成本。
-- 断言覆盖：引导就绪、移动、快照同步、击退守恒、装填暂停跨端一致、预测偏差、重生后花瓣世代号、Leaf 持续回血、多体数量数据化、复活点区域内随机且可站人、多节生物用本节轮廓与贴图、F3 屏幕开关（含碰撞箱联动）、触控层在桌面不出现、触控层自缩放尺寸合法、**实体退场强绑定通用退场动效**、**Super 蜘蛛大招（定住自转 + 超大蛛网）**、**生物悬浮框属性行按数据取舍（含 Poison）**。
-- 自测里的"玩家已死"防护：自检接管前游戏已经跑了几秒（素材加载），玩家可能已被生物咬死；
-  `ensureAlive()` 会在需要活玩家的断言前复活，避免靠前的断言连环假失败（这是历史遗留的偶发失败源）。
-- 性能数据来自 `Game.stepFrames` 固定步长回放，多轮取中位数；headless 噪声较大，只用于相对比较。
-- `?selftest=1` 也可直接在真浏览器打开，控制台/页面底部会留下 `#selftest-result`（JSON）。
+- 改完在真实浏览器里手动验证。`Game.stepFrames(n, dt)` 可按固定步长推进世界、`window.__game` 可在控制台读运行时状态，用于排查时序问题。
 
 ## 3. 目录与文件职责
 
@@ -67,9 +56,12 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `js/petal-effects.js` | **`PetalFX`：花瓣能力 + 特效注册引擎**。按 `card.type.slug` 匹配，负责主动/被动特效，以及脱轨（`detach`）、飞行（`flightOf`）、硬碰撞（`onHit`）、仇恨吸引（`canAttract`）等物理能力；能力字段仍由 `data.js` 的 `PETAL_TRAITS` 声明，统一走 `trait()` 读取 |
 | `js/mob-fx.js` | **`MobFX`：生物通用特性注册引擎**（与 `PetalFX` 对称）。物种只在这里声明一次（如蜘蛛大招），`ai.js`/`sim/mob.js`/`net/server.js`/`game.js` 四层全部"向引擎问"，不再各写一份物种参数；场地实体种类也走 `registerField` |
 | `js/sim/constants.js` | 模拟层常量与纯规则（`InvulnFX`、击退份额、花瓣/花朵数值、大招节奏常量），无 DOM |
-| `js/sim/exit.js` | **实体退场的唯一通道**：`ExitFX`（begin/tick/alpha/scale/done/sweep）+ `createExitList()` 受控实体表（内部数组封在闭包里，外部拿不到 -> 无法绕过退场动画直接删元素） |
+| `js/sim/exit.js` | **实体生命周期的唯一通道**：`EntityFX`（`spawn/tick/hurt/despawn/state` + 红闪原语）对外，`ExitFX` 只是内部实现（不直接被业务代码调用）；`createExitList()` 是受控实体表（内部数组封在闭包里，外部拿不到 -> 无法绕过退场动画直接删元素） |
 | `js/sim/physics.js` | `physicsPush`、`moveEntity`、击退冲量与衰减，无 DOM |
+| `js/sim/status.js` | **`StatusFX`：实体状态效果注册引擎**。`ent.status = [{id,dur,value}]`，移速统一走 `StatusFX.speedMul(ent)`；新增效果 = `register(id, {...})` |
+| `js/sim/crb.js` | **`CRB`：硬编码碰撞箱读取器**。读 `assets/crbs/{mobs,petals}/*.crb`（归一化多边形 + 外接半径），`CRB.get / getPetal` 是唯一入口；没数据才回落 SVG 轮廓 |
 | `js/sim/mob-shape.js` | 生物视觉尺寸表与 SVG 轮廓碰撞数学（`mobHitTest` / `mobShapeNearest`） |
+| `js/render/spider-gait.js` | 蜘蛛八足步态：去腿身体素材 + 步态相位/关节偏移（纯表现，不参与判定） |
 | `js/sim/player.js` | `Player`：移动、装填、花瓣轨道、无敌、死亡与 `resetForSpawn` 唯一重置入口 |
 | `js/sim/mob.js` | `Mob`：实体与引擎管线（问 AI → 限速 → 阻尼 → 位移 → 回馈）、血量、表现计时、绘制；物种差异写在 `ai.js` 的 AI 定义里 |
 | `js/sim/drops.js` | `DropCard`、掉落卡面缓存、**持续粒子时长分级**（`dropFxDuration`：≤5% 3s / <1% 6s / <0.3% 15s / <0.1% 与 Ultra+ 永久） |
@@ -80,8 +72,6 @@ python dev/check_versions.py                        # 静态检查：引用/重�
 | `js/net/server.js` | `LocalServer` 权威模拟世界 + `handleRequest` 请求分发，无 DOM |
 | `js/net/client.js` | `Net` 接口 + `LocalNet` + `WebSocketNet` 骨架（连接失败自动回退本地） |
 | `js/net.js` | **空壳**：网络层已拆分到 `js/net/*` |
-| `js/selftest.js` | `?selftest=1` 时动态加载：断言 + 性能基准，结果写回 DOM |
-| `dev/selftest.py` | 自测驱动：起静态服务器 + 无头 Chrome/Edge（CDP），解析结果并给退出码 |
 | `dev/check_versions.py` | 静态检查：引用是否存在、跨文件顶层重名、i18n 键、版本号提醒 |
 | `js/chat.js` | 全局聊天：四频道标签、漂浮消息、指令解析与本地实现、`/tp` 标点确认 |
 | `js/game.js` | `Game`：主循环（含 `perf` 指标）、输入（键盘/鼠标/触控）、相机/渲染、快照镜像、事件表现、背包/装备/掉落拾取、小地图、调试绘制 |
@@ -119,10 +109,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `registry.js` 必须在 `data.js` 之前：`data.js` 用它构建类型表。
 - `entities.js` 依赖 `MobAI`、`PetalFX`；`game.js` 依赖几乎所有模块。
 - `i18n-extra.js` 必须在 `game.js` 之前：`DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 里读取这些键。
-- `ui/touch.js`、`ui/debug-screen.js`、`ui/bossbar.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用（`?selftest=1` 时才由自测驱动）。
+- `ui/touch.js`、`ui/debug-screen.js`、`ui/bossbar.js` 先于 `game.js` 加载，但只在 `Game.init()` 里被调用。
 - `main.js` 最后执行 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 后台加载素材。
 - 素材全部加载完才 `UI.hideLoading()`；20 秒未完成显示慢加载提示但继续等。
-- 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`ExitFX`、`MobAI`、`Chat`、`Settings`。
+- 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、`I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`InvulnFX`、`EntityFX`、`StatusFX`、`MobAI`、`Chat`、`Settings`。
 
 ## 5. 核心架构
 
@@ -162,16 +152,17 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 ### 5.3 实体层（`entities.js`）
 
-> **【硬规则】实体退场强绑定通用退场动效（`js/sim/exit.js`）**
+> **【硬规则】实体生命周期强绑定通用动画（`js/sim/exit.js`）**
 >
-> 任何实体（生物 / 蛛网 / 场地型实体 / 以后的召唤物）"消失"都必须走同一条路：
-> **放大一点 + 渐隐**（`FADE_T = 0.1s`，与生物死亡同一套曲线 `deathFade`）。
+> 任何实体（生物 / 蛛网 / 场地型实体 / 花瓣 / 掉落卡 / 弹体 / 以后的召唤物）的"出现"与"消失"
+> 都必须走同一条路：**入场 Q 弹 + 渐显；退场放大一点 + 渐隐**（`FADE_T = 0.1s`，同一套曲线）。
 > 唯一允许的写法：
 >
 > ```js
-> ExitFX.begin(ent);        // 1) 打退场标记（此后不许直接删）
-> // 2) 渲染层读 ExitFX.alpha(ent) / ExitFX.scale(ent) 画退场过程
-> list.sweep(dt);           // 3) 唯一的回收点：退场播完才真正移除
+> EntityFX.spawn(ent);       // 0) 创建后调一次（入场计时从 0 开始）
+> EntityFX.despawn(ent);     // 1) 唯一离场入口（打标记，此后不许直接删）
+> // 2) 渲染读 EntityFX.state(ent)（alpha/scale 由引擎算好，不要自己乘）
+> list.sweep(dt);            // 3) 唯一的回收点：退场播完才真正移除
 > ```
 >
 > - **严禁** `splice / pop / filter / length = 0` 直接删实体 —— 那是"实体凭空消失"，
@@ -239,7 +230,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 - `RARITIES` 共 9 档：`common → unusual → rare → epic → legendary → mythic → ultra → super → eternal`（无 `unique`；个别覆盖表里会出现但不在主序列）。
 - `registry.js` 里 **花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实、84+ 忽略**。二创/缺名项不进入游戏，登记到 `NEEDS_MANUAL`。
-- **当前真正启用的花瓣 14 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye, web, antennae, orange, missile`。Magic Missile 是 Missile 的魔法变种隐藏掉落，按 Magic Leaf 同样方式仅登记、不显示、不实际掉落。
+- **当前真正启用的花瓣 19 种**（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf, faster, third_eye, web, antennae, orange, missile, wax, rice, corn, wing, ant_egg`。Magic Missile 是 Missile 的魔法变种隐藏掉落，按 Magic Leaf 同样方式仅登记、不显示、不实际掉落。
 - **Antennae（触角，id 17，utility）= 视野扩大**：装备型饰品（同 Third Eye 形态：不进轨道、无战斗、不可堆叠）。
   数值 `PETAL_RARITY_OVERRIDES.antennae.sight` = **官方视野扩大比例**：
   common 11.1% / unusual 17.6% / rare 25% / epic 33.3% / legendary 42.9% / mythic 100% / ultra 185.7% / super 400% / eternal 900%；
@@ -265,7 +256,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   ① `MobFX.drawMob` 必须在 `Mob.draw` 里**身体贴图之后**调用 —— 放在之前会被身体整块盖住；
   ② 挂载态**不能走出场渐显**：客户端视图不跑 `tick`，`missile.age` 恒为 0，`spawnFade(0)=0` → 全透明。
   偏移按 `11.svg` 源码推导：尾针尖 (96.896,96.896)、viewBox 中心 (53.86,53.86) → `0.55×drawSize`。
-- **可自然生成的生物 5 种**（`SPAWNABLE_MOB_SLUGS` / `MOB_GROUPS.garden`）：`ladybug, bee, centipede, spider, hornet`。
+- **可自然生成的生物 6 种**（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, bumble_bee, centipede, spider, hornet`；地图生成区里的 `garden` 组展开为这几种。其他生物可用 `/summon` 手动召唤调试。
   蜘蛛是 aggressive：`MOB_TRAITS.spider.sightR = 500`，AI `spider` 把追击压成 1.10×（游荡 = 追击 × 0.9）。
 - **生物特性走 `MobFX` 引擎**（`js/mob-fx.js`，与 `PetalFX` 对称）：
   大招这类特性天然横跨 4 层（`ai.js` 调度 / `sim/mob.js` 状态 / `net/server.js` 产出 / `game.js` 表现），
@@ -288,7 +279,6 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   这样轨道半径严格等于 `reach`，与转速无关；玩家位移造成的拖尾感仍由残差弹簧给出。
 - **装备型饰品（`accessory: true`）**：不进入轨道、没有装填、不参与战斗，固定在人物额头并随朝向转动
   （`Player._drawAccessories`）；`stackable: false` 的花瓣只有最左一格生效，其余在卡面显示为暗灰未装填态。
-- **当前真正会生成的生物 3 种**（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, centipede`；地图生成区里的 `garden` 组展开为这几种。其他生物可用 `/summon` 手动召唤调试。
 - 花瓣 key 是 `'p' + id`（如玫瑰 `p5`），`slug` 才是 i18n/特效匹配用的 `rose`。
 - 掉落：按生物稀有度查表，`rollMobDrops()`（返回项带 `chance` = 命中档的有效概率，供掉落粒子分级）；初始装备 = 4× common Basic + 1× common Rose，背包只有 1× common Basic。
 - **超长蜈蚣的隐藏掉落**（`CHAIN_LONG_DROPS`）：每节死亡独立掷骰，与普通掉落并存，全部掉 Basic；**不写进掉落表，因此不显示在生物信息栏**。概率 4% / 2% / 0.8% / 0.35% / 0.12% / 0.05% / 0.02% / 0.0003% / 0.0000001%（common → eternal）。
@@ -510,7 +500,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 6. **资源来源**：素材来自官方 CDN；地图/tileset 官方 403，使用仓库内快照。不要重复抓取覆盖。
 7. **调参位置**：模拟层常量集中在 `js/sim/constants.js`（击退/花朵/步长）与 `js/net/protocol.js`（快照/生成参数）；数据规则在 `data.js`；UI 动画在 `ui.js/cards.js`。
 8. **临时文件**：`.codebuddy/`、根目录 `_tmp_*.py`、参考图不属于运行代码，不要随意删除用户内容；新临时文件不要提交。
-9. **实体离场只走 `ExitFX`**（`js/sim/exit.js`）：想让任何实体消失，就 `ExitFX.begin(ent)` + 列表 `sweep(dt)`；
+9. **实体生命周期只走 `EntityFX`**（`js/sim/exit.js`）：创建时 `EntityFX.spawn(ent)`，离场时 `EntityFX.despawn(ent)` + 列表 `sweep(dt)`；
    **绝不**直接 `splice / pop / filter / length = 0`。场地型实体用 `createExitList()`（受控实体表，删元素的入口被刻意封死）。
    理由与踩过的坑见 5.3 的硬规则框 —— 退场表现分裂过一次（蛛网凭空消失 / 花瓣走幽灵 / 生物走 deathTimer），不要再造第四种。
 
@@ -563,15 +553,15 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 - **快照仍是每帧全量**（未池化/未降频）：`LocalNet.step` 每帧推进模拟并立刻投递快照（约 2.5ms/帧，4700 只实体的对象分配是当前 GC 主要来源），本地零延迟优先；`SNAP_DT` 只用于客户端插值步长基准。真服务器应改为按 `SNAP_HZ` 投递 + 对象池。
 - **生物实体数远超 `GLOBAL_MAX_MOBS`**：上限按"只"统计，而一条蜈蚣会展开成多节实体（实测约 4500~4900 个视图实体）。
 - 只有 Garden 一张图；`/init <map>` 只能初始化当前地图，不能切图（其余 `.tmj` 未被加载）。
-- 当前启用 14 种花瓣；其中实际战斗花瓣有 `basic/light/rose/stinger/pollen/honey/peas/leaf/orange/missile`，另有 Faster、Third Eye、Antennae 等饰品/加成花瓣。大量 registry 数据仍未接入玩法。
+- 当前启用 19 种花瓣；其中实际战斗花瓣有 `basic/light/rose/stinger/pollen/honey/peas/leaf/orange/missile/wax/rice/corn/wing/ant_egg`，另有 Faster、Third Eye、Antennae 等饰品/加成花瓣。大量 registry 数据仍未接入玩法。
 - 聊天只有 Local 可用；Squad/Guild/Whisper 是 UI + 提示占位。没有真实多人/账号系统。
 - 没有存档：除设置 Cookie 外，装备/图鉴/进度都在内存，刷新即重置。
-- 没有音效/音乐。触控已适配（摇杆 + A/B），但**未在真机验证**：`pointer` 事件与 `env(safe-area-inset-*)` 只在桌面用 `?touch=1` 和 headless 尺寸断言验证过。
+- 没有音效/音乐。触控已适配（摇杆 + A/B），但**未在真机验证**：`pointer` 事件与 `env(safe-area-inset-*)` 只在桌面用 `?touch=1` 手动验证过。
 - 代码仍有几个大文件（`game.js` ~66KB、`net/server.js` ~64KB、`ui.js` ~54KB、`sim/player.js` ~54KB、`assets/registry.js` ~198KB）；改动时尽量局部化，避免整文件重排。
 
 ### 待办（按价值排序）
 
-1. **快照降频 + 对象池**：`LocalNet` 里把"模拟推进"与"快照投递"分开，按 `SNAP_HZ` 投递并复用对象；客户端插值已就绪（`_applySnap` 支持任意 `snap.dt`），改完要把自测里"1~2 帧内同步"的断言改成按秒推进。
+1. **快照降频 + 对象池**：`LocalNet` 里把"模拟推进"与"快照投递"分开，按 `SNAP_HZ` 投递并复用对象；客户端插值已就绪（`_applySnap` 支持任意 `snap.dt`）。
 2. **服务端 tick 降到 25Hz**：与服务端战斗步长、快照频率对齐，客户端预测（零延迟）不受影响；预计再省一半 `net.step` 时间。
 3. **真联机**：Node 起 `LocalServer` + 一个 `WebSocketNet` 连接，验证 `request/on/step` 三条契约；目前所有请求都是同进程同步返回。
 4. **快照裁剪**：远距离生物只下发 `(netId, x, y, 类型, 稀有度)`，详细字段按复制半径下发（小地图只需前者）。
@@ -587,3 +577,87 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 - [ ] 战斗相关改动确认服务端权威副本同步（否则客户端表现正常但服务端不一致）。
 - [ ] 新增/修改实体确认快照字段下发（`hurtT/flash/squash/deathTimer/...`），否则客户端看不到表现。
 - [ ] 改动 `.js/.html/.css` 后仍是 UTF-8 无 BOM + CRLF。
+
+## 2026-11-09 变更记录（Hornet / 召唤物 / Egg）
+
+- **Hornet 数值表按官方表校正**（`data.js` MOB_RARITY_OVERRIDES[11]）：
+  官方表（`scripts/mobs_real.json` id 11）只有 hp 与 dmg 两列 —— HP 是 x3 档（50→328050），
+  伤害是 x5 档（5→1953125）。旧表把官方 hp 填进了 dmg、官方 dmg 填进了 missileHp，属于整列错位。
+  现改为 hp=官方 hp、dmg=官方 dmg；导弹（尾针）取同档 hp/dmg（官方没有第三组数），装填时间不变。
+- **尾针 Missile 的位置/大小按矢量图校正**（`mob-fx.js` prepareAssets）：
+  直接解析 11.svg 第 1 个 path 的三角形顶点（`M96.896 96.896 84.64 75.447l-9.193 9.193z`）：
+  尖端 = 离贴图中心最远的顶点；挂点 = 底边中点；轴向 = 挂点→尖端；长度 = |尖端-挂点|。
+  旧实现把"三角形 + 描边细节"两个 path 合并求包围盒，中心被细节拉偏 → 挂点错位、大小也不对。
+- **Hornet AI 取消"距离过小就后撤"**（`mob-fx.js`）：只保留"超出射程直线追（0.95x 玩家最高速）、
+  进入射程停下转向瞄准"，删掉 1.1x 玩家速度的后撤分支。
+- **召唤物（Soldier Ant）跟随玩家**（`ai.js` 新增 `MobAI.register('soldier_ant')`）：
+  离玩家 > 350px 时以 1.1x 玩家速度跟随；距离 < 200px 或出现"非玩家"的新仇恨时停止跟随，转入通用 AI。
+  召唤物仍走同一套 AI / 碰撞 / 渲染管线，只多这一段跟随决策。
+- 已知未完成（下一轮）：花瓣 Missile 的"同一实体 + 施加速度"、reach 模式按装填完成角度发射与
+  飞行途中不转向/不变速、蜈蚣打断后继承仇恨不转向绕圈、召唤物碰撞箱尺寸（sizeScale 与 collSize
+  的换算）。
+
+## 2026-11-09 变更记录（网统一 / 全服务端渲染）
+
+- **网（蛛网）统一到同一套实体体系**（`server.js` + `game.js` + `player.js` + `mob-fx.js`）：
+  之前是两套 —— 玩家的网在 `p.webFields`（客户端本地生成 + 退场），蜘蛛的网在服务端 `mobWebs`、
+  客户端靠 `MobFX.clientEnd` "补一张"本地影子（那张影子既不会到期、也没有退场动画）。
+  现在服务端把两类网一起下发（`_snapWebs()`），客户端统一放进 `p.netWebs`，共用 `ExitFX` 退场；
+  客户端不再本地生成网，也不再本地补网。
+  **每张网必须有唯一 id**（玩家的网 "p<n>"、蜘蛛的网 "m<n>"）：靠数组下标对齐会在一张网到期后张冠李戴。
+- **Ant Egg 改回 light 型 + 卡面数量对齐**（`data.js` + `cards.js`）：4 个蛋各占一个轨道位、各自公转，
+  不再是 Peas 那种菱形阵型（已从 `PETAL_FORMATION_SLUGS` 与 `FORMATION_LAYOUTS` 中移除）。
+  `LIGHT_LAYOUTS` 补上第 4 档（正方形）—— 之前 4 个实体取不到对应档位，卡面退回"1 个"，
+  与实际数量对不上。卡面数量必须与实体数量一致，两者都由 `lightSubCount()` 决定。
+- **修 Egg 召唤即卡死**（`ai.js`）：召唤物注册项里调了 `MobAI.defs.wander.init(mob)`，
+  而通用 wander **没有 init 方法** -> `Mob 构造函数末尾的 MobAI.attach()` 抛 TypeError，
+  服务端 tick 当场崩掉（表现为"碰到生物死亡要召唤时直接卡死"）。改为存在性检查后再调。
+- **花瓣位置改为【全服务端权威】**（`server.js` + `player.js`）：
+  之前只给滞留型（Pollen / Honey）下发位置，在轨/飞行中的花瓣仍由客户端本地模拟 ——
+  脱轨飞行那一段两边算法不一致，客户端先把它拉回轨道、服务端还在飞，
+  表现就是"向前飞出去，然后突然闪现回来固定"。现在所有花瓣都下发 x/y/vx/vy，客户端只做插值。
+- **Missile 发射角用"装填完成蹦出来那一刻"的角度**（`player.js` + `petal-effects.js`）：
+  实体生成时记 `body.spawnAng`，喷射时用它，而不是 detach 那一刻的当前轨道角
+  （自转已转过一段 -> 导弹朝"之前的角度"斜飞）。
+- **客户端 Missile 镜像改成【按 id 复用同一对象】**（`game.js`）：
+  旧写法每帧 `structuredClone` 一个新对象，把"同一实体"打散（退场标记丢失、发射时像克隆出新导弹）。
+  服务端发射时只是把同一个导弹对象从挂载移到 projectiles，客户端现在也保持同一引用。
+- **蜈蚣断链继承仇恨后不再转向**（`server.js` + `mob.js`）：
+  继承仇恨时记 `keepCourse`（0.9s）与当时航向，这段时间不问 AI、不转身，沿原路径直行。
+
+## 2026-11 重构 Stage 0（清死代码 / 网单源 / 文档纠错）
+
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 0 只做零行为变化或已确认 bug 的清理。
+
+- **网（场地实体）客户端只剩一份数据源**（`game.js` + `render-util.js` + `mob-fx.js`）：
+  删掉客户端从未被正确使用的 `game.mobWebs`（含 `_fieldCtx().addWeb`、`_drawMobWebs`、
+  Legend+ 蜘蛛的本地"补网"镜像、`MobFX.clientEnd`）。之前同一张网有三份容器
+  （`game.mobWebs` / `p.webFields` / `p.netWebs`），导致：
+  本地站网**不减速**（读空表）、F3 **看不到网圈**（读客户端永不生成的 `webFields`）、
+  Legend+ 蜘蛛的网被"本地影子 + 服务端下发"**画两遍**。现在统一读 `p.netWebs`。
+- **网的退场动画真正可见**（`render-util.js`）：`drawWebList` 原来 `if (f.exiting) continue`
+  直接跳过退场中的网 —— 网到期是"啪"一下消失。改为只跳过"已经完全透明"的，退场过程正常渐变。
+- **删调试残留**（`server.js`）：`step()` 里的 `TEMP PROFILE`（`_prof` + 8 次 `performance.now()`）无人读取，已移除。
+- **删死接口 / 死别名**（`exit.js` + `mob-fx.js`）：`EntityFXLegacy`、返回 `null` 的 `MobFX.clientEnd`。
+- **常量去重**（`constants.js` + `player.js`）：`PETAL_GHOST_T`（与 `FADE_T` 同值）删除，引用改用 `FADE_T`。
+- **文档纠错**（`AGENTS.md`）：启用花瓣 14→19、可生成生物 5→6、删掉与事实矛盾的"3 种"表述；
+  模块表补齐 `sim/status.js`、`sim/crb.js`、`render/spider-gait.js`；合并两份重复的 2026-11-09 变更记录；
+  实体硬规则从 `ExitFX` 改为 `EntityFX` 口径。
+
+## 2026-11 重构 Stage 1（实体引擎收口）+ Stage 2（网单源）
+
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 1 只做引擎收口（零行为变更，旧调用点经 ExitFX 兼容层委托）；Stage 2 把网与场地实体收成单一来源。
+
+- **Stage 1：`js/sim/exit.js` 重写为 `EntityFX` 统一实体生命周期引擎**
+  - `registerKind(kind, {enter, enterT, exit, exitT})` 按类型注册曲线：`mob / web / drop / petal / projectile / summon / fx`
+  - `spawn / tick / despawn / draw / visual / progress / done` 七条唯一 API；`draw(ctx, ent, paint)` 强制包装 `save/translate/scale/alpha/restore`，入场/退场/渐隐由引擎统一施加，渲染方不得再手写 `spawnFade/spawnPop/ExitFX.alpha/scale`
+  - `createEntitySet(kind)` 受控容器：唯一所有者，`tick/sweep` 里统一回收（退场播完才移除），刻意不提供 `splice/pop/filter/clear/length=`，堵死绕过退场动画直接删元素的路
+  - 曲线参数（`FADE_T / DEATH_SCALE / ENTITY_HURT_T / ENTITY_HURT_A`、`spawnFade / spawnPop / deathFade`）收进本模块私有；`PETAL_GHOST_T` 已删除（Stage 0）
+  - `ExitFX` 保留为兼容层，全部委托给 `EntityFX`，旧调用点零行为变更，可逐步迁移
+- **Stage 2：网与场地实体单源**（`js/net/server.js` + `js/sim/player.js`）
+  - `server.fields = createEntitySet('web')` 成为场地型实体唯一来源（玩家网 + 蜘蛛自铺/大招网合并）；`_snapWebs` 只遍历它
+  - `_fieldCtx.addWeb` 用单调 `nextId++` 替代 `'m' + seq` 下标 id，消除一张网到期后其余网下标前移导致的张冠李戴（客户端按 id 对齐）
+  - `_fieldTick` 统一遍历 `fields`，按 `owner` 区分：玩家网只给【生物】挂减速，敌方蛛网只给【玩家】挂减速
+  - `player.spawnWeb` 支持 `webSink`（服务端写 `server.fields`；客户端落回 `webFields`）；`player.drawWebs` 只读 `p.netWebs`
+  - 客户端不再本地生成网、不再本地补网，`p.netWebs` 是网的唯一数据源（F3 网圈与本地减速均已改读 `netWebs`）
+- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常（map/player 就绪）；已 bump `index.html` 中对应脚本的 `?v=`。
