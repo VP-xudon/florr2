@@ -154,6 +154,18 @@ const EntityFX = {
   // 标记 fx 失效（tickEntity 已在内部置 null，这里供外部主动使失效）
   dirty(ent) { if (ent) ent.fx = null; },
 
+  // 独立实体（不在受控列表里，如 Map 里的弹体）显式推进退场动画。
+  // 只推进退场计时，不推进 age/hurtT（那些由拥有者决定）。
+  advanceExit(ent, dt) {
+    if (!ent || !ent.exiting) return false;
+    ent.exitT = (ent.exitT || 0) + dt;
+    const t = clamp(ent.exitT / (ent.exitDur || FADE_T), 0, 1);
+    const d = deathFade(t);
+    ent.exitAlpha = d.alpha;
+    ent.exitScale = d.scale;
+    return (ent.exitT || 0) >= (ent.exitDur || FADE_T);
+  },
+
   // ★ 强制统一绘制入口：所有实体画面只能通过这里画
   //   ctx.save(); translate(ent.x, ent.y); scale(fx.scale); globalAlpha *= fx.alpha; paint(); ctx.restore();
   // 退场播完（alpha≈0）或缩放≈0 时不再调用 paint（等价于已消失，但由 sweep 统一回收）。
