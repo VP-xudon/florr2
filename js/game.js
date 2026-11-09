@@ -83,8 +83,6 @@ class Game {
     this._farN = 0;
     this._mobTotal = 0;      // 快照里的生物总数（视图 + 远端点）
     this._nearR = 0;         // 近处半径（视口外接圆 + 余量），随窗口大小变化
-    this.mobWebs = createExitList();   // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 大招超大网）：客户端镜像，纯表现
-                                  // 受控实体表：外部拿不到原始数组 -> 只能走通用退场后被回收
     this.cards = [];
     this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
 
@@ -409,6 +407,28 @@ class Game {
       p._applyNetPetalStates();
     }
 
+    // ---- 场级实体（网）：全部来自服务端，客户端只渲染 ----
+    // 玩家的网与蜘蛛的网合并成同一张表（p.netWebs），共用同一套到期/退场流程。
+    // 服务端不再下发的网 = 已经消失 -> 客户端走【同一套】退场（ExitFX），不是凭空消失。
+    if (snap.webs) {
+      if (!p.netWebs) p.netWebs = createExitList();
+      const seen = {};
+      for (const w of snap.webs) {
+        if (!w) continue;
+        seen[w.id] = 1;
+        let f = p.netWebs.find((x) => x && x.netId === w.id);
+        if (!f) {
+          f = { netId: w.id, x: w.x, y: w.y, r: w.r, t: 0, dur: w.dur, pop: 0, spin: 0, card: null };
+          p.netWebs.add(f);
+        }
+        f.x = w.x; f.y = w.y; f.r = w.r; f.t = w.t; f.pop = w.pop;
+        if (w.exiting && !f.exiting) ExitFX.begin(f);
+      }
+      p.netWebs.forEach((f) => {
+        if (f && !seen[f.netId] && !f.exiting) ExitFX.begin(f);
+      });
+    }
+
     // ---- 生物差分镜像 ----
     // 复用同一个 Set：每次快照 new 一个 4000+ 项的 Set 是纯 GC 压力。
     const seen = this._seen || (this._seen = new Set());
@@ -471,21 +491,32 @@ class Game {
         v.artRot = MOB_ART_ROT[e.artSvg] || MOB_ART_ROT['11'] || 0;
         v.shape = v.hull = null;
       }
-      if (e.hornetMissile && typeof structuredClone === 'function') {
-        const nextMissile = structuredClone(e.hornetMissile);
-        const prev = v.hornetMissile;
-        if (prev && prev.id === nextMissile.id) {
-          nextMissile.px = prev.x; nextMissile.py = prev.y;
-          nextMissile.tx = nextMissile.x; nextMissile.ty = nextMissile.y;
-          nextMissile.blend = 0;
+      // 尾针（Missile）：【按 id 复用同一个客户端对象】。
+      // 旧写法每帧 structuredClone 一个新对象，把"同一实体"打散了：
+      //   ① 对象引用每帧都变 —— 打在上面的退场标记（ExitFX）会丢；
+      //   ② 服务端发射时只是把【同一个导弹对象】从 st.missile 移到 st.projectiles，
+      //      客户端却在每帧"克隆一个新导弹"（用户口径：原地克隆一个一模一样的子实体）。
+      // 现在：id 相同 → 就地更新字段（引用稳定，插值起点保留）；id 变了 → 才算新导弹。
+      if (e.hornetMissile) {
+        const src = e.hornetMissile;
+        let ms = v.hornetMissile;
+        if (!ms || ms.id !== src.id) {
+          ms = (typeof structuredClone === 'function')
+            ? structuredClone(src) : Object.assign({}, src);
+          ms.id = src.id;
+          ms.px = src.x; ms.py = src.y;
+          ms.tx = src.x; ms.ty = src.y;
+          ms.blend = 1;
+          v.hornetMissile = ms;
         } else {
-          nextMissile.px = nextMissile.x; nextMissile.py = nextMissile.y;
-          nextMissile.tx = nextMissile.x; nextMissile.ty = nextMissile.y;
-          nextMissile.blend = 1;
+          const dispX = (ms.x != null) ? ms.x : src.x;
+          const dispY = (ms.y != null) ? ms.y : src.y;
+          Object.assign(ms, src);              // 权威字段（facing/hp/exiting…）
+          ms.px = dispX; ms.py = dispY;        // 插值起点 = 上一帧显示位置
+          ms.tx = src.x; ms.ty = src.y;        // 插值目标 = 服务端权威位置
+          ms.blend = 0;
         }
-        v.hornetMissile = nextMissile;
-      } else if (e.hornetMissile) {
-        v.hornetMissile = Object.assign(v.hornetMissile || {}, e.hornetMissile);
+        if (ms.exiting && !ms._exitBegan) { ms._exitBegan = true; ExitFX.begin(ms); }
       } else if (v.hornetMissile) {
         if (!v.hornetMissile.exiting) {
           v.hornetMissile.exiting = true;
@@ -500,18 +531,24 @@ class Game {
       }
       if (Array.isArray(e.hornetProjectiles)) {
         const old = v.hornetProjectiles || [];
+        // 同上：飞行中的导弹也按 id 复用同一个对象（对象引用稳定，退场标记不丢）
         v.hornetProjectiles = e.hornetProjectiles.map((item) => {
-          const next = Object.assign({}, item);
           const prev = old.find((candidate) => candidate.id === item.id);
-          next.px = prev ? prev.x : item.x;
-          next.py = prev ? prev.y : item.y;
-          next.tx = item.x;
-          next.ty = item.y;
-          next.blend = prev ? 0 : 1;
-          if (prev && prev.exiting && !next.exiting) {
-            next.exiting = true;
-            next.exitT = prev.exitT;
+          if (prev) {
+            const dispX = (prev.x != null) ? prev.x : item.x;
+            const dispY = (prev.y != null) ? prev.y : item.y;
+            Object.assign(prev, item);
+            prev.px = dispX; prev.py = dispY;
+            prev.tx = item.x; prev.ty = item.y;
+            prev.blend = 0;
+            if (prev.exiting && !prev._exitBegan) { prev._exitBegan = true; ExitFX.begin(prev); }
+            return prev;
           }
+          const next = Object.assign({}, item);
+          next.px = item.x; next.py = item.y;
+          next.tx = item.x; next.ty = item.y;
+          next.blend = 1;
+          if (next.exiting && !next._exitBegan) { next._exitBegan = true; ExitFX.begin(next); }
           return next;
         });
       }
@@ -520,25 +557,35 @@ class Game {
       v.hpBarTag = e.hpBarTag || null;                 // 血条下方额外标签（召唤物 = 'Summon'）
       v.faction = e.faction || 'enemy';                // 阵营（客户端只用于表现，不参与判定）
       v.isSummon = !!e.isSummon;
-      // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）
-      if (e.hurtT > (v.hurtT || 0)) v.hurtT = e.hurtT;
-      if (e.flash > (v.flash || 0)) v.flash = e.flash;
-      if (e.squash > (v.squash || 0)) v.squash = e.squash;
-      // 死亡：旋转角 + 计时（服务端生成随机角，客户端只演绎）
-      // 【退场强绑定】死亡 = 进入通用退场（放大 + 渐隐），退场播完才被回收。
-      // 服务端的退场进度取较大值回填，避免客户端"重新开始"播一遍。
-      if (e.dead) {
-        if (e.deathRot != null) v.deathRot = e.deathRot;
-        if (!v.exiting) ExitFX.begin(v);
-        if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
+      // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）。
+      // 【Stage 3】优先读快照下发的 e.fx（表现字段统一入口），保留对 e.hurtT/e.flash/
+      // e.squash/e.deathTimer/e.deathRot/e.ultActive 的直接回填作为兼容，以免旧快照字段缺失。
+      if (e.fx) {
+        if ((e.fx.hurt || 0) > (v.hurtT || 0)) v.hurtT = e.fx.hurt;
+        else if ((e.hurtT || 0) > (v.hurtT || 0)) v.hurtT = e.hurtT;
+        if ((e.fx.flash || 0) > (v.flash || 0)) v.flash = e.fx.flash;
+        else if ((e.flash || 0) > (v.flash || 0)) v.flash = e.flash;
+        if ((e.fx.squash || 0) > (v.squash || 0)) v.squash = e.fx.squash;
+        else if ((e.squash || 0) > (v.squash || 0)) v.squash = e.squash;
+        if (e.dead) {
+          if (e.fx.rot != null) v.deathRot = e.fx.rot;
+          else if (e.deathRot != null) v.deathRot = e.deathRot;
+          if (!v.exiting) ExitFX.begin(v);
+          if ((e.fx.exitT || 0) > (v.exitT || 0)) v.exitT = e.fx.exitT;
+          else if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
+        }
+        v.ultActive = e.fx.ult ? 1 : (e.ultActive ? 1 : 0);
+      } else {
+        if (e.hurtT > (v.hurtT || 0)) v.hurtT = e.hurtT;
+        if (e.flash > (v.flash || 0)) v.flash = e.flash;
+        if (e.squash > (v.squash || 0)) v.squash = e.squash;
+        if (e.dead) {
+          if (e.deathRot != null) v.deathRot = e.deathRot;
+          if (!v.exiting) ExitFX.begin(v);
+          if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
+        }
+        v.ultActive = !!e.ultActive;
       }
-      // 大招（Super / Eternal 专属）：服务端权威，客户端只做表现镜像
-      //   · 大招进行中腿要继续摆（蜘蛛原地自转，不走位）
-      //   · 由 1 变 0 = 大招结束 -> 补一张超大蛛网（服务端已权威生成，这里只是画面镜像）
-      // 具体参数/规则一律向 MobFX 引擎问（js/mob-fx.js），客户端不写死物种。
-      const wasUlt = !!v.ultActive;
-      v.ultActive = !!e.ultActive;
-      if (wasUlt && !v.ultActive) MobFX.clientEnd(v, this._fieldCtx());
       // 朝向平滑跟随（服务端每帧给值，这里做一次短插值，转向更顺）
       if (e.facing != null) v.facing = lerpAngle(v.facing, e.facing, 0.35);
     }
@@ -641,18 +688,6 @@ class Game {
       if (projectile.exiting && EntityFX.done(projectile)) this.hornetProjectiles.delete(id);
       else projectileKeep.push(projectile);
     }
-    // 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：客户端镜像一份用于绘制。
-    // 服务端另有权威判定（谁被减速），这里只负责"网在哪、什么时候消失"。
-    // 【退场强绑定】网到期不是凭空消失，而是走通用退场（放大 + 渐隐），播完才回收。
-    const webs = this.mobWebs;
-    for (let i = 0; i < webs.length; i++) {
-      const f = webs.get(i);
-      if (f.exiting) continue;                 // 正在退场：不再计时
-      f.t += dt;
-      f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      if (f.t >= f.dur) EntityFX.despawn(f);
-    }
-    webs.sweep(dt);                             // 唯一的回收点
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
     // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
     const k = dt / (this._snapDt || SNAP_DT);
@@ -719,18 +754,6 @@ class Game {
       // 早期这里手写了一份 'mob' + m.svg，多节生物（蜈蚣）就变成了整条 12.svg 的轮廓，
       // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
       if (!m.shape && !m.gone) m._ensureShape();
-      // Legend+ 蜘蛛原地铺网（表现层镜像；服务端另有权威判定与减速）
-      if (m.gaitSprite && !m.dead && !m.ultActive
-        && RARITY_ORDER.indexOf(m.rarity) >= RARITY_ORDER.indexOf('legendary')) {
-        m.webT = (m.webT || 0) + dt;
-        if (m.webT >= SPIDER_WEB_EVERY) {
-          m.webT = 0;
-          this._webType = this._webType
-            || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
-          const wr = this._webType ? (petalStatsFor(this._webType, m.rarity).radius || 120) : 120;
-          webs.add({ x: m.x, y: m.y, r: wr, t: 0, dur: SPIDER_WEB_DUR, pop: 0 });
-        }
-      }
     }
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
     // 【不要每步都 filter】：它会分配一个 4000+ 元素的新数组，每步一次就是纯 GC 压力。
@@ -753,23 +776,6 @@ class Game {
         this._goneDirty = this.mobs.some((m) => m.gone);
       }
     }
-  }
-
-  // 场地实体产出用的"原语"（客户端版）：MobFX 认识要什么，客户端只管怎么造画面。
-  _fieldCtx() {
-    if (!this._fctx) {
-      const self = this;
-      this._fctx = {
-        webType() {
-          self._webType = self._webType
-            || ((typeof PETAL_TYPES !== 'undefined') ? PETAL_TYPES.find((t) => t && t.slug === 'web') : null);
-          return self._webType;
-        },
-        webDur() { return SPIDER_WEB_DUR; },
-        addWeb(ent) { self.mobWebs.add(ent); },
-      };
-    }
-    return this._fctx;
   }
 
   buildBackground() {
@@ -811,7 +817,7 @@ class Game {
     const STEP = 1 / 60, MAX_STEPS = 3;
     this._running = true;
     const loop = (ts) => {
-      if (!this._running) return;               // stop() 之后不再自调度（自测/回放会接管推进）
+      if (!this._running) return;               // stop() 之后不再自调度（回放/外部驱动会接管推进）
       const now = ts / 1000;
       let dt = now - (this.last || now);
       this.last = now;
@@ -847,7 +853,7 @@ class Game {
     requestAnimationFrame(loop);
   }
 
-  // 停止 rAF 主循环。世界状态不变，可随时用 stepFrames 继续推进（自测/回放用）。
+  // 停止 rAF 主循环。世界状态不变，可随时用 stepFrames 继续推进（回放/性能采样用）。
   stop() { this._running = false; }
 
   // 以固定步长推进 n 帧，不自调度。render=true 时最后渲染一次。
@@ -890,13 +896,15 @@ class Game {
       }
     }
 
-    // 场地型实体（敌方蛛网）：站在网里的【本地玩家】也要挂"蛛网减速"。
+    // 场地型实体（网）：站在网里的【本地玩家】也要挂"蛛网减速"。
     // 状态效果不进快照，服务端那份只管权威结算；本地这份负责
     //   ① 预测移动速度（否则本地比服务端快半拍、贴网时会被拉回）
     //   ② 卡槽上方的状态图标（用户看到的就是它）。
     // 蜘蛛免疫网（immuneStatus），玩家不免疫。
-    if (p && !p.dead && this.mobWebs.length && typeof StatusFX !== 'undefined') {
-      for (const w of this.mobWebs) {
+    // 【唯一数据源】p.netWebs（服务端下发，玩家的网与蜘蛛的网合并成一张表）。
+    if (p && !p.dead && p.netWebs && p.netWebs.length && typeof StatusFX !== 'undefined') {
+      for (const w of p.netWebs) {
+        if (w.exiting) continue;
         const dx = p.x - w.x, dy = p.y - w.y;
         if (dx * dx + dy * dy <= w.r * w.r) {
           StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
@@ -1213,12 +1221,6 @@ class Game {
     for (let i = 0; i < n; i++) this.dropFx.push(new DropSpark(x, y, col, mode, half));
   }
 
-  // 敌方蛛网（蜘蛛自铺）绘制：与玩家蛛网同一套视觉（渐大弹出、不渐隐）
-  _drawMobWebs(ctx) {
-    const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
-    drawWebList(ctx, this.mobWebs, img);
-  }
-
   // /tp 目标标记：实心红点 + 一圈脉冲 + 四向短线（长距离也一眼能定位）
   _drawTpMarker(ctx) {
     const t = this.tpTarget;
@@ -1275,10 +1277,10 @@ class Game {
       catch (e) { console.error('[drawGardenTiles]', e); }
     }
 
-    // 蛛网等场地型实体：铺在最底层 —— 掉落物、生物、玩家全在它上面
+    // 场地型实体（网）：铺在最底层 —— 掉落物、生物、玩家全在它上面。
+    // 【唯一数据源】player.netWebs（玩家网 + 蜘蛛网合并），不再有第二份客户端镜像。
     try {
-      if (this.player && !this.player.dead) this.player.drawWebs(ctx);
-      this._drawMobWebs(ctx);
+      if (this.player) this.player.drawWebs(ctx);
     } catch (e) { console.error('[draw webs]', e); }
     // 地面层：世界卡片 -> 掉落物粒子 -> 生物掉落物
     // （粒子在掉落卡【之下】，掉落卡整体又在实体与玩家尸体之下）
@@ -1418,9 +1420,9 @@ class Game {
       }
       ctx.stroke();
 
-      // 场地型实体（蛛网）：不是硬碰撞箱，只是一个"状态施加范围"——
-      // 所以画成虚线圆，和实线碰撞箱区分开。
-      const webs = p.webFields || [];
+      // 场地型实体（网）：不是硬碰撞箱，只是一个"状态施加范围"——
+      // 所以画成虚线圆，和实线碰撞箱区分开。数据源与绘制同源：p.netWebs。
+      const webs = p.netWebs || [];
       if (webs.length) {
         ctx.save();
         ctx.setLineDash([6, 5]);

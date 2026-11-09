@@ -2085,6 +2085,16 @@ class LocalServer {
       //   deathTimer / deathRot = 死亡放大渐隐 / 尸体旋转角
       o.hurtT = m.hurtT || 0; o.flash = m.flash || 0; o.squash = m.squash || 0;
       o.deathTimer = m.deathTimer || 0; o.deathRot = m.deathRot || 0;
+      // 【Stage 3】表现字段统一收进 o.fx，客户端 _applySnap 表驱动回填，
+      // 新增字段只改这里一处，避免"服务端加了字段、客户端没回填"的半截 bug。
+      o.fx = {
+        hurt: m.hurtT || 0,
+        flash: m.flash || 0,
+        squash: m.squash || 0,
+        rot: m.deathRot || 0,
+        exitT: (m.exitT || m.deathTimer || 0),
+        ult: m.ultActive ? 1 : 0
+      };
       // 大招状态（Super / Eternal 专属）：服务端权威，客户端据此做表现镜像
       // （自转朝向本来就下发；这里补的是"大招进行中"这个开关：
       //   腿要继续摆、客户端要在大招结束时补一张超大蛛网）。
