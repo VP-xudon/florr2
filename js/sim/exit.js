@@ -93,6 +93,11 @@ const EntityFX = {
     ent.fx = null;          // 计时后 fx 失效，下一帧 visual() 重算
     if (ent.exiting) {
       ent.exitT = (ent.exitT || 0) + dt;
+      // 退场进度 -> 缩放/透明度（deathFade：放大×1.5 + 渐隐，与 mob.js 旧 ExitFX.tick 同一套）
+      const t = clamp(ent.exitT / (ent.exitDur || FADE_T), 0, 1);
+      const d = deathFade(t);
+      ent.exitAlpha = d.alpha;
+      ent.exitScale = d.scale;
       return (ent.exitT || 0) >= (ent.exitDur || FADE_T);
     }
     return false;

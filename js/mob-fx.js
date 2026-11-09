@@ -41,6 +41,9 @@ const MobFX = {
   async prepareAssets() {
     // 已就绪且 hornetTail 已有值，无需重复
     if (this._assetsReady && this.hornetTail) return true;
+    // 先设兜底：确保即使下面精确解析失败，尾针也能显示（不缺失、不全透明）
+    this._assetsReady = true;
+    this.hornetTail = this.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
     try {
       const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
     if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
@@ -117,6 +120,8 @@ const MobFX = {
         const mx = (m0[0] + m1[0]) / 2, my = (m0[1] + m1[1]) / 2;
         tailBox = {
           cx: mx, cy: my, tipX: tip[0], tipY: tip[1],
+          w: Math.abs(tip[0] - mx),
+          h: Math.abs(tip[1] - my),
           len: Math.hypot(tip[0] - mx, tip[1] - my)
         };
       }
@@ -593,8 +598,10 @@ MobFX.register('hornet', {
     if (!missile.exiting) {
       // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
       // 挂点 = 素材向量(dx,dy)按本体旋转角旋转，见 hornetTailPoint。
+      // p.a 已经是【最终旋转角】（包含了素材尖端方向补偿），drawMissileAt 内部
+      // 会再做 facing - MISSILE_TIP_ANGLE，所以这里要反向补偿回去，避免歪斜。
       const p = MobFX.hornetTailPoint(mob, size);
-      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
+      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a + MISSILE_TIP_ANGLE, size, alpha);
       return;
     }
     MobFX.drawMissile(ctx, missile, size, alpha);
