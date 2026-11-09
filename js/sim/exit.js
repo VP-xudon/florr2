@@ -15,11 +15,13 @@
 'use strict';
 
 // clamp / TAU 来自 util.js（全局），与原 exit.js 一致，不在此重复声明。
+// FADE_T / DEATH_SCALE / spawnFade / spawnPop / deathFade 来自 sim/constants.js
+//（全局函数/常量，可在此直接引用）。
+// ENTITY_HURT_T / ENTITY_HURT_A 是本模块专用，constants.js 里没有，须在此定义。
+const ENTITY_HURT_T = 0.3;   // 红闪统一时长（秒）
+const ENTITY_HURT_A = 0.55;  // 红闪统一最大不透明度
 
-// ---------- 曲线（内部私有，复用 sim/constants.js 的全局常量，不在此重复声明）----------
-// FADE_T / DEATH_SCALE / ENTITY_HURT_T / ENTITY_HURT_A 来自 sim/constants.js
-// spawnFade / spawnPop / deathFade 也来自 sim/constants.js（全局函数）
-
+// ---------- 曲线（内部私有，复用 sim/constants.js 的全局常量与函数）----------
 function hurtAlphaOf(t01) { return ENTITY_HURT_A * clamp(t01, 0, 1); }
 
 // ---------- 种类注册表 ----------

@@ -39,8 +39,10 @@ const MobFX = {
   _projectileSeq: 1,
 
   async prepareAssets() {
-    if (this._assetsReady) return true;
-    const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
+    // 已就绪且 hornetTail 已有值，无需重复
+    if (this._assetsReady && this.hornetTail) return true;
+    try {
+      const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
     if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
     const raw = await response.text();
     // 11.svg 顶部保留着旧版（已注释）：先剥掉，否则解析出来是空的
@@ -67,17 +69,57 @@ const MobFX = {
     try {
       const b = measure.lastElementChild.getBBox();
       bb = { x: b.x, y: b.y, w: b.width, h: b.height };
-      // 尾针（前两个 path）的包围盒：它的中心就是"尾针应该挂的位置"——
-      // 【运行时从素材测出来】，不写任何偏移常量；素材一改自动跟随。
-      // 尾针是前两个 path（三角形 + 带圆头的一根），取它们的【合并包围盒】
+      // 尾针 = 【第 1 个 path】那枚三角形（"M96.896 96.896 84.64 75.447l-9.193 9.193z"）：
+      //   尖端 P0（离贴图中心最远的点）+ 底边两点 P1/P2。
+      // 第 2 个 path 只是它的描边细节（同位置、形状更大）—— 旧实现把两者【合并】
+      // 求包围盒，中心被细节拉偏，尾针挂点就错了（表现：导弹挂偏 / 大小也不对）。
+      // 现在直接解析三角形的三个顶点：
+      //   · 挂点（针与身体相连处）= 底边中点
+      //   · 轴向 = 挂点 -> 尖端
+      //   · 长度 = |尖端 - 挂点|（导弹本体的可见长度）
+      const svgPathPoints = (d) => {
+        const out = [];
+        const re = /([MmLlHhVv])\s*([-\d.eE+\s]*)/g;
+        let m, cmd = 'M', x = 0, y = 0;
+        while ((m = re.exec(d || ''))) {
+          const c = m[1];
+          const a = (m[2].match(/-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) || []).map(Number);
+          if (c === 'M' || c === 'm') {
+            for (let i = 0; i + 1 < a.length; i += 2) {
+              if (c === 'M') { x = a[i]; y = a[i + 1]; } else { x += a[i]; y += a[i + 1]; }
+              out.push([x, y]);                       // 每一对坐标都入队（三角形 3 个顶点都要）
+            }
+            cmd = (c === 'M') ? 'L' : 'l';
+          } else if (c === 'L' || c === 'l') {
+            for (let i = 0; i + 1 < a.length; i += 2) {
+              if (c === 'L') { x = a[i]; y = a[i + 1]; } else { x += a[i]; y += a[i + 1]; }
+              out.push([x, y]);
+            }
+          } else if (c === 'H' || c === 'h') {
+            for (const v of a) { x = (c === 'H') ? v : x + v; out.push([x, y]); }
+          } else {
+            for (const v of a) { y = (c === 'V') ? v : y + v; out.push([x, y]); }
+          }
+        }
+        return out;
+      };
       const ps = measure.lastElementChild.querySelectorAll('path');
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      for (let k = 0; k < Math.min(2, ps.length); k++) {
-        const q = ps[k].getBBox();
-        x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y);
-        x1 = Math.max(x1, q.x + q.width); y1 = Math.max(y1, q.y + q.height);
+      const tri = (ps[0] ? svgPathPoints(ps[0].getAttribute('d') || '') : []);
+      if (tri.length >= 3) {
+        const ccx0 = bb ? (bb.x + bb.w / 2) : 55, ccy0 = bb ? (bb.y + bb.h / 2) : 55;
+        let tip = tri[0], bestD = -1;
+        for (const q of tri) {
+          const d = Math.hypot(q[0] - ccx0, q[1] - ccy0);
+          if (d > bestD) { bestD = d; tip = q; }
+        }
+        const rest = tri.filter((q) => q !== tip);
+        const m0 = rest[0], m1 = rest[1] || rest[0];
+        const mx = (m0[0] + m1[0]) / 2, my = (m0[1] + m1[1]) / 2;
+        tailBox = {
+          cx: mx, cy: my, tipX: tip[0], tipY: tip[1],
+          len: Math.hypot(tip[0] - mx, tip[1] - my)
+        };
       }
-      tailBox = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
     } catch (e) { bb = null; }
     measure.remove();
     if (bb && tailBox) {
@@ -106,6 +148,10 @@ const MobFX = {
         axis: Math.atan2(tipY - tailBox.cy, tipX - tailBox.cx),  // 尾针中轴（素材坐标系）
         size: Math.max(tailBox.w, tailBox.h) / winW
       };
+    }
+    // 素材解析失败时给一个兜底向量，保证尾针仍能画出（位置按兜底，不精确，但不缺失）
+    if (!this.hornetTail) {
+      this.hornetTail = { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
     }
 
     const emptyRoot = root.cloneNode(true);
@@ -195,6 +241,12 @@ const MobFX = {
       CardRenderer.artCanvas(wax.svg, 128);
     }
     this._assetsReady = true;
+    return true;
+    } catch (e) {
+      console.warn('[MobFX] prepareAssets failed, using fallback hornetTail:', e);
+      this.hornetTail = this.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
+      this._assetsReady = true;
+    }
     return true;
   },
 
@@ -457,17 +509,8 @@ const MobFX = {
     const rate = this.gaitRateOf(view);
     if (rate) view.gait += rate * dt;
   },
-  // 大招结束：客户端补一张"看起来一样的"场地实体（服务端已权威生成，这里只是画面镜像）
-  clientEnd(view, ctx) {
-    if (!view) return null;
-    const u = this.ultimateOf(view);
-    if (!u || !u.field) return null;
-    const f = this.fields[u.field.kind];
-    if (!f || !f.create) return null;
-    const ent = f.create(view, u.field, ctx);
-    if (ent && ctx && ctx.addWeb) ctx.addWeb(ent);
-    return ent;
-  },
+  // 大招结束时的客户端表现：不需要做任何事 —— 大招产出的场地实体（超大蛛网）
+  // 由服务端生成并随快照下发，客户端只渲染（见 _applySnap 的 webs 差分）。
 };
 
 // ============================================================================
@@ -535,8 +578,9 @@ MobFX.register('hornet', {
     // 之前写成 this.hornetTail 恒为 undefined -> `if (!ht) return`
     // -> 挂载尾针【永远不画】；而发射出去的那枚由 game.js 直接调
     // MobFX.drawMissile（不经过 def.draw）所以能看见。这正是用户看到的现象。
-    const ht = MobFX.hornetTail;
-    if (!ht) return;                      // 素材几何还没测好（前一两帧），下一帧自动出现
+    const ht = MobFX.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
+    // 素材尚未就绪（prepareAssets 异步）时用兜底向量，保证尾针能先画出来，
+    // 素材就绪后下一帧自动用精确值覆盖；不直接 return，避免"永远不画"。
     // 不再合成"假尾针"占位：没有实体就不画。发射后服务端把 st.missile 移进
     // projectiles，快照的 hornetMissile 变 null，客户端视图的占位也会同步清掉。
     const missile = snap || (st && st.missile);
@@ -641,19 +685,10 @@ MobFX.register('hornet', {
     const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
     const d = Math.hypot(dx, dy) || 1;
     const desiredRange = Math.max(220, mob.drawSize * 1.8) * HORNET_RANGE_K;
-    // ---- 距离控制（用户口径）----
-    // 只有【近到射击距离的 20%】才会后撤；而且一撤就撤到标准射击距离，
-    // 后撤速度 = 1.10× 玩家最高速（比平时的追击/游荡都快）。其余情况一律按原速移动。
-    if (st.retreat) {
-      if (d >= desiredRange) st.retreat = false;
-    } else if (d < desiredRange * 0.2) {
-      st.retreat = true;
-    }
-    if (st.retreat) {
-      mob.ai.hornetMode = 'retreat';
-      const sp = 1.1 * PLAYER_BASE_SPEED;
-      return { x: -dx / d * sp, y: -dy / d * sp };
-    }
+    // ---- 距离控制（用户口径：取消"离得太近就后撤"）----
+    // 旧实现：近到射击距离的 20% 时后撤（速度 1.10× 玩家最高速）。
+    // 现在 Hornet 只做两件事：超出射程就直线追，进入射程就停下转向瞄准。
+    // 追击速度 = 0.95 × 玩家最高速（MOB_TRAITS.hornet.chaseMult）。
     if (d > desiredRange + 12) {
       mob.ai.hornetMode = 'approach';
       return { x: dx / d * mob.chaseSpeed, y: dy / d * mob.chaseSpeed };
