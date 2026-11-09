@@ -661,3 +661,23 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
   - `player.spawnWeb` 支持 `webSink`（服务端写 `server.fields`；客户端落回 `webFields`）；`player.drawWebs` 只读 `p.netWebs`
   - 客户端不再本地生成网、不再本地补网，`p.netWebs` 是网的唯一数据源（F3 网圈与本地减速均已改读 `netWebs`）
 - **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常（map/player 就绪）；已 bump `index.html` 中对应脚本的 `?v=`。
+
+## 2026-11 重构 Stage 3（快照与协议）✅
+
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 3 把快照表现字段收进 `o.fx`，`netPetals`/`hornetProjectiles` 改为 Map 索引，消除字符串拼接键与 O(n²) 查找的 GC 压力。
+
+- **`o.fx` 表现字段入口**（`js/net/server.js` + `js/game.js`）：
+  - 服务端 `_fillEnts` 下发 `o.fx = { hurt, flash, squash, rot, exitT, ult }`，新增表现字段只改这里一处，避免"服务端加了字段、客户端没回填"的半截 bug。
+  - 客户端 `_applySnap` 优先从 `e.fx` 表驱动回填，保留对 `e.hurtT/e.flash/e.squash/e.deathTimer/e.deathRot/e.ultActive` 的直接回填作为兼容。
+- **`netPetals` Map 化**（`js/game.js` + `js/sim/player.js`）：
+  - 客户端 `netPetals` 改为复用 `Map<number, state>`，数字键 `slot*1e6 + sub*1e3 + gen`，每次快照 `clear()` 复用，不再每次 `new {}` + 字符串拼接。
+  - `player._netPetalFor` / `_netSlotHasLive` 适配 Map 接口（`np.get(key)` / `for (const [, x] of np)`），O(1) 命中。
+- **`hornetProjectiles` Map 化**（`js/net/server.js` + `js/game.js`）：
+  - 服务端 `hornetProjectiles` 数组→`Map<id, projectile>`，`_tickHornetProjectiles` / `_fillHornetProjectiles` 按 id 复用。
+  - 客户端视图层 `v.hornetProjectiles` 同样改为 Map，删掉旧数组 `old.find` 的 O(n²) 查找与每帧 `new` 数组的 GC。
+- **Bug 修复（Stage 3 期间顺带修正）**：
+  - `EntityFX.advanceExit` 缺失导致 Hornet 导弹退场时 `TypeError` 卡死，已补全。
+  - `EntityFX.tickEntity` 补充 `exitAlpha/exitScale`（deathFade）更新，修复实体死亡渐隐/渐大动画缺失，全部转为僵硬显示的问题。
+  - Hornet 蜂针挂载/发射角度：`draw` 直接传 `p.a`（由 `drawMissileAt` 内部抵消 `MISSILE_TIP_ANGLE`），不再双重补偿导致歪斜 >45°。
+  - Hornet 针生成位置统一到尾巴（`hornetTailPoint`），不再生成在本体中心；针生成独立于 `hornetMode`，无论什么模式没有针且冷却结束就立即生成下一根，不再原地游荡。
+- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常；Hornet 发射导弹不再卡死；实体死亡渐隐/渐大动画正常；已 bump `index.html` 中对应脚本的 `?v=`。
