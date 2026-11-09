@@ -383,14 +383,13 @@ class Player {
     const np = this.netPetals;
     if (!np) return null;
     const sub = b.sub || 0, gen = b.gen || 0;
-    const key = b.slotIndex + '|' + sub + '|' + gen;
-    const hit = np[key] || (typeof np.find === 'function'
-      ? np.find((x) => x.slot === b.slotIndex && (x.sub || 0) === sub && (x.gen || 0) === gen)
-      : null);
+    // 【Stage 3】数字键：slot*1e6 + sub*1e3 + gen，O(1) 命中
+    const key = b.slotIndex * 1e6 + sub * 1e3 + gen;
+    let hit = np.get(key);
     if (hit) return hit;
+    // 兜底：同槽同子号有多代（gen 差一拍）。遍历查找同槽同子号且只有一个时退化匹配。
     let one = null, n = 0;
-    for (const k in np) {
-      const x = np[k];
+    for (const [, x] of np) {
       if (!x || x.slot !== b.slotIndex || (x.sub || 0) !== sub) continue;
       n++; one = x;
       if (n > 1) return null;      // 同槽同子号有多代 -> 不敢猜，宁可不更新
@@ -407,8 +406,7 @@ class Player {
     const np = this.netPetals;
     if (!np) return true;
     let any = false, live = false;
-    for (const k in np) {
-      const o = np[k];
+    for (const [, o] of np) {
       if (!o || o.slot !== slot) continue;
       any = true;
       if (!o.dead) live = true;

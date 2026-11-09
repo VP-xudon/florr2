@@ -7,7 +7,7 @@ class LocalServer {
     this.nextId = 1;
     this.ents = [];             // 权威 Mob 实体（只增不减由 cull 负责）
     this.fields = createEntitySet('web');   // 场地型实体单源：玩家网 + 敌方蛛网合并一张表
-    this.hornetProjectiles = []; // 已发射的独立 Hornet 导弹，不随母体回收
+    this.hornetProjectiles = new Map(); // 已发射的独立 Hornet 导弹，不随母体回收（Map<id, projectile>）
     this.player = null;         // 玩家权威副本（跑同一套物理，供战斗定位）
     this.map = null;            // 碰撞地图（与客户端同一份）
     this._input = { dx: 0, dy: 0, mode: 'normal' };
@@ -210,27 +210,23 @@ class LocalServer {
   }
 
   _tickHornetProjectiles(dt) {
-    const list = this.hornetProjectiles;
-        let keep = 0; // Keep track of projectiles to retain
-        for (let i = 0; i < list.length; i++) {
-          const projectile = list[i];
-          projectile.age += dt;
-          projectile.hurtT = Math.max(0, projectile.hurtT - dt);
-          if (!projectile.exiting) {
-            projectile.x += projectile.vx * dt;
-            projectile.y += projectile.vy * dt;
-            projectile.life -= dt;
-            if (projectile.life <= 0) {
-              projectile.exiting = true;
-              ExitFX.begin(projectile);
-            }
-          } else {
-            ExitFX.tick(projectile, dt);
-            if (ExitFX.done(projectile)) continue;
-          }
-          list[keep++] = projectile;
+    const map = this.hornetProjectiles;
+    for (const [id, projectile] of map) {
+      projectile.age += dt;
+      projectile.hurtT = Math.max(0, projectile.hurtT - dt);
+      if (!projectile.exiting) {
+        projectile.x += projectile.vx * dt;
+        projectile.y += projectile.vy * dt;
+        projectile.life -= dt;
+        if (projectile.life <= 0) {
+          projectile.exiting = true;
+          ExitFX.begin(projectile);
         }
-        list.length = keep;
+      } else {
+        ExitFX.tick(projectile, dt);
+        if (ExitFX.done(projectile)) { map.delete(id); continue; }
+      }
+    }
   }
 
   // 新个体登记：同时进权威列表与醒/睡分区（否则它会一直不跑 AI，看起来像木桩）。
@@ -950,7 +946,7 @@ class LocalServer {
         for (const projectile of m.hornet.projectiles) {
           projectile.owner = m;
           projectile.parentId = m.netId;
-          this.hornetProjectiles.push(projectile);
+          this.hornetProjectiles.set(projectile.id, projectile);
         }
         m.hornet.projectiles.length = 0;
       }
@@ -1283,7 +1279,7 @@ class LocalServer {
     for (const b of p.petals) {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
     }
-    for (const projectile of this.hornetProjectiles || []) {
+    for (const projectile of this.hornetProjectiles.values()) {
       if (projectile.dead || projectile.exiting) continue;
       const owner = projectile.owner;
       const radius = projectile.radius || 8;

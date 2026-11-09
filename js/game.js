@@ -398,11 +398,13 @@ class Game {
     // （客户端不跑战斗，必须靠这个才能看到花瓣掉血/红闪/碎掉重装）
     // 这里立即应用一次，不用等下一帧的 _syncPetals —— 否则掉血/碎裂会慢一帧才看到。
     if (snap.petals) {
-      // 一张卡可能对应多个独立实体：用 "槽位|子序号|世代号" 做键。
-      // 世代号是滞留型花瓣（Pollen / Honey）的：同一槽脱轨后还会再来一批新实体，
-      // 少了它两批实体会互相串血/串碎裂状态。
-      const map = {};
-      for (const q of snap.petals) map[q.slot + '|' + (q.sub || 0) + '|' + (q.gen || 0)] = q;
+      // 【Stage 3】netPetals 改为复用 Map + 数字键（slot*1e6 + sub*1e3 + gen），
+      // 避免每次快照 new 对象 + 字符串拼接键的 GC 压力与 O(n²) 查找。
+      const map = this._petalNetMap || (this._petalNetMap = new Map());
+      map.clear();
+      for (const q of snap.petals) {
+        map.set(q.slot * 1e6 + (q.sub || 0) * 1e3 + (q.gen || 0), q);
+      }
       p.netPetals = map;
       p._applyNetPetalStates();
     }
@@ -529,11 +531,13 @@ class Game {
       if (v.hornet && e.hornetMissile == null && v.hornet.missile) {
         if (!v.hornet.missile.exiting) v.hornet.missile = null;
       }
-      if (Array.isArray(e.hornetProjectiles)) {
-        const old = v.hornetProjectiles || [];
-        // 同上：飞行中的导弹也按 id 复用同一个对象（对象引用稳定，退场标记不丢）
-        v.hornetProjectiles = e.hornetProjectiles.map((item) => {
-          const prev = old.find((candidate) => candidate.id === item.id);
+      if (e.hornetProjectiles) {
+        const old = v.hornetProjectiles || new Map();
+        // 同上：飞行中的导弹也按 id 复用同一个对象（对象引用稳定，退场标记不丢）。
+        // 改为 Map 索引，删掉旧数组 old.find 的 O(n²) 查找与每帧 new 数组的 GC。
+        const next = new Map();
+        for (const item of e.hornetProjectiles) {
+          const prev = old.get(item.id);
           if (prev) {
             const dispX = (prev.x != null) ? prev.x : item.x;
             const dispY = (prev.y != null) ? prev.y : item.y;
@@ -542,15 +546,17 @@ class Game {
             prev.tx = item.x; prev.ty = item.y;
             prev.blend = 0;
             if (prev.exiting && !prev._exitBegan) { prev._exitBegan = true; ExitFX.begin(prev); }
-            return prev;
+            next.set(item.id, prev);
+          } else {
+            const obj = Object.assign({}, item);
+            obj.px = item.x; obj.py = item.y;
+            obj.tx = item.x; obj.ty = item.y;
+            obj.blend = 1;
+            if (obj.exiting && !obj._exitBegan) { obj._exitBegan = true; ExitFX.begin(obj); }
+            next.set(item.id, obj);
           }
-          const next = Object.assign({}, item);
-          next.px = item.x; next.py = item.y;
-          next.tx = item.x; next.ty = item.y;
-          next.blend = 1;
-          if (next.exiting && !next._exitBegan) { next._exitBegan = true; ExitFX.begin(next); }
-          return next;
-        });
+        }
+        v.hornetProjectiles = next;
       }
       if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
       if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
@@ -679,7 +685,6 @@ class Game {
     for (const [id, projectile] of this.hornetProjectiles) {
       // 所有动画计时走统一实体引擎；退场播完才由引擎判定回收
       EntityFX.tickEntity(projectile, dt);
-      EntityFX.advanceExit(projectile, dt);       // Map 不在受控列表里，手动推进退场
       if (!projectile.exiting && projectile.blend < 1) {
         projectile.blend = Math.min(1, projectile.blend + dt / (this._snapDt || SNAP_DT));
         projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
@@ -727,7 +732,7 @@ class Game {
           missile.y = missile.py + (missile.ty - missile.py) * missile.blend;
         }
       }
-      for (const projectile of m.hornetProjectiles || []) {
+      for (const [, projectile] of m.hornetProjectiles || []) {
         if (projectile.exiting) ExitFX.tick(projectile, dt);
         else if (projectile.blend < 1) {
           projectile.blend = Math.min(1, projectile.blend + k);
