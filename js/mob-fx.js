@@ -598,10 +598,11 @@ MobFX.register('hornet', {
     if (!missile.exiting) {
       // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
       // 挂点 = 素材向量(dx,dy)按本体旋转角旋转，见 hornetTailPoint。
-      // p.a 已经是【最终旋转角】（包含了素材尖端方向补偿），drawMissileAt 内部
-      // 会再做 facing - MISSILE_TIP_ANGLE，所以这里要反向补偿回去，避免歪斜。
+      // p.a 已经是【最终旋转角】（包含了素材尖端方向补偿）。drawMissileAt 内部
+      // 会做 facing - MISSILE_TIP_ANGLE 抵消素材默认朝向，所以直接传 p.a 即可，
+      // 不要再加 MISSILE_TIP_ANGLE（否则会多偏转一截，约52°）。
       const p = MobFX.hornetTailPoint(mob, size);
-      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a + MISSILE_TIP_ANGLE, size, alpha);
+      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
       return;
     }
     MobFX.drawMissile(ctx, missile, size, alpha);
@@ -613,7 +614,19 @@ MobFX.register('hornet', {
     const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
     // 射击冷却：只影响"能不能开下一枪"，不影响走位与瞄准回转
     if (st.cooldown > 0) st.cooldown = Math.max(0, st.cooldown - dt);
-    if (st.missile) {
+    // 【针生成：独立于 hornetMode】无论什么模式，只要没有挂载态针且冷却已结束，
+    // 就立即在尾巴位置生成新针——避免 step 把 hornetMode 改成 'wander' 后
+    // 针再也不生成、Hornet 原地游荡的情况。
+    const hasLiveMissile = st.missile && !st.missile.dead && !st.missile.exiting;
+    if (!hasLiveMissile && st.cooldown <= 0) {
+      st.missile = MobFX.createMissile(mob);
+      // 新针必须出现在【尾巴】位置，而不是本体中心，保证每根针发射前位置一致。
+      const sz = st.missile.drawSize || mob.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3);
+      const pt = MobFX.hornetTailPoint(mob, sz);
+      st.missile.x = pt.x;
+      st.missile.y = pt.y;
+      st.missile.facing = pt.a;
+    } else if (st.missile) {
       const missile = st.missile;
       if (missile.exiting) {
         ExitFX.tick(missile, dt);
@@ -628,13 +641,6 @@ MobFX.register('hornet', {
         missile.x = pt.x;
         missile.y = pt.y;
         missile.facing = pt.a;
-      }
-    } else if (mob.ai.hornetMode === 'reload') {
-      st.reloadT += dt;
-      if (st.reloadT >= 0.5) {
-        st.missile = MobFX.createMissile(mob);
-        mob.ai.hornetMode = 'approach';
-        st.reloadT = 0;
       }
     }
   },
