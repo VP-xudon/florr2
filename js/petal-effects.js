@@ -625,7 +625,7 @@ PetalFX.register('third_eye', {
 
 // —— 内置特效 8：蛛网（Web）——
 // 形态：reach 模式下脱离轨道 -> 顺惯性飞出 0.5s -> 【变成一张网】停在原地。
-//   · 网是实体（留在 petals 里，随快照同步），但【没有碰撞箱、不结算伤害】；
+//   · 网是【场级实体】（权威侧 server.fields，客户端 netWebs 镜像），【没有碰撞箱、不结算伤害】；
 //   · 网存活 Duration 秒（能力字段 web.duration），期间给半径内的敌对生物挂"蛛网减速"；
 //   · 脱轨那一刻卡片就重新装填（holdReloadUntilDeath = false），与 Pollen 同款"放下就走"。
 // 结算侧（谁被减速）不在这里：那是服务端的一次半径扫描（见 LocalServer._fieldTick），

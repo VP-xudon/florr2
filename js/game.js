@@ -83,7 +83,6 @@ class Game {
     this._farN = 0;
     this._mobTotal = 0;      // 快照里的生物总数（视图 + 远端点）
     this._nearR = 0;         // 近处半径（视口外接圆 + 余量），随窗口大小变化
-    this.cards = [];
     this.drops = [];         // 生物死亡掉落的地面卡（可被玩家拾取）
 
     this.dropFx = [];        // 掉落物粒子（正方形小块）
@@ -97,8 +96,6 @@ class Game {
     this.gardenData = window.GARDEN_DATA || null;
     this.map = (this.gardenData && this.gardenData.layers.length)
       ? createGardenMap(this.gardenData) : createMap(WORLD_R);
-    this.bg = null;
-    this.bgHalf = WORLD_R;
   }
 
   init() {
@@ -271,9 +268,6 @@ class Game {
     if (typeof SpiderGait !== 'undefined') SpiderGait.ensure();
     // 注意：生物一律由服务端按【地图自带的生成区】生成（tmj 的 mobs/mobs2 对象层），
     // 客户端只在快照里按 id 镜像出视图实体（见 _applySnap）。
-
-    this.buildBackground();
-
   }
 
 
@@ -306,7 +300,7 @@ class Game {
   // 只重置生命状态并让所有花瓣重新装填（reload 从头结算，出场自带渐显+Q 弹）。
   respawn() {
     const p = this.player;
-    // 复活位置由【服务端】按地图复活区域结算（见 net.js _respawnPos）：
+    // 复活位置由【服务端】按地图复活区域结算（见 net/server.js 的 _respawnPos）：
     // 本地模拟服务端可以直接拿返回值，避免先跳到原点再被拽回来那一帧抖动。
     let pos = null;
     const canSync = this.net && typeof this.net.requestSync === 'function';
@@ -384,12 +378,11 @@ class Game {
       else if (sp.invuln <= 0 && p.invulnSrc && p.invulnSrc.server != null) {
         InvulnFX.remove(p, 'server');
       }
-      // 受伤红闪/白闪：服务端权威置位，客户端只负责按时间渐隐（见 Player.update）。
+      // 受伤红闪：服务端权威置位，客户端只负责按时间渐隐（见 Player.update）。
       // 取"更亮"的那个，避免本地已衰减到一半时被快照覆盖成更暗的值。
       if (sp.hurtT > (p.hurtT || 0)) p.hurtT = sp.hurtT;
-      if (sp.flash > (p.flash || 0)) p.flash = sp.flash;
       // 死亡旋转角：服务端 die() 里随机生成，必须回填，否则客户端尸体不旋转
-      if (sp.dead) { p.deathRot = sp.deathRot; p.corpseT = Math.max(p.corpseT || 0, sp.corpseT || 0); }
+      if (sp.dead) p.deathRot = sp.deathRot;
       // 只记录权威位置，由 _reconcile 每帧按速率收敛（不再在这里硬拉，避免攒到阈值瞬移）
       this._netPos = { x: sp.x, y: sp.y };
     }
@@ -414,20 +407,26 @@ class Game {
     // 服务端不再下发的网 = 已经消失 -> 客户端走【同一个】EntityFX.despawn。
     if (snap.webs) {
       if (!p.netWebs) p.netWebs = createEntitySet('web');
-      const seen = {};
+      const seen = this._webSeen || (this._webSeen = new Set());
+      seen.clear();
       for (const w of snap.webs) {
         if (!w) continue;
-        seen[w.id] = 1;
+        seen.add(w.id);
         let f = p.netWebs.find((x) => x && x.netId === w.id);
         if (!f) {
-          f = { netId: w.id, x: w.x, y: w.y, r: w.r, t: 0, dur: w.dur, pop: 0, spin: 0, card: null };
+          f = { netId: w.id, x: w.x, y: w.y, r: w.r, owner: w.owner };
           p.netWebs.add(f);
         }
-        f.x = w.x; f.y = w.y; f.r = w.r; f.t = w.t; f.pop = w.pop;
-        if (w.exiting) EntityFX.despawn(f);
+        f.x = w.x; f.y = w.y; f.r = w.r; f.owner = w.owner;
+        // 到期：客户端不自己算时间，完全跟随服务端的离场标记与进度
+        if (w.exiting) {
+          if (!f.exiting) EntityFX.despawn(f);
+          if ((w.exitT || 0) > (f.exitT || 0)) f.exitT = w.exitT;
+        }
       }
+      // 服务端已经回收（连退场都播完了）：就地补离场，由 netWebs.sweep 回收
       p.netWebs.forEach((f) => {
-        if (f && !seen[f.netId]) EntityFX.despawn(f);
+        if (f && !seen.has(f.netId) && !f.exiting) EntityFX.despawn(f);
       });
     }
 
@@ -532,65 +531,22 @@ class Game {
       if (v.hornet && e.hornetMissile == null && v.hornet.missile) {
         if (!v.hornet.missile.exiting) v.hornet.missile = null;
       }
-      if (e.hornetProjectiles) {
-        const old = v.hornetProjectiles || new Map();
-        // 同上：飞行中的导弹也按 id 复用同一个对象（对象引用稳定，退场标记不丢）。
-        // 改为 Map 索引，删掉旧数组 old.find 的 O(n²) 查找与每帧 new 数组的 GC。
-        const next = new Map();
-        for (const item of e.hornetProjectiles) {
-          const prev = old.get(item.id);
-          if (prev) {
-            const dispX = (prev.x != null) ? prev.x : item.x;
-            const dispY = (prev.y != null) ? prev.y : item.y;
-            Object.assign(prev, item);
-            prev.px = dispX; prev.py = dispY;
-            prev.tx = item.x; prev.ty = item.y;
-            prev.blend = 0;
-            prev._kind = 'projectile';
-            next.set(item.id, prev);
-          } else {
-            const obj = Object.assign({}, item);
-            obj.px = item.x; obj.py = item.y;
-            obj.tx = item.x; obj.ty = item.y;
-            obj.blend = 1;
-            obj._kind = 'projectile';
-            next.set(item.id, obj);
-          }
-        }
-        v.hornetProjectiles = next;
-      }
       if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
       if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
       v.hpBarTag = e.hpBarTag || null;                 // 血条下方额外标签（召唤物 = 'Summon'）
       v.faction = e.faction || 'enemy';                // 阵营（客户端只用于表现，不参与判定）
       v.isSummon = !!e.isSummon;
-      // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）。
-      // 【Stage 3】优先读快照下发的 e.fx（表现字段统一入口），保留对 e.hurtT/e.flash/
-      // e.squash/e.deathRot 的直接回填作为兼容，以免旧快照字段缺失。
-      if (e.fx) {
-        if ((e.fx.hurt || 0) > (v.hurtT || 0)) v.hurtT = e.fx.hurt;
-        else if ((e.hurtT || 0) > (v.hurtT || 0)) v.hurtT = e.hurtT;
-        if ((e.fx.flash || 0) > (v.flash || 0)) v.flash = e.fx.flash;
-        else if ((e.flash || 0) > (v.flash || 0)) v.flash = e.flash;
-        if ((e.fx.squash || 0) > (v.squash || 0)) v.squash = e.fx.squash;
-        else if ((e.squash || 0) > (v.squash || 0)) v.squash = e.squash;
-        if (e.dead) {
-          if (e.fx.rot != null) v.deathRot = e.fx.rot;
-          else if (e.deathRot != null) v.deathRot = e.deathRot;
-          if (!v.exiting) EntityFX.despawn(v);
-          if ((e.fx.exitT || 0) > (v.exitT || 0)) v.exitT = e.fx.exitT;
+      // 表现层状态【表驱动】：字段清单只在 net/protocol.js 的 FX_FIELDS 里声明一次。
+      // 服务端按 get() 写、客户端按 as/merge 回填 —— 不存在"服务端加了字段、客户端没回填"。
+      if (e.dead && !v.exiting) EntityFX.despawn(v);   // 先离场，再对齐退场进度
+      const fx = e.fx;
+      if (fx) {
+        for (const k in FX_FIELDS) {
+          const d = FX_FIELDS[k];
+          const val = fx[k];
+          if (d.merge === 'max') { if (val > (v[d.as] || 0)) v[d.as] = val; }
+          else v[d.as] = val ? 1 : 0;
         }
-        v.ultActive = e.fx.ult ? 1 : (e.ultActive ? 1 : 0);
-      } else {
-        if (e.hurtT > (v.hurtT || 0)) v.hurtT = e.hurtT;
-        if (e.flash > (v.flash || 0)) v.flash = e.flash;
-        if (e.squash > (v.squash || 0)) v.squash = e.squash;
-        if (e.dead) {
-          if (e.deathRot != null) v.deathRot = e.deathRot;
-          if (!v.exiting) EntityFX.despawn(v);
-          if ((e.exitT || 0) > (v.exitT || 0)) v.exitT = e.exitT;
-        }
-        v.ultActive = !!e.ultActive;
       }
       // 朝向平滑跟随（服务端每帧给值，这里做一次短插值，转向更顺）
       if (e.facing != null) v.facing = lerpAngle(v.facing, e.facing, 0.35);
@@ -681,7 +637,6 @@ class Game {
 
   // 视图生物每帧推进：插值坐标 + 自身动画计时（AI/移动/战斗都在服务端）
   _tickMobViews(dt) {
-    const projectileKeep = [];
     for (const [id, projectile] of this.hornetProjectiles) {
       // 所有动画计时走统一实体引擎；退场播完才由引擎判定回收
       EntityFX.tickEntity(projectile, dt);
@@ -691,7 +646,6 @@ class Game {
         projectile.y = projectile.py + (projectile.ty - projectile.py) * projectile.blend;
       }
       if (projectile.exiting && EntityFX.done(projectile)) this.hornetProjectiles.delete(id);
-      else projectileKeep.push(projectile);
     }
     // 用【实际】快照间隔而不是常量 1/25：本地实现每帧都发快照，
     // 固定 1/25 会让插值每帧只走 41.7%，60Hz 下永远落后 4.7 帧、144Hz 落后 10 帧。
@@ -732,21 +686,12 @@ class Game {
           missile.y = missile.py + (missile.ty - missile.py) * missile.blend;
         }
       }
-      for (const [, projectile] of m.hornetProjectiles || []) {
-        if (projectile.exiting) EntityFX.tickEntity(projectile, dt);
-        else if (projectile.blend < 1) {
-          projectile.blend = Math.min(1, projectile.blend + k);
-          projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
-          projectile.y = projectile.py + (projectile.ty - projectile.py) * projectile.blend;
-        }
-      }
       // 主角血条模式（多节生物的非头节）：血条满血渐隐 / 掉血渐显 —— 视图不走 Mob.update，
       // 所以这个淡入淡出必须在这里推进，否则 hpBarA 永远是 0，血条根本不出现。
       if (m.plateStyle === 'player') m._tickHpBarA(dt);
-      // 动画计时：出生渐显 / 受伤红闪 / 白闪 / 退场放大渐隐 —— 全部由实体引擎推进
-      //（age / hurtT / flash / exitT 只有一份来源，别再手写衰减）。
+      // 动画计时：出生渐显 / 受伤红闪 / 退场放大渐隐 —— 全部由实体引擎推进
+      //（age / hurtT / exitT 只有一份来源，别再手写衰减）。
       if (!m.exiting) EntityFX.tickEntity(m, dt);
-      m.squash = damp(m.squash, 0, 10, dt);
       m._tickHpSmooth(dt);          // 血条双层平滑（主条 + 缓冲条），与花朵血条同款
       // 大招进行中（蜘蛛原地自转）：它不走位，步态不会自然推进 ——
       // 腿要摆动就得补步态。补多少由 MobFX 引擎按物种声明给（与服务端口径一致）。
@@ -778,17 +723,6 @@ class Game {
         this._goneDirty = this.mobs.some((m) => m.gone);
       }
     }
-  }
-
-  buildBackground() {
-    // 花园瓦片改为在 render() 中实时绘制（见 drawGardenTiles），无需预渲染整张大图。
-    const data = this.gardenData;
-    if (data && data.layers && data.layers.length) {
-      this.bgHalf = (data.width * GARDEN_TILE) / 2;
-    } else {
-      this.bgHalf = WORLD_R;
-    }
-    this.bg = null;
   }
 
   _resize() {
@@ -985,18 +919,6 @@ class Game {
       this._clearAggro();
     }
 
-    // 卡片（拾取 / 入栏）——无战斗时已不掉落，但保留拖拽到世界时的回收
-    for (const c of this.cards) {
-      c.update(dt, p);
-      if (!c.picked && dist2(c.x, c.y, p.x, p.y) < (p.r + 16) * (p.r + 16)) {
-        if (this.pickupCard(c.type, c.rarity)) {
-          c.picked = true;
-          this.syncInventory();
-        }
-      }
-    }
-    this.cards = this.cards.filter(c => !c.done);
-
     // 掉落物：拾取范围 = 2 × 玩家直径；进入范围后缩小并飞向玩家中心，飞完才真正入包。
     // 停留期间持续冒正方形粒子的时长由掉落概率决定（≤5% 3s / <1% 6s / <0.3% 15s /
     // <0.1% 与 Ultra+ 永久），普通掉落只在落地时炸一次。
@@ -1004,7 +926,7 @@ class Game {
     for (const d of this.drops) {
       d.update(dt, p);
       if (!d.fly && d.popT >= 1 && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
-      if (d.done) {
+      if (EntityFX.done(d)) {
         // 只有"被捡走"的才进背包；到期渐隐消失的不给（d.picked 由 DropCard.pick 置位）
         if (d.picked) {
           const type = (typeof getPetal === 'function') ? getPetal(d.svg) : null;
@@ -1020,7 +942,7 @@ class Game {
         if (d.sparkT <= 0) { d.sparkT = 0.07; this.dropSpark(d.x, d.y, d.rarity, 'rise', d.size * 0.5); }
       }
     }
-    this.drops = this.drops.filter((d) => !d.done);
+    this.drops = this.drops.filter((d) => !EntityFX.done(d));
 
     // 高稀有度装备花瓣：持续迸发同稀有度颜色的圆形粒子
     this._tickPetalAura(dt);
@@ -1160,7 +1082,7 @@ class Game {
     for (const it of got) {
       let merged = false;
       for (const d of this.drops) {
-        if (d.fly || d.done) continue;
+        if (d.fly || d.exiting) continue;
         if (d.slug === it.slug && d.rarity === it.rarity && dist(d.x, d.y, x, y) < 120) {
           d.count++;
           // 堆叠后按「更稀有的那一件」决定粒子时长（chance 越小喷得越久）
@@ -1284,9 +1206,8 @@ class Game {
     try {
       if (this.player) this.player.drawWebs(ctx);
     } catch (e) { console.error('[draw webs]', e); }
-    // 地面层：世界卡片 -> 掉落物粒子 -> 生物掉落物
+    // 地面层：掉落物粒子 -> 生物掉落物
     // （粒子在掉落卡【之下】，掉落卡整体又在实体与玩家尸体之下）
-    for (const c of this.cards) c.draw(ctx);
     for (const s of this.dropFx) s.draw(ctx);
     for (const d of this.drops) { try { d.draw(ctx); } catch (e) { console.error('[draw drop]', e); } }
     for (const projectile of this.hornetProjectiles.values()) {
@@ -1443,7 +1364,7 @@ class Game {
       }
 
       // 落位实体（Wax）：画它真实的【多边形】碰撞箱，不是外接圆
-      for (const w of p.petalWorld || []) {
+      for (const w of p.petals || []) {
         if (!w.shapePoly || !w.anchor) continue;
         ctx.save();
         ctx.strokeStyle = '#ffd24a';
@@ -1517,17 +1438,6 @@ class Game {
     ctx.strokeStyle = '#000';
     ctx.stroke();
     ctx.restore();
-  }
-
-  _blitBG(left, top) {
-    const ctx = this.ctx, half = this.bgHalf, full = this.bg.width;
-    let sx = left + half, sy = top + half, sw = this.W, sh = this.H;
-    let dx = left, dy = top;
-    if (sx < 0) { dx -= sx; sw += sx; sx = 0; }
-    if (sy < 0) { dy -= sy; sh += sy; sy = 0; }
-    if (sx + sw > full) sw = full - sx;
-    if (sy + sh > full) sh = full - sy;
-    if (sw > 0 && sh > 0) ctx.drawImage(this.bg, sx, sy, sw, sh, dx, dy, sw, sh);
   }
 
   _drawMinimap() {

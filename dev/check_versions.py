@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""静态一致性检查（零依赖）：拆分/重构后最容易踩的三类坑。
+"""静态一致性检查（零依赖）：拆分/重构后最容易踩的几类坑。
 
 1. index.html 引用的脚本/样式是否都存在、是否有重复引用；
 2. 跨文件顶层声明是否重名 —— 经典脚本共享全局词法环境，
    两个文件都写 `const X` 会直接 SyntaxError（`function X` 则是静默覆盖）；
-3. index.html 的 ?v= 与 js/util.js 的 ASSET_VER 是否被改动（配合 git status 提示）。
+3. 跨文件契约：FX_FIELDS 单一声明、客户端按表回填、25Hz 与红闪时长只有一个来源；
+4. index.html 的 ?v= 与 js/util.js 的 ASSET_VER 是否被改动（配合 git status 提示）。
 
 用法:
     python dev/check_versions.py
@@ -112,6 +113,45 @@ def check_i18n(scripts: list[Path]) -> None:
         warn(f"...另有 {len(missing) - 20} 个未匹配的 i18n 键")
 
 
+def check_contracts(scripts: list[Path]) -> None:
+    """跨文件契约检查（重构后最容易"只改一半"的四处）。"""
+    js_dir = ROOT / "js"
+    # 1) 表现字段表只能有一份声明：net/protocol.js 的 FX_FIELDS
+    decl: list[str] = []
+    for path in scripts:
+        if re.search(r"^const\s+FX_FIELDS\b", read(path), re.M):
+            decl.append(path.relative_to(ROOT).as_posix())
+    if len(decl) != 1:
+        err(f"FX_FIELDS 必须且只能声明一次，实际: {decl or '未找到'}")
+    elif decl[0] != "js/net/protocol.js":
+        err(f"FX_FIELDS 应声明在 js/net/protocol.js，实际: {decl[0]}")
+
+    # 2) 客户端不得绕过表直接读快照字段（e.fx.xxx / fx.k），否则加字段又会漏一处
+    game = js_dir / "game.js"
+    if game.is_file():
+        for ln, line in enumerate(read(game).splitlines(), 1):
+            if re.search(r"(?<![A-Za-z])fx\.\w+", line.split("//")[0]) and "FX_FIELDS" not in line:
+                err(f"js/game.js:{ln} 直接读了 fx 字段，必须走 FX_FIELDS 表: {line.strip()}")
+
+    # 3) 模拟节奏只能有一份：SNAP_HZ / SNAP_DT 定义在 sim/constants.js，
+    #    其它文件不许再写 `1 / 25` 字面量。
+    for path in scripts:
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == "js/sim/constants.js":
+            continue
+        for ln, line in enumerate(read(path).splitlines(), 1):
+            code = line.split("//")[0]
+            if re.search(r"1\s*/\s*25\b", code):
+                err(f"{rel}:{ln} 硬编码 25Hz，请引用 SNAP_DT: {line.strip()}")
+
+    # 4) 红闪时长只有一个入口：EntityFX.hurt，不许再写 hurtT = 0.3
+    for path in scripts:
+        rel = path.relative_to(ROOT).as_posix()
+        for ln, line in enumerate(read(path).splitlines(), 1):
+            if re.search(r"hurtT\s*=\s*0\.3\b", line.split("//")[0]):
+                err(f"{rel}:{ln} 直接写死红闪时长，请用 EntityFX.hurt(...): {line.strip()}")
+
+
 def check_asset_ver() -> None:
     util = ROOT / "js" / "util.js"
     if not util.is_file():
@@ -148,6 +188,7 @@ def main() -> int:
     scripts = check_index()
     check_globals(scripts)
     check_i18n(scripts)
+    check_contracts(scripts)
     check_asset_ver()
     check_git()
 

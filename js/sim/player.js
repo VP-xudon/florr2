@@ -1,6 +1,9 @@
 // sim/player.js — 玩家实体：移动/装填/花瓣轨道/无敌/死亡状态
 'use strict';
 
+// 花朵本体的红闪强度：比花瓣淡一点（时长与曲线仍由 sim/exit.js 统一给）。
+const PLAYER_HURT_A = 0.4;
+
 // 颜色插值（中毒脸的平滑过渡用）：#rrggbb -> #rrggbb
 function lerpHex(a, b, t) {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
@@ -25,7 +28,7 @@ class Player {
     this.backpack = [];                            // 背包库存（仅在背包面板可见）
     this.maxInvBar = 8;
     this.maxBackpack = 24;
-    this.invuln = 0; this.flash = 0;
+    this.invuln = 0;
     this.clock = 0;             // 单调递增计时器：InvulnFX 的时间基准（绝对到期时间）
     this.invulnSrc = {};        // 无敌来源表：{ 'spawn'|'hurt'|'petal:xxx': 到期时刻 }
     this.invulnTotal = 0;       // 本段无敌总时长（供光晕/血条做淡入淡出包络）
@@ -35,7 +38,7 @@ class Player {
     this.armor = 0;             // 花朵护甲：受击结算 = max(攻-甲, 0)
     this.bodyDmg = FLOWER_BODY_DMG;  // 花朵本体攻击（体伤）；recompute() 会再次同步
 
-    this.hurtT = 0;             // 受伤红色滤镜剩余时间（0.1s）
+    this.hurtT = 0;             // 受伤红色滤镜剩余时间（由 EntityFX.hurt 设定，update 里衰减）
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     this.hpBarA = 0;            // 血条显示透明度（非满血渐显 0.3s / 满血渐隐 0.3s）
     this.deathRot = 0;          // 死亡时本体固定的随机旋转角
@@ -46,12 +49,12 @@ class Player {
     // 已离场的花瓣实体：统一走 EntityFX 退场（放大 + 渐隐），由引擎表回收。
     // 不再保留"幽灵副本"——那就是同一片花瓣的第二套消失方式。
     this.petalExit = createEntitySet('petal');
-    // 场地型实体（Web 落地后的那张大网）：独立于花瓣实体表 —— 没有碰撞箱、不占轨道位、
-    // 不参与伤害结算；{ x, y, r, t, dur, pop, spin }。
-    // 受控实体表（sim/exit.js）：移除只能走通用退场后由 sweep 回收，外部无法直接删。
-    this.webFields = createExitList();
-    // 服务端下发的场级实体（网）：玩家的网 + 蜘蛛的网合并成一张表，客户端只渲染它。
+    // 场级实体（网）的唯一客户端容器：服务端下发的玩家网 + 蜘蛛网合并成一张表。
+    // 网没有碰撞箱、不占轨道位、不参与伤害，只按半径挂状态（服务端算，客户端只画）。
     this.netWebs = null;
+    // 权威侧的网容器（只有 LocalServer 会注入，指向 server.fields）：
+    // 客户端没有它，于是"客户端自己造一张有减速效果的网"在结构上不可能发生。
+    this.webSink = null;
     // 一卡多批（Pollen / Honey）：每个槽一个"世代号"。脱轨的实体【继续留在 this.petals】
     // 里（stationary），新一批实体用递增的世代号区分 —— 花瓣实体始终是同一套东西，
     // 不区分"跟着玩家的"和"放在地上的"，绘制/碰撞/战斗/仇恨全部复用同一条路径。
@@ -63,7 +66,7 @@ class Player {
     // 模式状态：空格=reach、Shift=detect
     this.mode = 'normal';        // 'normal' | 'reach' | 'detect'
     this.modeT = 0;              // 模式过渡进度 0->1（0.15s）
-    this.age = 0;                // 出场计时：脸部 spawnPop Q 弹（重生时归零重播）
+    this.age = 0;                // 出场计时：脸部 Q 弹（EntityFX.pop，重生时归零重播）
     this.killedBy = null;        // 死因（生物名称），死亡界面显示用
   }
 
@@ -127,7 +130,7 @@ class Player {
     if (this.dead || dmg <= 0) return false;
     if (this.invuln > 0 || this.hurtInvuln > 0) return false;
     this.hp -= dmg;
-    this.hurtT = 0.3;                   // 0.3s 红色滤镜（全体实体通用时长，唯一受击反馈，不再叠加白闪）
+    EntityFX.hurt(this);                // 红闪统一走实体引擎（时长/强度只有一个来源）
     this.hurtInvuln = FLOWER_HURT_INVULN;   // 受伤无敌帧：独立计时，只挡连续扣血，不产生任何无敌特效
     if (this.hp <= 0) {
       this.hp = 0;
@@ -164,7 +167,8 @@ class Player {
     const dmg = rec.value * dt;
     if (!(dmg > 0)) return;
     this.hp -= dmg;
-    this.hurtT = Math.max(this.hurtT || 0, 0.08);   // 很淡的持续红闪
+    // 持续红闪：取"当前剩余"与一个很淡的下限的较大值，不覆盖真实受击的 0.3s 红闪
+    this.hurtT = Math.max(this.hurtT || 0, 0.08);
     if (this.hp <= 0) {
       this.hp = 0;
       if (!this.killedBy) {
@@ -176,41 +180,21 @@ class Player {
   }
 
   // ---- 场地型实体（Web 落地后的那张大网）----
-  // 独立于花瓣实体表：没有碰撞箱、不占轨道位、不参与伤害；只按半径挂状态效果。
-  // 生成时从中心【快速渐大弹出】（pop 0->1）；到期【不是凭空消失】：
-  // 进入通用退场（sim/exit.js 的 ExitFX：放大 + 渐隐），播完才被回收。
+  // 只有【权威侧】能造网：webSink 指向 server.fields（由 LocalServer.attach 注入）。
+  // 客户端没有 sink -> 返回 null，于是"客户端自己造一张有减速效果的网"不可能发生；
+  // 客户端看到的网一律来自快照（p.netWebs）。
+  // 计时/退场/回收全部在服务端 _fieldTick 与客户端 netWebs.sweep 各跑一次，不在这里重复推进。
   spawnWeb(x, y, radius, duration, card) {
-    if (!(radius > 0)) return null;
-    // 唯一 id：客户端按 id 把服务端的网对齐到本地实体（玩家的网 "p<n>"，
-    // 蜘蛛的网 "m<n>"）。没有 id 就只能靠数组下标对齐 —— 一张网到期、
-    // 其余网下标全部前移，客户端就会张冠李戴（"网突然换位置 / 不退场"）。
-    this._webSeq = (this._webSeq || 0) + 1;
+    const sink = this.webSink;
+    if (!sink || !(radius > 0)) return null;
     const f = {
-      netId: 'p' + this._webSeq,
       x, y, r: radius, t: 0,
       dur: (duration > 0) ? duration : 10,
-      pop: 0, spin: 0, card: card || null,
-      owner: 'player',     // 玩家网：只给【生物】挂减速（server._fieldTick 按 owner 区分）
+      card: card || null,
+      owner: 'player',     // 玩家网：只给【生物】挂减速（_fieldTick 按 owner 区分）
     };
-    // 服务端：webSink = server.fields（场级实体单源）；客户端：落回 webFields（兼容旧调用）
-    const sink = this.webSink || this.webFields;
-    sink.add(f);
+    sink.add(f);           // add() 负责分配全局单调 netId（见 createEntitySet 的 idGen）
     return f;
-  }
-
-  _tickWebs(dt) {
-    const arr = this.webSink || this.webFields;
-    if (!arr || !arr.length) return;
-    for (let i = 0; i < arr.length; i++) {
-      const f = arr.get(i);
-      if (f.exiting) continue;                // 正在退场：不再计时，也不再挂效果
-      f.t += dt;
-      f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
-      // 到期 -> 统一实体引擎的离场入口（与生物/花瓣同一套渐大渐隐）
-      if (f.t >= f.dur) EntityFX.despawn(f);
-    }
-    // 唯一的回收点：退场播完才移除（受控实体表，外部拿不到原始数组）
-    arr.sweep(dt);
   }
 
   // 出生 / 重生的【唯一】重置入口：客户端预测副本与服务端权威副本都必须走这里。
@@ -223,7 +207,7 @@ class Player {
     this.vx = 0; this.vy = 0;
     this.hp = this.maxHp;
     this.dead = false; this.corpseT = 0; this.deathRot = 0;
-    this.hurtT = 0; this.flash = 0; this.killedBy = null;
+    this.hurtT = 0; this.killedBy = null;
     this.hurtInvuln = 0;
     // 状态效果一并清空：死亡重生不该继承毒伤（用户口径：死亡后毒伤清零）
     if (typeof StatusFX !== 'undefined') this.status = [];
@@ -233,9 +217,8 @@ class Player {
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
     // 花瓣实体、世代号、退场表是同一份状态，必须一起清（退场表让旧实体播完再回收）
     this.petals = []; this._petalGen = [];
-    // 场上的网属于"这一条命"：重生时【走通用退场】淡出，而不是凭空消失
-    if (this.webSink) { /* 服务端权威网由 LocalServer 自己回收 */ }
-    else { for (const f of this.webFields) EntityFX.despawn(f); }
+    // 场上的网不属于这条命的状态：权威侧由 LocalServer 自己按时长回收，
+    // 客户端镜像表 netWebs 只跟随快照，这里都不动。
     this.netPetals = null;                 // 旧快照键映射作废，避免重生瞬间串状态
     this.reload = this.slots.map((c) => c ? {
       card: c, age: 0,
@@ -247,14 +230,14 @@ class Player {
   }
 
   update(dt, dir, map, mobs) {
-    // 场级实体（网）的退场推进：与花瓣/生物同一套 EntityFX 通道
+    // 场级实体（网）镜像表的退场推进：与花瓣/生物同一套 EntityFX 通道
     if (this.netWebs) this.netWebs.sweep(dt);
+    // 出场计时（脸部 Q 弹）与受伤红闪：统一由实体引擎推进，只有一份来源
+    EntityFX.tickEntity(this, dt);
     if (this.dead) {
       this.corpseT += dt;
       // 死亡瞬间放出的花瓣退场实体继续播完渐隐（0.1s）
       this.petalExit.sweep(dt);
-      // 退场中的网也要播完（否则会一直挂到下次重生才被回收）
-      if (this.webFields && this.webFields.length) this.webFields.sweep(dt);
       return;
     }
     // 花瓣退场表始终推进（换装/碎裂的实体在播完前仍需计时）
@@ -263,7 +246,6 @@ class Player {
     //   · 移动速度 = 默认值的 40%
     //   · 所有花瓣强制回到"待加载"状态（装填进度清零、不生成实体），离开后重新装填
     this.slowTile = !!(map && map.slowAt && map.slowAt(this.x, this.y));
-    this.hurtT = Math.max(0, this.hurtT - dt);
     // 血条透明度：非满血 -> 0.3s 线性渐显；回到满血 -> 0.3s 线性渐隐
     const barTarget = this.hp < this.maxHp ? 1 : 0;
     const barStep = dt / 0.3;
@@ -305,7 +287,6 @@ class Player {
       this.facing = wrapAngle(lerpAngle(this.facing, ta, clamp(dt * 12, 0, 1)));
     }
     this.breath += dt;
-    this.age += dt;                  // 出场 Q 弹推进
     InvulnFX.tick(this, dt);            // 无敌时间推进（多来源，取最晚到期）
     if (typeof StatusFX !== 'undefined') {
       StatusFX.tick(this, dt);      // 状态效果时长
@@ -317,7 +298,6 @@ class Player {
     // 只跟随 invuln（出生/召唤/花瓣类）；受伤无敌帧走独立的 hurtInvuln，不产生任何视觉。
     this.invulnA = damp(this.invulnA, this.invuln > 0 ? 1 : 0, 8, dt);
     this.hurtInvuln = Math.max(0, this.hurtInvuln - dt);   // 受伤无敌帧衰减
-    this.flash = Math.max(0, this.flash - dt);
 
     // 转速 = 【动态最大转速】× 倍率。最大转速由装备（Faster）决定，倍率由 /rot-speed 决定。
     this.spin += (this.rotMax || PETAL_SPIN) * ROT_SCALE * dt;
@@ -328,7 +308,6 @@ class Player {
     const targetT = (this.mode === 'normal') ? 0 : 1;
     const modeRate = 1 / 0.15;  // 0.15秒完成过渡
     this.modeT = damp(this.modeT, targetT, modeRate, dt);
-    this._tickWebs(dt);                 // 场地型实体（网）的计时与弹出动画进度
     // 落位型花瓣（Wax）要在脱轨那一刻找一个"不卡墙"的位置，需要地图
     this._mapRef = map;
     this._syncPetals(dt, map, mobs);
@@ -438,11 +417,13 @@ class Player {
       if (ns.dead && !b.dead) {
         this._killPetalBody(b);
       } else if (!ns.dead && b.dead) {
-        // 多实体卡的单个实体装填完成 -> 复活：Q 弹重生（age 归零）。
+        // 多实体卡的单个实体装填完成 -> 复活：取消上一次离场并重新入场（Q 弹）。
+        // 必须走 petalExit.reclaim：只把 dead 置回 false 会留下 exiting=true 的退场标记，
+        // 实体就永远停在"退场最后一帧"（alpha≈0）-> 看不见但仍参与判定。
         // 坐标同样拉回花朵中心：否则它会从"死亡处"（可能正贴着生物）原地冒出，
         // 看起来就像从生物身上突然出现、而不是从花瓣中心飞出去。
         b.dead = false;
-        b.age = 0;
+        this.petalExit.reclaim(b);
         b.x = this.x; b.y = this.y;
         b.vx = 0; b.vy = 0;
       }
@@ -781,13 +762,17 @@ class Player {
       }
       // 多体卡的已碎实体：死亡瞬间已经走过 EntityFX 退场，这里不重复
       if (!kept && !b.exiting) {
+        // 卸下/删除 = 退场（放大 + 渐隐），交给引擎表回收；不能只"收养"不 despawn，
+        // 否则这片花瓣既不在 petals 里也不再计时，会变成永久挂着的幽灵。
+        EntityFX.despawn(b);
+        b.exitRot = b.selfRot || 0;
         this.petalExit.adopt(b);
       }
     }
     this.petals = bodies;
-    // 统一步长：每片在场花瓣的 age / hurtT / 退场计时都只在这里推进一次
-    // （新增实体也从 0 开始，下一帧 age = dt，与旧行为一致）。
-    for (const b of this.petals) EntityFX.tickEntity(b, dt);
+    // 统一步长：每片在场花瓣的 age / hurtT 只在这里推进一次；
+    // 已碎的（dead）已经进 petalExit，退场计时由 petalExit.sweep 推进 —— 不重复计时。
+    for (const b of this.petals) if (!b.dead) EntityFX.tickEntity(b, dt);
 
     // ---- 服务端花瓣战斗状态回填 ----
     // 客户端不跑战斗（战斗在服务端），所以花瓣的 hp / 受伤红闪 / 是否已碎
@@ -875,7 +860,7 @@ class Player {
         // 直接采信快照坐标就会按 25Hz 台阶跳。改为帧间线性插值，位移连续平滑。
         // 有权威位置时不再叠加本地惯性 —— 两者同时跑会互相打架，观感发"粘"。
         if (b.nToX != null) {
-          b.nBlend = Math.min(1, (b.nBlend || 0) + dtc / PETAL_NET_SYNC);
+          b.nBlend = Math.min(1, (b.nBlend || 0) + dtc / SNAP_DT);
           b.x = b.nFromX + (b.nToX - b.nFromX) * b.nBlend;
           b.y = b.nFromY + (b.nToY - b.nFromY) * b.nBlend;
           continue;
@@ -1069,16 +1054,12 @@ class Player {
   }
 
   // 场地型实体（网）绘制：地面层 —— 在【掉落物与生物之下】（由 game.render 调用），半透明。
-  // 生成时从中心快速渐大弹出（WEB_POP_T）；【不旋转】（蛛网是铺在地上的）。
-  // 消失不在这里渐隐 —— 到期走通用退场幽灵，两处都做就是双重动画。
+  // 网只有一个来源：服务端下发的 netWebs（玩家网 + 蜘蛛网合并成一张表）。
+  // 入场弹出与到期退场都在这张表里走 EntityFX，这里只负责画。
   drawWebs(ctx) {
+    if (!this.netWebs || !this.netWebs.length) return;
     const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
-    // 网【一律以服务端下发的为准】（netWebs）：玩家的网与蜘蛛自铺/大招的网
-    // 共用同一套"生成 → 到期 → 退场（ExitFX）"流程 —— 蜘蛛的网也因此有了退场动画。
-    // 本地这张 webFields 只是客户端自己的模拟产物（网不再本地生成），
-    // 画两份会重影，所以只在【还没收到快照】时用它兜底。
-    if (this.netWebs && this.netWebs.length) { drawWebList(ctx, this.netWebs, img); return; }
-    drawWebList(ctx, this.webFields, img);
+    drawWebList(ctx, this.netWebs, img);
   }
 
   // 画一片花瓣实体：入场/退场/红闪统一由 EntityFX 施加，paint 里只画局部坐标 (0,0)。
@@ -1136,7 +1117,7 @@ class Player {
     for (const b of this.petalExit) this._drawPetalEntity(ctx, b, true);
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
-    // 半径乘 spawnPop：出生/重生时 Q 弹弹出（过冲回落），五官全按 R 缩放同步跟随。
+    // 半径乘 EntityFX.pop：出生/重生时 Q 弹弹出（过冲回落），五官全按 R 缩放同步跟随。
     const R = this.r * 1.2 * EntityFX.pop(this.age);   // 脸部半径
     // 中毒：整张脸平滑过渡到淡紫（描边同步），嘴平滑过渡到哭脸 —— 见下方 mood/bulge。
     const pf = clamp(this.poisonFx || 0, 0, 1);
@@ -1207,14 +1188,8 @@ class Player {
     // 装备型饰品（Third Eye 等）：贴在【朝向那侧的额头】上，随朝向绕本体移动并自转。
     this._drawAccessories(ctx, R);
 
-    // 受伤红色滤镜（0.3s）：红色覆盖脸部，随剩余时间渐隐。受击只红闪，不再叠加白闪。
-    if (this.hurtT > 0) {
-      ctx.save();
-      ctx.globalAlpha = clamp(this.hurtT / 0.3, 0, 1) * 0.4;
-      ctx.fillStyle = '#ff4040';
-      ctx.beginPath(); ctx.arc(this.x, this.y, R, 0, TAU); ctx.fill();
-      ctx.restore();
-    }
+    // 受伤红色滤镜：时长与曲线来自实体引擎，只有"花朵本体比花瓣淡一点"这一处自带强度。
+    EntityFX.drawHurt(ctx, this, this.x, this.y, R, PLAYER_HURT_A);
     // 无敌光晕：淡白色、平滑闪烁（每秒 INVULN_PULSE_HZ 下），进入与退出都有淡入淡出包络。
     // 与受伤红闪/白闪互不干扰：三者 alpha 叠加，视觉上仍是"很淡地一闪一闪"。
     if (this.invulnA > 0.002) {

@@ -12,7 +12,7 @@ const DROP_LIFETIME = {
   common: 30, unusual: 60, rare: 90, epic: 120, legendary: 150,
   mythic: 180, ultra: 210, super: Infinity, eternal: Infinity, unique: Infinity
 };
-const DROP_DESPAWN_T = 0.5;      // 到期后的渐隐消失时长（秒）
+// 到期后的渐隐时长不在这里：退场时长由 EntityFX 的 drop 种类统一定义（sim/exit.js）。
 // 呼吸起伏：每 2 秒 3 个来回 -> 周期 2/3 s -> 角频率 2π×(3/2)
 const DROP_BREATH_W = (TAU * 3) / 2;
 const DROP_BREATH_AMP = 0.024;   // 幅度 2.4%（原 1.2% 的 2 倍）
@@ -93,7 +93,7 @@ class DropCard {
     // 随机偏转：-15° ~ +15°（左右各 15 度），让掉在地上的卡看起来是"散落"而非整齐排列。
     // 生成时定死，飞行拾取过程中不再变化。
     this.rot = rand(-Math.PI / 12, Math.PI / 12);
-    // 入门 / 退场 / 红闪统一由实体引擎维护（kind = 'drop'：Q 弹入场、到期渐隐缩 15%）
+    // 入场 / 退场统一由实体引擎维护（kind = 'drop'：Q 弹入场、到期渐隐并缩 15%）
     EntityFX.spawn(this, 'drop');
   }
   // 开始拾取：记下起点，之后沿缓出曲线飞向玩家中心
@@ -104,7 +104,11 @@ class DropCard {
     this.sx = this.x; this.sy = this.y;
   }
   update(dt, player) {
-    if (this.exiting) return;                 // 退场由 EntityFX.tickList 推进
+    // 出场/呼吸/退场计时统一由实体引擎推进；退场期间也要继续走，否则永远播不完、永远回收不掉。
+    EntityFX.tickEntity(this, dt);
+    // 飞行拾取时整体变淡（旧观感）：业务附加倍率由引擎与入场/退场 alpha 相乘
+    this.fxAlpha = this.fly ? Math.max(0, 1 - this.fly * 0.85) : null;
+    if (this.exiting) return;
     // ① 存活时长到期：没有被捡走就开始通用退场（渐隐 + 微缩），播完由引擎回收
     if (!this.fly && Number.isFinite(this.life) && (this.age || 0) >= this.life) {
       EntityFX.despawn(this);
@@ -137,8 +141,6 @@ class DropCard {
     const breathe = 1 + DROP_BREATH_AMP * Math.sin((this.age || 0) * DROP_BREATH_W);
     const d = this.size * this.scale * breathe;
     if (d <= 0.5) return;
-    // 飞行拾取时整体变淡（旧观感）；引擎把它与入场/退场 alpha 相乘
-    this.fxAlpha = this.fly ? Math.max(0, 1 - this.fly * 0.85) : null;
     // 入场 Q 弹 / 到期渐隐 / 退场缩放全部由 EntityFX.draw 施加，这里只画局部坐标
     EntityFX.draw(ctx, this, (c) => {
       c.rotate(this.rot);

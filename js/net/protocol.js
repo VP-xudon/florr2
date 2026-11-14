@@ -1,8 +1,20 @@
 // net/protocol.js — 传输协议与生成参数（纯数据，可在 Node 中 require）
+//
+// 快照频率与战斗 tick 频率是同一个数（SNAP_HZ / SNAP_DT），定义在 sim/constants.js，
+// 本文件不重复定义 —— 一个节奏只能有一份声明。
 'use strict';
 
-const SNAP_HZ = 25;                 // 快照频率：与既有 combatAcc（25 tick/s）保持一致
-const SNAP_DT = 1 / SNAP_HZ;
+// ---- 快照里的表现字段表（服务端 _fillEnts 与客户端 _applySnap 共用这一份）----
+// 加一个表现字段 = 在这里加一行，服务端按 get() 取值、客户端按 as/merge 回填，
+// 两端都不需要再写一遍"哪个字段叫什么、怎么合并"。
+//   get   : (实体) => 值，服务端写快照时调用
+//   as    : 客户端视图实体上的字段名
+//   merge : 'max'（本地同时在按时间衰减，不能把更亮的覆盖成更暗）/ 'bool'（直接采信）
+const FX_FIELDS = {
+  hurt: { merge: 'max', as: 'hurtT', get: (m) => m.hurtT || 0 },              // 受伤红闪剩余秒数
+  exitT: { merge: 'max', as: 'exitT', get: (m) => m.exitT || 0 },             // 退场已播时长
+  ult: { merge: 'bool', as: 'ultActive', get: (m) => (m.ultActive ? 1 : 0) }, // 大招进行中
+};
 
 // ---- 生物生成参数（按地图生成表，服务端全局管理） ----
 // 【密度口径】所有数值都是"生物总只数"，与物种种类数无关：

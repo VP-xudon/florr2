@@ -12,14 +12,11 @@ const SpriteStore = {
   white: {},    // key -> { size: canvas }  白色剪影
   artBox: {},   // 'key@size' -> [minX, minY, w, h] | null（实际图案的像素包围盒）
   artCache: {}, // 'key@size' -> canvas（裁剪并放大到 size×size 的图案）
-  artWhiteCache: {},
   artRedCache: {},   // 'key@size' -> canvas（裁剪到图案包围盒的红色剪影，受击红闪用）
   artRectCache: {},   // key -> [x,y,w,h] 归一化（0..1）实际图案包围盒（在 SVG 原坐标系内）
   red: {},      // key -> { size: canvas }  红色剪影（受伤滤镜）
   alphaGridCache: {},   // 'key@N' -> Uint8Array(N*N) 实心度网格（精确外观碰撞用）
   contourCache: {},     // 'key@size' -> { pts, r } | null（碰撞轮廓多边形，归一化 [-0.5,0.5]）
-
-  // 带超时的加载：任何情况下都 resolve，绝不永久 pending（防止加载界面卡死）
 
   // 带超时的加载：任何情况下都 resolve，绝不永久 pending（防止加载界面卡死）
   load(key, src, timeout = 8000) {
@@ -287,26 +284,7 @@ const SpriteStore = {
     return out;
   },
 
-  // 同上，但返回白色剪影版本（受击闪烁用）
-  artWhiteCanvas(key, size) {
-    const ck = key + '@' + size;
-    if (this.artWhiteCache[ck]) return this.artWhiteCache[ck];
-    const SS = 2;
-    this.canvas(key, size * SS);
-    const base = this.white[key] ? this.white[key][size * SS] : null;
-    if (!base) return null;
-    const b = this._cropRect(size * SS);          // 与本体同一个固定裁剪框
-    if (!b) { const fb = this.white[key][size] || base; this.artWhiteCache[ck] = fb; return fb; }
-    const out = document.createElement('canvas');
-    out.width = size; out.height = size;
-    const o = out.getContext('2d');
-    o.imageSmoothingQuality = 'high';
-    o.drawImage(base, b[0], b[1], b[2], b[3], 0, 0, size, size);
-    this.artWhiteCache[ck] = out;
-    return out;
-  },
-
-  // 裁剪到图案包围盒的红色剪影（受击红闪用），与 artWhiteCanvas 同一裁剪管线。
+  // 裁剪到图案包围盒的红色剪影（受击红闪用），与 artCanvas 同一裁剪管线。
   // 关键：红闪必须和本体（artCanvas 裁剪版）同坐标系同尺寸，否则会偏小且偏移，
   // 表现为"红闪没盖住、只糊在中间一小块"。旧实现直接拿未裁剪的 redCanvas(key,512)
   // （全 viewBox 带留白）来画，自然对不上。

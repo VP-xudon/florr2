@@ -86,11 +86,12 @@ const MobAI = {
     return MobFX.ultimateOf(probe);
   },
 
-  // 位移回馈：AI 靠它判断「这一趟走完了」
-  notifyMoved(ai, d, mob) {
+  // 位移回馈：AI 靠它判断「这一趟走完了」。dt 一起传下去 ——
+  // 需要累计时长的 AI 不许再写死"一步 = 0.04 秒"（那是 25Hz 的旧假设）。
+  notifyMoved(ai, d, mob, dt) {
     if (!ai || !mob) return;
     const def = mob.aiDef;
-    if (def && def.notifyMoved) { def.notifyMoved(ai, d, mob); return; }
+    if (def && def.notifyMoved) { def.notifyMoved(ai, d, mob, dt); return; }
     if (ai.phase === 'walk' && d > 0) ai.remain -= d;
   },
 
@@ -459,9 +460,9 @@ MobAI.register('bumble_bee', {
     return { x: ai.dirX * mob.wanderSpeed, y: ai.dirY * mob.wanderSpeed };
   },
   // 撞墙判定：想走却没走动 -> 累计；顶墙超过 0.35s 就【反向】离开（随机方向可能还撞同一面墙）。
-  notifyMoved(ai, d, mob) {
+  notifyMoved(ai, d, mob, dt) {
     const want = mob ? Math.hypot(mob.vx || 0, mob.vy || 0) : 0;
-    if (d < 0.6 && want > 4) ai.stuckT = (ai.stuckT || 0) + 0.04;
+    if (d < 0.6 && want > 4) ai.stuckT = (ai.stuckT || 0) + (dt || SNAP_DT);
     else ai.stuckT = 0;
     if ((ai.stuckT || 0) > 0.35) {
       ai.stuckT = 0;

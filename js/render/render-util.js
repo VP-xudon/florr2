@@ -64,7 +64,9 @@ function drawWebList(ctx, list, img) {
   }
 }
 
-function drawMob(ctx, key, size, x, y, rot, scale, alpha, white) {
+// 生物贴图绘制。真矢量渲染：统一走「裁剪到实际图案包围盒」的 artCanvas，
+// 受击红闪用的 artRedCanvas 与它同一裁剪管线、同一坐标系（否则红闪会偏小且偏移）。
+function drawMob(ctx, key, size, x, y, rot, scale, alpha) {
   ctx.save();
   ctx.translate(x, y);
   if (rot) ctx.rotate(rot);
@@ -75,22 +77,8 @@ function drawMob(ctx, key, size, x, y, rot, scale, alpha, white) {
   // 于是绕 (x,y) 旋转时，转的是绿色身体，而不是"画布几何中心"。
   // 主体本来居中的贴图 pv≈(0,0)，等于没变。
   const pv = SpriteStore.mobPivot(key);
-  const ox = -size / 2 - pv.x * size;
-  const oy = -size / 2 - pv.y * size;
-  if (white) {
-    // 受击白闪：用裁剪到图案包围盒的白色剪影（与本体同一裁剪管线），
-    // 否则未裁剪的全 viewBox 剪影会比本体小一圈且偏移，看着像"只有中间变白"。
-    const cv = SpriteStore.artWhiteCanvas(key, size);
-    if (!cv) { ctx.restore(); return; }
-    ctx.drawImage(cv, ox, oy, size, size);
-  } else {
-    // 真矢量渲染：统一走「裁剪到实际图案包围盒」的 artCanvas，
-    // 保证与下面的白闪/红闪（artWhiteCanvas / artRedCanvas）同裁剪、同坐标系，
-    // 三者在 size×size 里完全对齐（否则红/白闪会偏小且偏移）。
-    const cv = SpriteStore.artCanvas(key, size);
-    if (!cv) { ctx.restore(); return; }
-    ctx.drawImage(cv, ox, oy, size, size);
-  }
+  const cv = SpriteStore.artCanvas(key, size);
+  if (cv) ctx.drawImage(cv, -size / 2 - pv.x * size, -size / 2 - pv.y * size, size, size);
   ctx.restore();
 }
 

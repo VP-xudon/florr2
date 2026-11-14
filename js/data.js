@@ -349,7 +349,7 @@ function petalDisplayStats(type, rarity) {
 // Honey 的「Max Mob Rarity」：只能吸引到这一档及以下的生物（颜色 #d2eb34）
 //   · common  【没有这项属性】-> 什么都吸引不了（缺失 = 无吸引，绝不能当成"不限"）
 //   · unusual 起才生效：unusual 最高只能吸引 common，之后每档高一档
-// 注意：表里【没有】的稀有度必须被视为"吸引不到任何生物"，由 net.js 的判定保证。
+// 注意：表里【没有】的稀有度必须被视为"吸引不到任何生物"，由 petal-effects.js 的判定保证。
 const HONEY_MAX_MOB_RARITY = {
   unusual: 'common', rare: 'unusual', epic: 'rare', legendary: 'epic', mythic: 'legendary',
   ultra: 'mythic', super: 'ultra', eternal: 'super', unique: 'super'

@@ -119,16 +119,19 @@ const FLOWER_HURT_INVULN = 0.2;
 // 场地型实体（Web 的网）给站在上面的实体刷状态的间隔：略大于一次 tick，
 // 这样"离开网之后大约这么久自然解除"，不会一走出来就瞬间失效、也不会残留。
 const STATUS_FIELD_REFRESH = 0.25;
-// 场地型实体（网）从生成中心"快速渐大弹出"的时长（秒）：0 -> 1 的缩放过渡
-const WEB_POP_T = 0.18;
 // Legend+ 蜘蛛的自铺蛛网：每 SPIDER_WEB_EVERY 秒在原地铺一张，SPIDER_WEB_DUR 秒后消失。
-// 网的存在时间到了【不是凭空消失】，而是走通用退场（见 sim/exit.js 的 ExitFX）。
+// 网的存在时间到了【不是凭空消失】，而是走通用退场（见 sim/exit.js 的 EntityFX）。
 // 网的半径按蜘蛛稀有度取 Web 花瓣同档的 radius（见 LocalServer._fieldTick）。
 const SPIDER_WEB_EVERY = 1.5;
 const SPIDER_WEB_DUR = 5;
+// ---- 模拟节奏（唯一来源）----
+// 战斗结算 25 tick/s、快照 25Hz、生物大招冷却按 tick 计算 —— 三者是同一个数。
+// 需要它的模块一律读 SNAP_DT / SNAP_HZ，不许再写 1 / 25 或另起别名。
+const SNAP_HZ = 25;
+const SNAP_DT = 1 / SNAP_HZ;
+
 // ---- 大招（Super / Eternal 专属）----
-// 战斗 tick 频率：25 tick/s（与快照频率一致），所以"1000 tick" = 40 秒。
-const MOB_TICK_S = 1 / 25;
+// "1000 tick" = 40 秒（25 tick/s，见 SNAP_DT）。
 // 大招冷却（tick）：每隔 1000~1500 tick 放一次大招（= 40~60 秒）。
 const MOB_ULT_COOLDOWN_TICKS = [1000, 1500];
 // 大招期间腿的摆动速率（步态 px/s）：蜘蛛原地自转时腿也要摆，
@@ -280,9 +283,8 @@ const PETAL_PULL_CD = 0.5;         // 松手后对该生物的再吸附冷却（
 const PETAL_DETACH_KICK = 0.55;   // 脱离瞬间保留的惯性比例（其余能量在"脱手"时损耗）
 const PETAL_DETACH_DRAG = 3.2;    // 惯性衰减速率：越大越快停住（3.2 ≈ 一两秒滑停）
 const PETAL_DETACH_TTL = 20;      // Pollen 实体最长存在时间（秒）；Honey 由血量决定
-// 滞留实体跟随服务端权威位置的插值时长（= 快照间隔 25Hz）：
+// 滞留实体跟随服务端权威位置的插值时长 = 快照间隔（SNAP_DT）：
 // 直接采信快照坐标会让它在 60fps 下按 25Hz 台阶跳 -> 被推挤时"一卡一卡/发粘"。
-const PETAL_NET_SYNC = 1 / 25;
 
 // 花瓣对生物只做【动能传递】，不是硬碰撞：接触瞬间传一次，之后就贴着揉搓。
 //   · 大小 = 基础位移 × 稀有度份额(重量) × 花瓣质量 × 接近速度系数

@@ -1,12 +1,25 @@
 // net/server.js — LocalServer：权威模拟世界（无 DOM / Canvas 依赖）
 'use strict';
 
+// 一步之内跑哪些系统、按什么顺序 —— 唯一的步进声明。
+// 想加一步：在这里加名字 + 写一个同名的 sysXxx(dt) 方法。
+const STEP_SYSTEMS = [
+  'sysPlayer',      // 玩家权威副本 / 检查点 / 召唤物跟随 / 多体卡重装填
+  'sysMobs',        // 醒睡分区 + AI + 移动 + 退场回收 + 弹体（建 this._awake）
+  'sysSpawn',       // 按生成表维持人口
+  'sysPush',        // 玩家↔生物 / 生物↔生物 / Wax / 召唤物 的推挤与硬碰撞
+  'sysCombat',      // 固定 25 tick/s 的战斗结算
+  'sysChains',      // 多节生物刚性粘合 + 把玩家顶出链体（必须在所有改坐标的步骤之后）
+  'sysFields',      // 场地实体（网）状态与寿命
+  'sysMobTraits',   // 生物特性（Bumble Bee 产 Pollen）
+];
+
 class LocalServer {
   constructor() {
     this.t = 0;                 // 服务端累计时间（秒）
-    this.nextId = 1;
+    this._idSeq = 1;            // 全局单调实体 id（生物 / 网 / 子实体全部从这里取）
     this.ents = [];             // 权威 Mob 实体（只增不减由 cull 负责）
-    this.fields = createEntitySet('web');   // 场地型实体单源：玩家网 + 敌方蛛网合并一张表
+    this.fields = createEntitySet('web', () => this.nextEntityId());   // 场地型实体单源：玩家网 + 敌方蛛网合并一张表
     this.hornetProjectiles = new Map(); // 已发射的独立 Hornet 导弹，不随母体回收（Map<id, projectile>）
     this.player = null;         // 玩家权威副本（跑同一套物理，供战斗定位）
     this.map = null;            // 碰撞地图（与客户端同一份）
@@ -189,7 +202,7 @@ class LocalServer {
     if (!p) return;
     const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
     for (const m of this.ents) {
-      // 死掉的个体必须留在"醒着"这张表里：它的退场动画还要继续推进（ExitFX.tick）。
+      // 死掉的个体必须留在"醒着"这张表里：它的退场动画还要继续推进（EntityFX.tickEntity）。
       if (m.dead || dist2(m.x, m.y, p.x, p.y) <= actR2) act.push(m);
       else rest.push(m);
     }
@@ -212,22 +225,24 @@ class LocalServer {
   _tickHornetProjectiles(dt) {
     const map = this.hornetProjectiles;
     for (const [id, projectile] of map) {
-      projectile.age += dt;
-      projectile.hurtT = Math.max(0, projectile.hurtT - dt);
+      // 入场/红闪/退场全部交给实体引擎：弹体也是实体，没有第二套计时。
       if (!projectile.exiting) {
+        EntityFX.tickEntity(projectile, dt);
         projectile.x += projectile.vx * dt;
         projectile.y += projectile.vy * dt;
         projectile.life -= dt;
-        if (projectile.life <= 0) {
-          projectile.exiting = true;
-          ExitFX.begin(projectile);
-        }
+        if (projectile.life <= 0) EntityFX.despawn(projectile);
       } else {
-        ExitFX.tick(projectile, dt);
-        if (ExitFX.done(projectile)) { map.delete(id); continue; }
+        EntityFX.tickEntity(projectile, dt);
+        if (EntityFX.done(projectile)) map.delete(id);
       }
     }
   }
+
+  // 全局单调实体 id：生物、网、子实体（花苞/召唤物）都从这里取，客户端只按 id 对齐。
+  // 唯一的例外是 Hornet 导弹：它是母体的子实体，id = 父 id + 序号（两端各自可复现），
+  // 见 MobFX 的 createMissile —— 子实体不进世界人口表，不需要全局唯一。
+  nextEntityId() { return this._idSeq++; }
 
   // 新个体登记：同时进权威列表与醒/睡分区（否则它会一直不跑 AI，看起来像木桩）。
   _addEnt(m) {
@@ -344,7 +359,7 @@ class LocalServer {
       const m = new Mob(pick.type, pos[0], pos[1], 1, rarity);
       m.x = pos[0]; m.y = pos[1];
       m.spawnZone = zone || null;
-      m.netId = this.nextId++;
+      m.netId = this.nextEntityId();
       this._addEnt(m);
       this._announceBossSpawn(m);          // super / eternal 才真的播（内部判）
     }
@@ -378,7 +393,7 @@ class LocalServer {
     let px = x, py = y, dir = a + Math.PI;               // dir = 由头指向尾的方向
     for (let i = 0; i < n; i++) {
       const m = new Mob(type, x, y, 1, rarity);
-      m.netId = this.nextId++;
+      m.netId = this.nextEntityId();
       m.spawnZone = zone || null;
       m.segIdx = i;
       m.chainLong = huge;                                // 超长个体：每节都带隐藏掉落
@@ -503,7 +518,7 @@ class LocalServer {
     const m = new Mob(pick.type, x, y, 1, rollMobRarityByDifficulty(0));
     m.x = x; m.y = y;
     m.spawnZone = null;
-    m.netId = this.nextId++;
+    m.netId = this.nextEntityId();
     this._addEnt(m);
     return true;
   }
@@ -512,7 +527,7 @@ class LocalServer {
     const type = MOB_BY_ID[typeId];
     if (!type) return null;
     const m = new Mob(type, x, y, level || 1, rarity);
-    m.netId = this.nextId++;
+    m.netId = this.nextEntityId();
     this._addEnt(m);
     this._announceBossSpawn(m);            // /summon 等走通用工厂的生成同样播报
     return m;
@@ -550,7 +565,7 @@ class LocalServer {
       return (e.drawSize || 24) * 0.35;
     };
 
-    // 只遍历【醒着】的个体（this._awake 由 step() 建好）：全图 4000+ 只里绝大多数是休眠的，
+    // 只遍历【醒着】的个体（this._awake 由 sysMobs 每步重建）：全图 4000+ 只里绝大多数是休眠的，
     // 以前每步都要为它们整表扫一遍再 continue，纯属白扫。
     const src = this._awake || this.ents;
     for (const m of src) {
@@ -815,13 +830,18 @@ class LocalServer {
     }
   }
 
-  // 权威推进：玩家副本移动 -> 生物 AI/移动 -> 互斥 -> 战斗（固定 25Hz）
+  // ---------------- 步进系统表 ----------------
+  // 每一步按【固定顺序】跑这些系统；加/删一步只改这张表 + 加/删一个 sys* 方法，
+  // 不再往一个 300 行的 step() 里插代码。前后依赖写在各方法的注释里。
   step(dt) {
     this.t += dt;
-    const p = this.player;
-    if (!p || !this.map) return;
+    if (!this.player || !this.map) return;
+    for (let i = 0; i < STEP_SYSTEMS.length; i++) this[STEP_SYSTEMS[i]](dt);
+  }
 
-    // 1) 玩家权威副本：按上行输入意图移动（与客户端同一套 damp + moveEntity）
+  // 1) 玩家权威副本 + 检查点 + 召唤物跟随 + 多实体卡重装填
+  sysPlayer(dt) {
+    const p = this.player;
     p.mode = this._input.mode || 'normal';
     // 特效输出临时静音：治疗飘字等表现由客户端预测副本负责，
     // 否则同一帧服务端与客户端各弹一次（会看到两个数字）。
@@ -835,13 +855,13 @@ class LocalServer {
       else p.update(dt, { x: 0, y: 0 }, this.map, near);
     } finally { PetalFX._suppress = _sup; }
 
-    // 1.2) 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
+    // 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
     this.cpAcc = (this.cpAcc || 0) + dt;
     if (this.cpAcc >= 0.2) { this.cpAcc = 0; this._checkCheckpoints(); }
 
-    // 1.45) 召唤物跟随卡槽：主人把 Ant Egg 换下去，它的召唤物一起退场。
+    // 召唤物跟随卡槽：主人把 Ant Egg 换下去，它的召唤物一起退场。
     // 之前卸下卡片只移除了花瓣实体，召唤物会一直留在场上。
-    if (p && p.slots) {
+    if (p.slots) {
       for (const m of this.ents) {
         if (!m || !m.isSummon || !m.summonFrom || m.dead) continue;
         const sc = m.summonFrom;
@@ -853,7 +873,7 @@ class LocalServer {
       }
     }
 
-    // 1.5) 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
+    // 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
     // 【必须把坐标拉回花朵中心】：实体死亡时就地冻结，若复活时沿用旧坐标，
     // 它会在"死掉的那个位置"（往往正贴着生物）凭空出现并立刻判定命中 ——
     // 表现为"新装填的 light 从生物身上/背后冒出，玩家拉开距离也照样打得到"。
@@ -876,13 +896,17 @@ class LocalServer {
         b.respawnT = 0;
         b.dead = false;
         b.hp = b.maxHp;
-        b.hurtT = 0;
+        // 复活 = 重新入场：清掉上一次的退场标记与红闪（否则 exiting 恒真、永远不再受击闪红）
+        EntityFX.spawn(b, 'petal');
         b.x = p.x; b.y = p.y;      // 回到花朵中心，再从花瓣轨道飞出去
         b.vx = 0; b.vy = 0;
       }
     }
+  }
 
-    // 2) 生物：AI + 移动 + 退场回收
+  // 2) 生物：AI + 移动 + 退场回收。顺带建好 this._awake（后面推挤/战斗/链解算都读它）
+  sysMobs(dt) {
+    const p = this.player;
     //    远处生物【休眠】：全图人口按生成表铺开，但只有近距离的才跑 AI/物理，
     //    所以"全图 100+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
     //
@@ -909,9 +933,9 @@ class LocalServer {
     for (let i = 0; i < act.length; i++) {
       const m = act[i];
       if (m.dead) {
-        // 退场播完（ExitFX.done）才回收：实体离场必须先播完通用退场动画，
+        // 退场播完（EntityFX.done）才回收：实体离场必须先播完通用退场动画，
         // 不允许在这里直接 splice —— 那会让生物"凭空消失"。
-        if (ExitFX.done(m)) { needCompact = true; continue; }
+        if (EntityFX.done(m)) { needCompact = true; continue; }
       } else if (dist2(m.x, m.y, p.x, p.y) > actR2) {
         // 走远了 -> 转休眠（进 _rest，本步不再更新；它仍然留在 this.ents 里参与快照/小地图）
         m.sleeping = true;
@@ -956,17 +980,15 @@ class LocalServer {
     act.length = actN;
     // 只在真有"退场播完"的个体时才重建数组（filter 会分配 4000+ 元素的新数组，
     // 每步都做就是纯 GC 压力）。
-    // 【回收口径】只摘"退场动画已播完"的个体（ExitFX.done）—— 退场没播完就还在场。
-    if (needCompact) this.ents = this.ents.filter((m) => !ExitFX.done(m));
+    // 【回收口径】只摘"退场动画已播完"的个体（EntityFX.done）—— 退场没播完就还在场。
+    if (needCompact) this.ents = this.ents.filter((m) => !EntityFX.done(m));
     this._tickHornetProjectiles(dt);
+  }
 
-    // 2.2) 按生成表维持人口（每 SPAWN_INTERVAL 秒补"最缺"的那只）
-    this.spawnT = (this.spawnT || 0) + dt;
-    if (this.spawnT >= SPAWN_INTERVAL) {
-      this.spawnT -= SPAWN_INTERVAL;
-      this.spawnOne();
-    }
-
+  // 3/4/4b/4c) 推挤与硬碰撞：玩家↔生物、生物↔生物、Wax 落位块、召唤物
+  sysPush(dt) {
+    const p = this.player;
+    const awake = this._awake || this.ents;
     // 3) 玩家 vs 生物：按重量 + 动能推挤（physicsPush）。重的一方几乎不动、轻的被推飞；
     //    很快的玩家能推动"更大一点"重量的生物；小生物再也推不动大生物。
     if (!p.dead) {
@@ -1092,36 +1114,40 @@ class LocalServer {
           const toSummon = this._dmg(m.dmg || 0, s.armor || 0);
           if (toEnemy > 0) this._hitMob(m, toEnemy);
           if (toSummon > 0) {
-            s.hp -= toSummon; s.hurtT = 0.3;
+            s.hp -= toSummon; EntityFX.hurt(s);
             if (s.hp <= 0) { s.dead = true; EntityFX.despawn(s); }   // 死亡 -> 蛋解除挂起（1.5 段）
           }
         }
       }
     }
+  }
 
-    // 5) 战斗结算：25 tick/s 固定步长
+  // 5) 战斗结算：固定 25 tick/s（SNAP_DT）
+  sysCombat(dt) {
     this._combatAcc += dt;
-    while (this._combatAcc >= 1 / 25) {
-      this._combatAcc -= 1 / 25;
+    while (this._combatAcc >= SNAP_DT) {
+      this._combatAcc -= SNAP_DT;
       this._combatTick();
     }
+  }
 
-    // 6) 多节生物【刚性粘合】—— 必须放在【最后】。
-    // 前面所有会改坐标的步骤（AI 移动、玩家推挤、生物两两推挤、战斗击退）都跑完之后
-    // 再统一解算，否则链会在同一帧里被后续逻辑推开（这就是"怎么改都没改善"的原因）。
+  // 6) 多节生物【刚性粘合】—— 必须放在所有改坐标的步骤之后。
+  // 前面所有会改坐标的步骤（AI 移动、玩家推挤、生物两两推挤、战斗击退）都跑完之后
+  // 再统一解算，否则链会在同一帧里被后续逻辑推开（这就是"怎么改都没改善"的原因）。
+  sysChains() {
     this._solveChains();
     // 解算完再补一次链体与玩家的分离（只推玩家）—— 否则身体会从花朵身上穿过去。
     this._pushPlayerOutOfChains();
-
-    // 7) 场地型实体（玩家的 Web 网 / Legend+ 蜘蛛自铺网）：状态施加 + 网的寿命推进。
-    // 放在坐标全部定稿之后 —— 否则算出来的是"上一步的位置"。
-    this._fieldTick(dt);
-
-    // 8) Bumble Bee：每 0.6s 在尾部生一颗同等级 Pollen。
-    // 放在【最后】：前面任何一步早退（玩家死亡等）都不该让它停产；
-    // 而且生成位置要用本步定稿后的坐标。
-    this._bumbleTick(dt);
   }
+
+  // 7) 场地型实体（玩家的 Web 网 / Legend+ 蜘蛛自铺网）：状态施加 + 网的寿命推进。
+  // 放在坐标全部定稿之后 —— 否则算出来的是"上一步的位置"。
+  sysFields(dt) { this._fieldTick(dt); }
+
+  // 8) 生物特性（Bumble Bee 每 0.6s 在尾部生一颗同等级 Pollen）。
+  // 放在【最后】：前面任何一步早退（玩家死亡等）都不该让它停产；
+  // 而且生成位置要用本步定稿后的坐标。
+  sysMobTraits(dt) { this._bumbleTick(dt); }
 
   // 场地实体产出用的"原语"：MobFX 认识要什么（蛛网 / 倍率），服务器只管怎么造。
   // 建一次复用（每帧 new 对象是纯浪费）。
@@ -1136,10 +1162,8 @@ class LocalServer {
         },
         webDur() { return SPIDER_WEB_DUR; },
         addWeb(ent) {
-          // 单调数字 id（与生物/弹体同一 nextId），客户端按 id 对齐，不会下标漂移。
-          ent.netId = self.nextId++;
           ent.owner = 'mob';          // 敌方蛛网：只给【玩家】挂减速，不给生物
-          self.fields.add(ent);
+          self.fields.add(ent);       // 容器负责分配全局单调 netId
         },
       };
     }
@@ -1184,7 +1208,7 @@ class LocalServer {
         rarityStats: { [m.rarity]: { hp: st.hp || 1, dmg: st.dmg || 0, armor: 0, exp: 0 } }
       });
       const shot = new Mob(type, x, y, 1, m.rarity);
-      shot.netId = this.nextId++;          // 没有 netId 就进不了快照，客户端看不到它
+      shot.netId = this.nextEntityId();          // 没有 netId 就进不了快照，客户端看不到它
       shot.artSvg = 'pollen';             // 快照下发，客户端据此画 mobpollen 贴图
       shot.hostility = 'hostile';
       shot.wanderSpeed = 0; shot.chaseSpeed = 0; shot.speed = 0;   // 停在原地
@@ -1210,7 +1234,6 @@ class LocalServer {
       const w = fields.get(i);
       if (!w || w.exiting) continue;
       w.t = (w.t || 0) + dt;
-      w.pop = Math.min(1, w.pop + dt / WEB_POP_T);
       if (w.t >= w.dur) EntityFX.despawn(w);
     }
     fields.sweep(dt);
@@ -1275,7 +1298,7 @@ class LocalServer {
     // 接触的两种"节奏"，口径完全不同，别混：
     //   kbT = 传能冷却：击退是【离散事件】，一次接触只传一次动能（PetalFX 自己判）；
     //   伤害 = 【每 tick 结算一次，一次就是完整面板值】，没有冷却、没有摊平系数。
-    const TICK_DT = 1 / 25;
+    const TICK_DT = SNAP_DT;
     for (const b of p.petals) {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
     }
@@ -1293,12 +1316,12 @@ class LocalServer {
         if (incoming > 0) {
           const applied = Math.min(incoming, projectile.hp);
           projectile.hp -= applied;
-          projectile.hurtT = 0.3;
+          EntityFX.hurt(projectile);
           this._events.push({ kind: 'dmg', x: projectile.x, y: projectile.y,
             r: radius, text: String(Math.round(applied)), color: DAMAGE_TEXT_COLOR });
           if (projectile.hp <= 0) {
-            projectile.hp = 0; projectile.dead = true; projectile.exiting = true;
-            ExitFX.begin(projectile);
+            projectile.hp = 0; projectile.dead = true;
+            EntityFX.despawn(projectile);
             break;
           }
         }
@@ -1314,8 +1337,8 @@ class LocalServer {
         applyKnockback(p, dx / d, dy / d, total);
         this._events.push({ kind: 'hurt', ux: dx / d, uy: dy / d, total, shake: true });
       }
-      projectile.dead = true; projectile.exiting = true;
-      ExitFX.begin(projectile);
+      projectile.dead = true;
+      EntityFX.despawn(projectile);
     }
     // ---- 持续回血（Leaf）已迁入 PetalFX 的 passive 效果 ----
     // 规则：只要实体加载好且未死亡就每帧回 heal×dt（封顶 maxHp、不弹字）。
@@ -1323,7 +1346,7 @@ class LocalServer {
     //   · 它属于"花瓣种类的能力"，不该在战斗循环里按 slug 特判；
     //   · PetalFX.tick 在 Player.update 中逐花瓣推进，天然在命中判定之外；
     //   · 战斗 tick 是 25Hz，回血写在这里会被节流成阶梯状。
-    // 只见"醒着"的个体（this._awake 由 step() 每步重建）：
+    // 只见"醒着"的个体（this._awake 由 sysMobs 每步重建）：
     // 休眠生物距玩家 > MOB_ACTIVE_R(2200)，而花瓣射程远小于它，不可能接触 ——
     // 跳过它们等于省掉全图 4500+ 只 × 花瓣数 × 25Hz 的轮廓判定。
     const awake = this._awake || this.ents;
@@ -1363,7 +1386,7 @@ class LocalServer {
           const attack = PetalFX.damageOf(b, m, p, stats.dmg);
           const toStinger = this._dmg(attack, stinger.armor || 0);
           const toPetal = this._dmg(stinger.dmg || 0, b.armor);
-          if (toPetal > 0) { b.hp -= toPetal; b.hurtT = 0.3; }
+          if (toPetal > 0) { b.hp -= toPetal; EntityFX.hurt(b); }
           if (toStinger > 0) {
             const dealt = MobFX.hurtStinger(m, stinger, toStinger);
             if (dealt > 0) {
@@ -1451,7 +1474,7 @@ class LocalServer {
         const toMob = this._dmg(attack, m.armor);
         const toPetal = this._dmg(m.dmg, b.armor);
         if (toPetal > 0) {
-          b.hp -= toPetal; b.hurtT = 0.3;
+          b.hp -= toPetal; EntityFX.hurt(b);
         }
         if (toMob > 0) this._hitMob(m, toMob);
         // 攻击磨损：按最大耐久比例、每 tick 磨损（PETAL_ATTACK_DUR 本来就是按 25Hz 定的）
@@ -1505,7 +1528,7 @@ class LocalServer {
     // 蜜不造成伤害（st.dmg = 0，上面的花瓣循环里自然不结算），只负责"挨打"；
     // 这里把它写进周围生物的仇恨表，让它们转火来啃蜜而不是玩家。
     // 限制条件：只在 HONEY_PULL_R 内、且稀有度不超过该蜜的 Max Mob Rarity。
-    const TICK = 1 / 25;
+    const TICK = SNAP_DT;
     // 先挑出"可能吸引仇恨的花瓣"（静止摆在地上那种）。绝大多数时候一朵都没有，
     // 那就整段跳过 —— 旧写法对全图 4000+ 只 × 每片花瓣调一次 canAttract，
     // 25Hz 下是战斗 tick 的主要开销（实测 7ms/tick 里的大头）。
@@ -1543,7 +1566,7 @@ class LocalServer {
       for (let i = 0; i < dl.length; i++) {
         const m = dl[i];
         if (!(m.dmgTextT > 0)) continue;          // 已结算 / 已击杀刷新过
-        m.dmgTextT -= 1 / 25;
+        m.dmgTextT -= SNAP_DT;
         if (m.dmgTextT <= 0) this._flushDmg(m);
         else dl[w++] = m;
       }
@@ -1708,7 +1731,7 @@ class LocalServer {
       sizeScale: (type.sizeScale || 1) * k
     });
     const mob = new Mob(type2, src.x, src.y, 1, card.rarity);
-    mob.netId = this.nextId++;
+    mob.netId = this.nextEntityId();
     // 玩家阵营：与玩家、其它召唤物同阵营；敌对一切非本方阵营实体
     mob.faction = 'player';
     mob.isSummon = true;
@@ -1728,6 +1751,7 @@ class LocalServer {
       PetalFX.onPop(b, p);
     }
     b.dead = true;
+    EntityFX.despawn(b);          // 权威侧也走同一条离场通道（复活时由 spawn 重新入场）
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
     if (!p) return;
@@ -1964,8 +1988,7 @@ class LocalServer {
         invuln: p.invuln, killedBy: p.killedBy, bodyDmg: p.bodyDmg,
         // 表现层状态：受伤红闪由服务端置位，必须下发，否则客户端永远不会红闪。
         // deathRot 也在服务端 die() 里随机生成，不下发客户端尸体就不会旋转。
-        hurtT: p.hurtT || 0, flash: p.flash || 0, deathRot: p.deathRot || 0,
-        deathTimer: p.deathTimer || 0
+        hurtT: p.hurtT || 0, deathRot: p.deathRot || 0
       } : null,
       // 花瓣战斗状态：客户端不跑战斗，只按这里的 hp/hurtT/dead 做表现。
       // 少了这一段，服务端花瓣掉血甚至碎掉，客户端都看不到（表现为"花瓣不受伤"）。
@@ -1976,8 +1999,8 @@ class LocalServer {
       // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
       petals: this._snapPetals(p),
       // 场级实体（网）：玩家的网 + 蜘蛛自铺/大招的网，全部下发。
-      // 客户端只渲染这里下发的网 —— 不再本地"补一张"，于是两类网共用同一套
-      // 生成 / 到期 / 退场（ExitFX）流程，蜘蛛的网也有退场动画。
+      // 客户端只渲染这里下发的网 —— 不本地"补一张"，于是两类网共用同一套
+      // 生成 / 到期 / 退场（EntityFX）流程，蜘蛛的网也有退场动画。
       webs: this._snapWebs(),
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
       ents: this._fillEnts(),
@@ -1995,54 +2018,71 @@ class LocalServer {
   // 一点伤害都结算不到（"花瓣飘过去、和瓢虫不发生任何交互"的根因）。
   // 所以这里为"槽位有卡、却没有对应实体记录"的槽位补一条 dead 记录。
   _snapPetals(p) {
-    const out = [];
-    if (!p) return out;
+    // 与 _fillEnts 同一套对象复用：25Hz 下每帧 new 一个数组 + 十几个对象是纯 GC 负担。
+    // 快照是同步消费的（客户端在本次 step 里读完），没有人会把数组留到下一帧。
+    const out = this._petalBuf || (this._petalBuf = []);
+    let n = 0;
+    if (!p) { out.length = 0; return out; }
+    // 一趟扫完：下发实体的同时记下"哪些槽已有实体记录"，
+    // 省掉后面"每槽再扫一遍 p.petals"的 O(槽×花瓣)。
+    const slots = p.slots || [];
+    let hasSlot = this._petalHas;
+    if (!hasSlot || hasSlot.length < slots.length) {
+      hasSlot = this._petalHas = new Uint8Array(Math.max(32, slots.length));
+    }
+    hasSlot.fill(0);
     for (const b of p.petals) {
-      const o = {
-        slot: b.slotIndex, sub: b.sub || 0, gen: b.gen || 0, hp: b.hp, maxHp: b.maxHp,
-        hurtT: b.hurtT || 0, dead: !!b.dead
-      };
+      const o = out[n] || (out[n] = {});
+      o.slot = b.slotIndex; o.sub = b.sub || 0; o.gen = b.gen || 0;
+      o.hp = b.hp; o.maxHp = b.maxHp;
+      o.hurtT = b.hurtT || 0; o.dead = !!b.dead;
       // 【所有花瓣都下发位置与速度】—— 客户端不再自己算花瓣运动（用户口径：
       // "客户端只从服务端接收一切需要渲染的东西"）。只给滞留型下发的后果是
       // Pollen/Honey 脱轨飞行的那一段仍由客户端本地模拟：客户端把它拉回轨道、
       // 服务端却还让它在飞 —— 两套物理必然打架，表现为"飞出去又闪现回固定"。
       o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0;
-      out.push(o);
+      if (b.slotIndex >= 0 && b.slotIndex < hasSlot.length) hasSlot[b.slotIndex] = 1;
+      n++;
     }
-    const slots = p.slots || [];
     for (let i = 0; i < slots.length; i++) {
       const c = slots[i];
       if (!c) continue;
-      let has = false;
-      for (const b of p.petals) { if (b.slotIndex === i) { has = true; break; } }
-      if (has) continue;                       // 该槽已有实体记录（含"已碎但还没被移除"的多体子体）
+      if (hasSlot[i]) continue;   // 该槽已有实体记录（含"已碎但还没被移除"的多体子体）
       // 一卡多体（Light 等）按实体数补齐，否则客户端只杀得掉 sub 0，其余照旧是幽灵。
       const cnt = (typeof CardRenderer !== 'undefined' && CardRenderer.lightSubCount)
         ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
       const gen = ((p._petalGen && p._petalGen[i]) | 0);
       for (let sub = 0; sub < Math.max(1, cnt); sub++) {
-        out.push({ slot: i, sub, gen, hp: 0, maxHp: 0, hurtT: 0, dead: true });
+        const o = out[n] || (out[n] = {});
+        o.slot = i; o.sub = sub; o.gen = gen;
+        o.hp = 0; o.maxHp = 0; o.hurtT = 0; o.dead = true;
+        o.x = 0; o.y = 0; o.vx = 0; o.vy = 0;
+        n++;
       }
     }
+    out.length = n;
     return out;
   }
 
   // 快照里的【场级实体】（网）：单一来源 this.fields（玩家网 + 蜘蛛自铺/大招的网合并）。
-  // id 全部来自 nextId++（单调），客户端按 id 对齐，不会下标漂移。
+  // id 全部来自 nextEntityId()（单调），客户端按 id 对齐，不会下标漂移。
+  // 只下发"是什么状态"，入场/退场的动画进度由客户端 EntityFX 按 exitT 对齐。
   _snapWebs() {
-    const out = [];
+    const out = this._webBuf || (this._webBuf = []);
     const fields = this.fields;
     const len = fields.length;
+    let n = 0;
     for (let i = 0; i < len; i++) {
       const f = fields.get(i);
       if (!f) continue;
-      out.push({
-        id: f.netId,
-        x: f.x, y: f.y, r: f.r, t: f.t || 0, dur: f.dur || 0, pop: f.pop || 0,
-        exiting: !!f.exiting,
-        owner: f.owner || null,   // 'mob' = 敌方蛛网（只减速玩家），其它 = 玩家网（只减速生物）
-      });
+      const o = out[n] || (out[n] = {});
+      o.id = f.netId;
+      o.x = f.x; o.y = f.y; o.r = f.r;
+      o.exiting = !!f.exiting; o.exitT = f.exitT || 0;
+      o.owner = f.owner || null;   // 'mob' = 敌方蛛网（只减速玩家），其它 = 玩家网（只减速生物）
+      n++;
     }
+    out.length = n;
     return out;
   }
 
@@ -2068,47 +2108,29 @@ class LocalServer {
       o.pollenShot = !!m.pollenShot;      // Bumble Bee 产出的 Pollen，客户端据此标记视图
       // 多节生物的节序号：客户端据此不做逐节插值（见 game.js），保证整条刚性对齐、顺序不错
       o.segIdx = (m.segIdx != null) ? m.segIdx : null;
-      // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 entities.js Mob.draw
+      // 名牌显示模式（'classic' 经典 / 'player' 主角血条式），见 sim/mob.js Mob.draw
       o.plateStyle = m.plateStyle || null;
       // 血条下方额外标签（召唤物 = 'Summon'）与阵营：客户端只负责画/选目标，不做玩法判断
       o.hpBarTag = m.hpBarTag || null;
       o.faction = m.faction || 'enemy';
       o.isSummon = !!m.isSummon;
-      // 表现层状态全部由服务端权威置位，必须下发，否则客户端视图实体这些字段恒为 0：
-      //   hurtT  = 受伤红闪（0.3s 渐隐）
-      //   flash  = 白闪（0.14s 白色剪影）
-      //   squash = 受击挤压（Q 弹一下）
-      //   deathTimer / deathRot = 死亡放大渐隐 / 尸体旋转角
-      o.hurtT = m.hurtT || 0; o.flash = m.flash || 0; o.squash = m.squash || 0;
-      o.deathTimer = m.deathTimer || 0; o.deathRot = m.deathRot || 0;
-      // 【Stage 3】表现字段统一收进 o.fx，客户端 _applySnap 表驱动回填，
-      // 新增字段只改这里一处，避免"服务端加了字段、客户端没回填"的半截 bug。
-      o.fx = {
-        hurt: m.hurtT || 0,
-        flash: m.flash || 0,
-        squash: m.squash || 0,
-        rot: m.deathRot || 0,
-        exitT: (m.exitT || m.deathTimer || 0),
-        ult: m.ultActive ? 1 : 0
-      };
-      // 大招状态（Super / Eternal 专属）：服务端权威，客户端据此做表现镜像
-      // （自转朝向本来就下发；这里补的是"大招进行中"这个开关：
-      //   腿要继续摆、客户端要在大招结束时补一张超大蛛网）。
-      o.ultActive = m.ultActive ? 1 : 0;
+      // 表现层状态【表驱动】：字段清单只在 net/protocol.js 的 FX_FIELDS 里声明一次，
+      // 这里按表写值，客户端 _applySnap 按同一张表回填 —— 不可能只改一半。
+      const fxo = m._snapFx || (m._snapFx = {});
+      for (const k in FX_FIELDS) fxo[k] = FX_FIELDS[k].get(m);
+      o.fx = fxo;
       const hm = m.hornet && m.hornet.missile;
-      o.hornetMissile = hm ? {
-        id: hm.id, x: hm.x, y: hm.y, facing: hm.facing,
-        vx: hm.vx, vy: hm.vy, flight: !!hm.flight, hp: hm.hp, maxHp: hm.maxHp,
-        hurtT: hm.hurtT || 0, age: hm.age || 0, exiting: !!hm.exiting, exitT: hm.exitT || 0,
-        dead: !!hm.dead, radius: hm.radius || 0, drawSize: hm.drawSize || 0
-      } : null;
-      o.hornetProjectiles = (m.hornet && m.hornet.projectiles || []).map((projectile) => ({
-        id: projectile.id, x: projectile.x, y: projectile.y, facing: projectile.facing,
-        vx: projectile.vx, vy: projectile.vy, flight: true, hp: projectile.hp, maxHp: projectile.maxHp,
-        hurtT: projectile.hurtT || 0, age: projectile.age || 0, exiting: !!projectile.exiting,
-        exitT: projectile.exitT || 0, dead: !!projectile.dead, radius: projectile.radius || 0,
-        drawSize: projectile.drawSize || 0
-      }));
+      // 弹体与导弹同样按母体复用一套对象（每条母体自己的池），避免 25Hz 下持续造对象。
+      const mo = hm ? (m._snapMissile || (m._snapMissile = {})) : null;
+      if (mo) {
+        mo.id = hm.id; mo.x = hm.x; mo.y = hm.y; mo.facing = hm.facing;
+        mo.vx = hm.vx; mo.vy = hm.vy; mo.flight = !!hm.flight;
+        mo.hp = hm.hp; mo.maxHp = hm.maxHp;
+        mo.hurtT = hm.hurtT || 0; mo.age = hm.age || 0;
+        mo.exiting = !!hm.exiting; mo.exitT = hm.exitT || 0;
+        mo.dead = !!hm.dead; mo.radius = hm.radius || 0; mo.drawSize = hm.drawSize || 0;
+      }
+      o.hornetMissile = mo;
       n++;
     }
     buf.length = n;

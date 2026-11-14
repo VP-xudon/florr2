@@ -419,10 +419,10 @@ const MobFX = {
     return u;
   },
 
-  // 冷却：按区间随机（单位 tick，1 秒 = 25 tick）
+  // 冷却：按区间随机（单位 tick，1 tick = SNAP_DT 秒）
   _ultDelay(u) {
     const cd = (u && u.cooldownTicks) || MOB_ULT_COOLDOWN_TICKS;
-    return rand(cd[0], cd[1]) * MOB_TICK_S;
+    return rand(cd[0], cd[1]) * SNAP_DT;
   },
 
   // ---------------- 大招状态机（调度 + 通用表现）----------------
@@ -530,7 +530,6 @@ MobFX.registerField('web', {
       r: this.radius(mob, req, ctx),
       t: 0,
       dur: (req.dur != null) ? req.dur : (ctx && ctx.webDur ? ctx.webDur() : 10),
-      pop: 0,
     };
   },
 });

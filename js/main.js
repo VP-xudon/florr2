@@ -14,7 +14,7 @@ for (const m of MOB_TYPES) {
 // 渲染专用生物素材统一放 assets/entities/（与原始贴图分离，避免再出现"拆分后原地覆盖"）：
 //   瓢虫 = 本体(mobs/3.svg 已裁到图案、去掉了描边圈) + 描边圈独立图层，
 //   绘制顺序：本体 -> 随机圆点 -> 描边圈（圆点永远压在圈的下面）。
-//   RING_RECT 见 entities.js LADYBUG_RING_RECT。
+//   描边圈的裁剪矩形见 sim/mob-shape.js 的 LADYBUG_RING_RECT。
 ASSET_LIST.push(['mob3', 'assets/entities/3_body.svg?v=' + ASSET_VER]);
 ASSET_LIST.push(['mob3ring', 'assets/entities/3_ring.svg?v=' + ASSET_VER]);
 // 蜈蚣（多节生物）：头节带触角 / 身体节两套贴图（图鉴仍用 mobs/12.svg）

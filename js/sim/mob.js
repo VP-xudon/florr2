@@ -106,18 +106,13 @@ class Mob {
     this.lastHitByPlayer = new Map();   // 每只生物分别记录各玩家最近一次实际非毒单击伤害
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
     this.honeyImmune = false;           // 被蜜影响满 40s 后永久免疫所有蜜
-    this.flash = 0; this.squash = 0;
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
     this.dispHp = null; this.ghostHp = null; this.ghostV = 0;
     this.dead = false;
-    // 出场 / 退场 / 红闪状态全部由 sim/exit.js 的 EntityFX 维护：
-    //   exiting / exitT / exitAlpha / exitScale / age / hurtT / flash
-    // 任何地方想"让这只生物消失"，唯一入口是 EntityFX.despawn(this)，
-    // 回收只由 EntityFX.done / tickList 判定（见 server.js 的 ents 清理）。
-    this.age = 0;                       // 出场计时（由 EntityFX 推进）
-    this.exiting = false; this.exitT = 0; this.exitDur = 0;
-    this.exitAlpha = 1; this.exitScale = 1;
+    // 出场 / 退场 / 红闪状态全部由 sim/exit.js 的 EntityFX.spawn 初始化并推进。
+    // 想让这只生物消失，唯一入口是 EntityFX.despawn(this)，
+    // 回收只由 EntityFX.done 判定（见 server.js 的 sysMobs）。
     // 大招（Super / Eternal 专属）：【状态由 MobFX 引擎维护】（js/mob-fx.js）
     //   ultActive    = 大招进行中（服务端权威，客户端只做表现镜像）
     //   ultHold      = 大招期间"定在原地"的锚点（null = 不锁位置）
@@ -128,7 +123,6 @@ class Mob {
     // 护甲（armor）：registry 有就整表取用，否则按稀有度默认表；攻击结算 = max(攻-甲, 0)
     this.armor = (rs && rs.armor != null) ? rs.armor
       : (type.armor != null) ? type.armor : (MOB_ARMOR[this.rarity] || 0);
-    this.hurtT = 0;                     // 受伤红色滤镜剩余时间（0.1s）
     this.xpVal = rs ? (rs.exp || 0) : (4 + type.tier * 4);
     // 中毒（蜘蛛等）：命中玩家后施加【总量 poison】的中毒，按每秒 poisonRate 均摊扣完。
     // 结算在 LocalServer._combatTick（施加）与 Player 的状态推进（扣血），这里只是携带数值。
@@ -450,11 +444,10 @@ class Mob {
   update(dt, player, map, others) {
     // 死亡：只推进退场动画（放大渐隐），退场播完才由 EntityFX.tickList 回收。
     if (this.dead) { EntityFX.tickEntity(this, dt); return; }
-    // 出场计时 / 受伤红闪 / 白闪：统一由实体引擎推进（与客户端视图同一条曲线）
+    // 出场计时 / 受伤红闪：统一由实体引擎推进（与客户端视图同一条曲线）
     EntityFX.tickEntity(this, dt);
     this._map = map || this._map;      // canSee 的视线检测要用（每帧刷新引用，成本为零）
     this._tickHpSmooth(dt);
-    this.squash = damp(this.squash, 0, 10, dt);
     tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
     if (typeof StatusFX !== 'undefined') StatusFX.tick(this, dt);   // 状态效果时长推进
     if (typeof MobFX !== 'undefined') {
@@ -469,7 +462,7 @@ class Mob {
     // 之前这里内联复制了一份一模一样的逻辑，改一处漏一处，正是"两套碰撞"的来源之一。
     if (!this.shape) this._ensureShape();
 
-    // 多节生物里被【刚性粘合】的节：位置与朝向全由 net.js _solveChains 解算，
+    // 多节生物里被【刚性粘合】的节：位置与朝向全由 net/server.js 的 _solveChains 解算，
     // 这里绝不跑 AI / 位移（两套逻辑同时改坐标 = 原地打转、左右抽搐、连不成一条）。
     // 但【击退冲量不能丢】：把它积分成"相对轨迹槽位的局部偏移"（pushX/pushY），
     // 由链解算叠加上去并沿相邻节扩散，然后按弹性速率回位。
@@ -576,7 +569,7 @@ class Mob {
       }
     }
     // —— 4) 把实际位移回馈给 AI，它靠这个判断"这趟走完了" ——
-    MobAI.notifyMoved(this.ai, moved, this);
+    MobAI.notifyMoved(this.ai, moved, this, dt);
     // —— 5) 朝向跟随真实移动方向；停下来就保持当前朝向（下一趟再转）——
     // 【大招期间例外】：自转的朝向由大招自己驱动（蜘蛛自转），这里绝不能覆盖。
     const sp = Math.hypot(this.vx, this.vy);
@@ -590,10 +583,9 @@ class Mob {
 
   draw(ctx) {
     this._ensureShape();          // 客户端视图也要建外形（见 _ensureShape）
-    // 出场/退场/红闪全部由 EntityFX 统一算好；这里只叠加受击挤压（业务表现）。
+    // 出场/退场/红闪全部由 EntityFX 统一算好；这里只读取合成后的 alpha/scale。
+    // 生物不做呼吸/浮动特效（用户明确要求），尺寸只由出场 Q 弹与退场缩放决定。
     const fx = EntityFX.visual(this);
-    const squash = 1 + this.squash * 0.4;
-    // 注意：生物【不做】呼吸/浮动特效（用户明确要求），尺寸只由受击挤压与退场缩放决定。
     // 多节生物：头节/身体节用不同贴图。本节贴图【没加载成功】时退回物种贴图，
     // 否则 drawMob 会直接 return —— 表现就是"整条蜈蚣没有头"（12_h 素材 404/缓存损坏时）。
     let key = 'mob' + (this.artSvg || this.svg);
@@ -614,14 +606,14 @@ class Mob {
     }
     const gait = (this.gaitSprite && typeof SpiderGait !== 'undefined' && SpiderGait.ready())
       ? SpiderGait.legs(this.drawSize, this.gait) : null;
-    // 步态生物（蜘蛛）的实际绘制键 = 无腿身体：红闪/白闪/红滤镜都必须跟它同源，
+    // 步态生物（蜘蛛）的实际绘制键 = 无腿身体：红闪剪影必须跟它同源，
     // 否则红闪用的还是【带腿的旧剪影】，腿摆起来红闪却不动（观感就是"红闪没跟上"）。
     let keyBody = key;
     if (gait) keyBody = 'mob21_body';
     // 挂在身上的子实体（Hornet 尾针）：图层在【身体之下】。它用世界坐标绘制，
     // 所以放在 EntityFX.draw 之外，但 alpha/scale 仍取引擎合成值（唯一来源）。
     if (!this.dead && typeof MobFX !== 'undefined') {
-      this._drawScale = fx.scale * squash;
+      this._drawScale = fx.scale;
       this._drawAlpha = fx.alpha;
       MobFX.drawMob(ctx, this);
       this._drawScale = null; this._drawAlpha = null;
@@ -629,7 +621,6 @@ class Mob {
     // ★ 本体统一走 EntityFX.draw：入场/退场/渐隐由引擎施加，paint 里全部用局部坐标 (0,0)。
     EntityFX.draw(ctx, this, () => {
       ctx.save();
-      if (squash !== 1) ctx.scale(squash, squash);
       if (gait) {
         // 八条腿【矢量绘制】（在身体之下）+ 无腿身体贴图：
         // 腿的相位由 gait 连续驱动 —— 不预渲染帧，任何缩放/角度都是矢量锐边。
@@ -655,11 +646,11 @@ class Mob {
         ctx.stroke();
         ctx.restore();
         // ② 身体（无腿贴图，压在腿上面）
-        drawMob(ctx, keyBody, this.drawSize, 0, 0, rot, 1, null, false);
+        drawMob(ctx, keyBody, this.drawSize, 0, 0, rot, 1, null);
       } else {
-        drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null, false);
+        drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null);
       }
-      // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。
+      // 瓢虫随机斑点：与本体同变换（旋转/缩放/透明度），受击由整体红色滤镜统一表现。
       // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
       // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。
       if (this.dots && this.dots.length) {

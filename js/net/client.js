@@ -74,7 +74,7 @@ class LocalNet extends Net {
   get debugServer() { return this._server; }
 
   // 由客户端主循环驱动：本地实现零延迟，因此每帧都推进服务端。
-  // 【快照按 SNAP_HZ 下发，不是每个模拟步都发】：一帧固定步长循环最多补 8 步，
+  // 【快照按 SNAP_HZ 下发，不是每个模拟步都发】：一帧固定步长循环最多补 3 步，
   // 以前每一步都 snapshot() 一份全量（4000+ 个生物对象）+ 客户端再整套镜像一次，
   // 60 步/秒 ≈ 26 万个对象/秒，GC 直接把帧率拖到个位数。
   // 客户端本来就有插值缓冲（_snapDt / _applySnap 的 px->tx blend），25Hz 快照不会卡顿。
