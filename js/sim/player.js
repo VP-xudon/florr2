@@ -39,12 +39,13 @@ class Player {
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     this.hpBarA = 0;            // 血条显示透明度（非满血渐显 0.3s / 满血渐隐 0.3s）
     this.deathRot = 0;          // 死亡时本体固定的随机旋转角
-    this.dead = false; this.deathTimer = 0;
+    this.dead = false; this.corpseT = 0;
     this.breath = 0; this.moving = false;
     this.spin = 0;              // 花瓣环绕角度
     this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
-    this.petalGhosts = [];      // 已卸下/被移除的花瓣：原地放大渐隐
-    this.petalWorld = [];
+    // 已离场的花瓣实体：统一走 EntityFX 退场（放大 + 渐隐），由引擎表回收。
+    // 不再保留"幽灵副本"——那就是同一片花瓣的第二套消失方式。
+    this.petalExit = createEntitySet('petal');
     // 场地型实体（Web 落地后的那张大网）：独立于花瓣实体表 —— 没有碰撞箱、不占轨道位、
     // 不参与伤害结算；{ x, y, r, t, dur, pop, spin }。
     // 受控实体表（sim/exit.js）：移除只能走通用退场后由 sweep 回收，外部无法直接删。
@@ -138,11 +139,16 @@ class Player {
 
   // 花朵死亡：花瓣原地快速渐隐消失，本体随机旋转一个角度后保持不动（叉叉眼 + 哭脸）
   die() {
-    this.dead = true; this.deathTimer = 0;
+    this.dead = true; this.corpseT = 0;
     this.deathRot = rand(0, TAU);
-    // 每个花瓣实体各自转幽灵（多体花瓣本就是 N 个实体，无需特殊处理）
-    for (const b of this.petals) this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
-    this.petals = []; this.petalWorld = [];
+    // 每个花瓣实体各自进入通用退场（多体花瓣本就是 N 个实体，无需特殊处理）
+    for (const b of this.petals) {
+      if (b.dead || b.exiting) continue;
+      b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+      EntityFX.despawn(b);
+      this.petalExit.adopt(b);
+    }
+    this.petals = [];
     this.vx = 0; this.vy = 0;
   }
 
@@ -201,14 +207,7 @@ class Player {
       f.t += dt;
       f.pop = Math.min(1, f.pop + dt / WEB_POP_T);
       // 到期 -> 统一实体引擎的离场入口（与生物/花瓣同一套渐大渐隐）
-      if (f.t >= f.dur) {
-        const img = (typeof PetalFX !== 'undefined' && PetalFX.netImage) ? PetalFX.netImage() : null;
-        EntityFX.despawn(f, {
-          ghost: (ent) => {
-            if (img) this.petalGhosts.push({ img, x: ent.x, y: ent.y, size: ent.r * 2, alpha: 0.9, age: 0 });
-          }
-        });
-      }
+      if (f.t >= f.dur) EntityFX.despawn(f);
     }
     // 唯一的回收点：退场播完才移除（受控实体表，外部拿不到原始数组）
     arr.sweep(dt);
@@ -223,7 +222,7 @@ class Player {
     if (pos) { this.x = pos.x; this.y = pos.y; }
     this.vx = 0; this.vy = 0;
     this.hp = this.maxHp;
-    this.dead = false; this.deathTimer = 0; this.deathRot = 0;
+    this.dead = false; this.corpseT = 0; this.deathRot = 0;
     this.hurtT = 0; this.flash = 0; this.killedBy = null;
     this.hurtInvuln = 0;
     // 状态效果一并清空：死亡重生不该继承毒伤（用户口径：死亡后毒伤清零）
@@ -232,10 +231,11 @@ class Player {
     this.invuln = 0; this.invulnSrc = {}; this.invulnTotal = 0; this.invulnA = 0;
     this.age = 0;
     this.dispHp = this.hp; this.ghostHp = this.hp; this.ghostV = 0;
-    // 花瓣实体、世代号、退场幽灵是同一份状态，必须一起清
-    this.petals = []; this.petalWorld = []; this._petalGen = []; this.petalGhosts = [];
+    // 花瓣实体、世代号、退场表是同一份状态，必须一起清（退场表让旧实体播完再回收）
+    this.petals = []; this._petalGen = [];
     // 场上的网属于"这一条命"：重生时【走通用退场】淡出，而不是凭空消失
-    for (const f of this.webFields) ExitFX.begin(f);
+    if (this.webSink) { /* 服务端权威网由 LocalServer 自己回收 */ }
+    else { for (const f of this.webFields) EntityFX.despawn(f); }
     this.netPetals = null;                 // 旧快照键映射作废，避免重生瞬间串状态
     this.reload = this.slots.map((c) => c ? {
       card: c, age: 0,
@@ -247,17 +247,18 @@ class Player {
   }
 
   update(dt, dir, map, mobs) {
-    // 场级实体（网）的退场推进：与花瓣/生物同一套 ExitFX 通道
+    // 场级实体（网）的退场推进：与花瓣/生物同一套 EntityFX 通道
     if (this.netWebs) this.netWebs.sweep(dt);
     if (this.dead) {
-      this.deathTimer += dt;
-      // 死亡瞬间放出的花瓣退场幽灵继续播完渐隐（0.2s）
-      for (const g of this.petalGhosts) g.age += dt;
-      this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
+      this.corpseT += dt;
+      // 死亡瞬间放出的花瓣退场实体继续播完渐隐（0.1s）
+      this.petalExit.sweep(dt);
       // 退场中的网也要播完（否则会一直挂到下次重生才被回收）
       if (this.webFields && this.webFields.length) this.webFields.sweep(dt);
       return;
     }
+    // 花瓣退场表始终推进（换装/碎裂的实体在播完前仍需计时）
+    this.petalExit.sweep(dt);
     // 地形减速：站在 foliage / seaweed / vine 这类瓦片上时——
     //   · 移动速度 = 默认值的 40%
     //   · 所有花瓣强制回到"待加载"状态（装填进度清零、不生成实体），离开后重新装填
@@ -342,29 +343,25 @@ class Player {
     return this.mode === 'reach' || this.mode === 'detect';
   }
 
-  // 客户端侧销毁一朵花瓣实体：转退场幽灵（由 _syncPetals 的差分完成）+
-  // 该槽重新结算装填。与服务端 _destroyPetal 语义一致，但这里只做表现。
+  // 客户端侧销毁一朵花瓣实体：进入通用退场（放大 + 渐隐），该槽按规则重新装填。
+  // 与服务端 _destroyPetal 语义一致，但这里只做表现。
   _killPetalBody(b) {
     if (b.dead) return;
     // 先问引擎（与服务端同一套语义）：飞行途中的 Web 被打碎要立刻成网
     if (typeof PetalFX !== 'undefined' && PetalFX.onPop) PetalFX.onPop(b, this);
     b.dead = true;
+    b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
     EntityFX.despawn(b);                 // 入场/退场/红闪统一由实体引擎打标记
+    this.petalExit.adopt(b);             // 退场播完由 petalExit.sweep 回收
     // 与服务端 _destroyPetal 同一规则：放在地上的滞留实体（Pollen / Honey）碎了就是碎了，
     // 不触发卡片重装。少了这一条，客户端会把该槽冷却重置一遍 -> 之后每次装填都比服务端慢一拍。
-    // 但退场表现要走同一条路：原地放大渐隐（否则 Web 飞完就"凭空消失"）。
-    if (b.stationary) {
-      this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
-      return;
-    }
+    if (b.stationary) return;
     const c = b.card;
     const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
     const cnt = (CardRenderer.lightSubCount) ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
     if (cnt > 1) {
       // 多实体卡：只有这一个实体进入自己的重装填（服务端权威计时），卡片【不】进入
       // reload —— 所以卡面不会出现扇形阴影；同槽其它实体照常飞舞。
-      // 死亡视觉：原地放大渐隐（此实体不会像单体卡那样从实体表里消失）。
-      this.petalGhosts.push({ card: c, x: b.x, y: b.y, age: 0 });
       return;
     }
     this.reload[b.slotIndex] = { card: c, age: 0, dur };
@@ -594,18 +591,24 @@ class Player {
     //    只是不再跟随轨道。原样保留，并累计存活时间（Pollen 有存活上限）。
     for (const b of this.petals) {
       if (!b.stationary) continue;
-      // 已碎的滞留实体直接丢掉：它不属于任何一批，也不会"重装填复活"，
-      // 留着只会在 petals 里越积越多（退场幽灵在下死手那一刻已经生成）。
-      if (b.dead) continue;
+      // 已碎的滞留实体：走通用退场后由 petalExit 回收，不留在 petals 里越积越多。
+      if (b.dead) {
+        if (!b.exiting) {
+          b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+          EntityFX.despawn(b);
+          this.petalExit.adopt(b);
+        }
+        continue;
+      }
       // 卡片 ↔ 实体严格对应：这张卡被切下/换掉，地上的实体立刻消失。
       // （否则切下 Honey 再切回来会凭空多出一批实体，越切越多。）
       if (this.slots[b.slotIndex] !== b.card) {
         b.dead = true;
-        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+        b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+        EntityFX.despawn(b);
+        this.petalExit.adopt(b);
         continue;
       }
-      b.age += dt;
-      b.hurtT = Math.max(0, (b.hurtT || 0) - dt);
       b.life = (b.life || 0) + dt;
 
       // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）。
@@ -639,7 +642,7 @@ class Player {
         let body = null;
         for (const b of this.petals) {
           // 匹配"本世代"的实体：脱轨后世代号 +1，旧实体不再被这里复用
-          if (!b.stationary && (b.gen | 0) === gen
+          if (!b.stationary && !b.dead && (b.gen | 0) === gen
             && b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
         }
         if (!body) {
@@ -652,14 +655,13 @@ class Player {
           // 随稀有度递增：common=1 …… rare≈4 …… eternal≈249）。
           // 注释原话就是"花瓣 = 对应稀有度重量"，但此前实体对象上根本没有这个字段，
           // 导致所有花瓣在推挤/击退中一律视为"没有重量"——连 Eternal 蜜都被 rare 生物推着跑。
-          body = { slotIndex, sub, gen, card, x: this.x, y: this.y, age: 0, hp: maxHp, maxHp, hurtT: 0,
+          body = { slotIndex, sub, gen, card, x: this.x, y: this.y, hp: maxHp, maxHp,
             weight: rarityWeight(card.rarity),
             // 护甲走同一张数据表（花瓣与生物同一套伤害口径：dmg - armor）
             armor: st.armor || 0,
             kbT: 0 };        // 传能冷却（伤害没有冷却：每 tick 都结算）
+          EntityFX.spawn(body, 'petal');   // 出场计时/退场/红闪统一由实体引擎维护
         }
-        body.age += dt;
-        body.hurtT = Math.max(0, (body.hurtT || 0) - dt);
         body.ord = k; body.n = n;
         body.cnt = cnt;
         body.spot = (nSpot === 1) ? myBase
@@ -777,21 +779,21 @@ class Player {
       for (const nb of bodies) {
         if (nb.slotIndex === b.slotIndex && nb.card === b.card && nb.sub === b.sub && !nb.stationary) { kept = true; break; }
       }
-      // 多体卡的已碎实体：死亡瞬间已经单独生成过幽灵，这里不重复
-      if (!kept && !(b.dead && (b.cnt || 1) > 1)) {
-        this.petalGhosts.push({ card: b.card, x: b.x, y: b.y, age: 0 });
+      // 多体卡的已碎实体：死亡瞬间已经走过 EntityFX 退场，这里不重复
+      if (!kept && !b.exiting) {
+        this.petalExit.adopt(b);
       }
     }
     this.petals = bodies;
+    // 统一步长：每片在场花瓣的 age / hurtT / 退场计时都只在这里推进一次
+    // （新增实体也从 0 开始，下一帧 age = dt，与旧行为一致）。
+    for (const b of this.petals) EntityFX.tickEntity(b, dt);
 
     // ---- 服务端花瓣战斗状态回填 ----
     // 客户端不跑战斗（战斗在服务端），所以花瓣的 hp / 受伤红闪 / 是否已碎
     // 全部由快照下发到这里。缺了这一步，服务端花瓣掉血碎掉而客户端毫无反应，
     // 外观上就是"花瓣永远不受伤、永远不会碎"。
     this._applyNetPetalStates();
-    // 幽灵推进，超时即真正移除
-    for (const g of this.petalGhosts) g.age += dt;
-    this.petalGhosts = this.petalGhosts.filter((g) => g.age < FADE_T);
 
     // 花瓣特效引擎：对每片在轨花瓣跑 detect/update（玫瑰等特殊行为在此触发）。
     // 必须在弹簧之前：激活的特效会直接驱动 b.x/b.y，弹簧随后跳过它们。
@@ -1032,27 +1034,7 @@ class Player {
       this._separatePetalFromMobs(b, nearMobs);
     }
 
-    // 供绘制与碰撞使用（hurtT：花瓣受伤红滤镜；fxActive：特效驱动中，图层在主角之上；
-    // dead：该实体已碎、正在独立重装填 —— 不绘制）
-    this.petalWorld = this.petals.map((b) => ({
-      x: b.x, y: b.y, r: (b.cr || PETAL_R), index: b.slotIndex, age: b.age,
-      hurtT: b.hurtT || 0, fxActive: !!b.fxActive, dead: !!b.dead,
-      stationary: !!b.stationary,
-      // 阵型型子实体：整体朝向由更新阶段算好（基准 + 布局朝向，如 Ultra Stinger 尖端向心）
-      drawRot: (b.drawRot != null) ? b.drawRot : null,
-      flightRot: (b.flightRot != null) ? b.flightRot : null,
-      flightSpin: b.flightSpin || 0,
-      // 阵型子体的相对尺寸（与卡面同一个 k），null = 满尺寸
-      formK: (b.formK != null) ? b.formK : null,
-      // 自转（独立于公转），从加载好那一刻起持续转动
-      selfRot: b.selfRot || 0,
-      // 自带贴图键：滞留实体可能在卡片被卸下之后还存在，不能再依赖 slots[index]
-      svg: (b.card && b.card.type) ? b.card.type.svg : null,
-      spinOrigin: (b.card && b.card.type) ? b.card.type.spinOrigin : null,
-      // 落位型大实体（Wax）：按自己的半径画、不旋转、不参与公转
-      artSize: b.artSize || 0, anchor: !!b.anchor, shapePoly: b.shapePoly || null,
-      hp: b.hp, maxHp: b.maxHp
-    }));
+    // 绘制直接读 this.petals（实体字段齐全），不再每帧复制一份 projection。
   }
 
   // 装备型花瓣（饰品）绘制：不进入轨道，固定贴在人物身上。
@@ -1099,87 +1081,63 @@ class Player {
     drawWebList(ctx, this.webFields, img);
   }
 
-  draw(ctx) {
-    // 死亡：先播完花瓣退场幽灵（渐隐），再画死亡本体（随机角度 + 叉叉眼 + 哭脸）
-    if (this.dead) {
-      for (const g of this.petalGhosts) {
-        const size = PETAL_ENT_SIZE;
-        const d = deathFade(clamp(g.age / FADE_T, 0, 1));
-        // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
-        if (g.img) {
-          drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));
-          continue;
-        }
-        const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-        const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-        if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-        // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
+  // 画一片花瓣实体：入场/退场/红闪统一由 EntityFX 施加，paint 里只画局部坐标 (0,0)。
+  // exitMode = true 时使用离场那一刻定格的朝向（旧幽灵就是"相对主角的方向"）。
+  _drawPetalEntity(ctx, b, exitMode) {
+    if (!b) return;
+    const svg = b.svg || (b.card && b.card.type ? b.card.type.svg : null) || null;
+    const size = b.artSize || PETAL_ENT_SIZE;
+    if (b.anchor) {
+      // 落位型实体（Wax）：直径 = 2×radius、不旋转、按自己的外形闪红
+      EntityFX.draw(ctx, b, (c) => {
+        const img = svg ? (CardRenderer.artImage(svg) || CardRenderer.artCanvas(svg, 256)) : null;
+        if (img) drawPetalArt(c, img, size, 0, 0, 0, 1, null);
+        EntityFX.drawHurtPoly(c, b, 0, 0, b.shapePoly, (b.cr || PETAL_R));
+      });
+      return;
+    }
+    let rot;
+    if (exitMode && b.exitRot != null) {
+      rot = b.exitRot;
+    } else if (b.fxActive) {
+      // 特效驱动中（玫瑰飞向主角）：朝向沿用"由花心指向花瓣"的旧口径
+      rot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+    } else if (b.flightRot != null) {
+      rot = b.flightRot + (b.flightSpin || 0);
+    } else {
+      rot = (b.stationary ? 0 : (b.drawRot != null ? b.drawRot : 0)) + (b.selfRot || 0);
+    }
+    const so = b.card && b.card.type ? b.card.type.spinOrigin : null;
+    EntityFX.draw(ctx, b, (c) => {
+      const cv = svg ? CardRenderer.artCanvas(svg, 128) : null;
+      // 子体尺寸同样乘 k（与卡面一致，k 一处修改两边同时生效）
+      if (cv) {
+        drawPetalArt(c, cv, size * (b.formK != null ? b.formK : 1), 0, 0, rot, 1, null,
+          so ? so.x : 0, so ? so.y : 0);
       }
+      // 花瓣受伤红色滤镜（0.3s，全体实体通用时长；强度/时长来自引擎）
+      EntityFX.drawHurt(c, b, 0, 0, size / 2);
+    });
+  }
+
+  draw(ctx) {
+    // 死亡：先播完花瓣退场（渐隐），再画死亡本体（随机角度 + 叉叉眼 + 哭脸）
+    if (this.dead) {
+      for (const b of this.petalExit) this._drawPetalEntity(ctx, b, true);
       this._drawDeadBody(ctx);
       return;
     }
-    // 花瓣实体：出场渐显（大小不变）。特效驱动中的花瓣（如玫瑰飞向主角）
-    // 延后到主角本体之后再画 —— 图层比人物高，"飞到脸上"的观感。
-    for (const pp of this.petalWorld) {
-      if (pp.fxActive || pp.dead) continue;         // 已碎实体不绘制（等独立重装填）
-      const p = this.slots[pp.index];
-      // 落位型实体（Wax）：直径 = 2×radius、不旋转、也不做出场缩放
-      const size = pp.artSize || PETAL_ENT_SIZE;          // 普通花瓣 13.5
-      if (pp.anchor) {
-        const waxSvg = pp.svg || (this.slots[pp.index] && this.slots[pp.index].type
-          ? this.slots[pp.index].type.svg : null);
-        // 【矢量渲染】：优先用 SVG <img>（浏览器按目标尺寸实时栅格化），
-        // 不再用 128px 离屏位图 —— 大蜡块放大后会糊边。
-        const cv0 = waxSvg
-          ? (CardRenderer.artImage(waxSvg) || CardRenderer.artCanvas(waxSvg, 256))
-          : null;
-        if (cv0) drawPetalArt(ctx, cv0, size, pp.x, pp.y, 0, 1, 1);
-        // 红闪 = 它的【真实六边形】（不是圆圈：圆会溢出到六边形外面）
-        EntityFX.drawHurtPoly(ctx, pp, pp.x, pp.y, pp.shapePoly, pp.r);
-        continue;
-      }
-      // 朝向 = 由花心指向花瓣：被甩在后面时姿态也会自然跟着偏
-      // 滞留实体（放在地上的 Pollen/Honey）固定正向、不做出场渐显
-      const svgKey = pp.svg || (p && p.type && p.type.svg);
-      // 朝向 = 【自转】为主；阵型型子实体再叠加阵型基准（drawRot）。
-      // 自转独立于公转：普通花瓣不再由"相对主角的位置"反推朝向。
-      const rot = pp.flightRot != null ? pp.flightRot + (pp.flightSpin || 0)
-        : ((pp.stationary ? 0 : (pp.drawRot != null ? pp.drawRot : 0)) + (pp.selfRot || 0));
-      const a = pp.stationary ? 1 : spawnFade(pp.age);
-      // 与其它花瓣（Stinger）同一条管线：svg 已经指向正确素材，直接用
-      const cv = svgKey ? CardRenderer.artCanvas(svgKey, 128) : null;
-      // 子体尺寸同样乘 k（与卡面一致，k 一处修改两边同时生效）
-      // spinOrigin：自转轴心不在图形中心的素材（Wing = 外弧圆心），按偏移画
-      const so = pp.spinOrigin;
-      if (cv) {
-        drawPetalArt(ctx, cv, size * (pp.formK != null ? pp.formK : 1), pp.x, pp.y, rot,
-          spawnPop(pp.age), a, so ? so.x : 0, so ? so.y : 0);
-      }
-      // 未就绪【不画】也不能回退 drawSprite：那按原始 viewBox contain 绘制，
-      // 图形会缩得极小（"错误加载的大小"），就绪后由 artCanvas 统一管线补上。
-      // 花瓣受伤红色滤镜（0.3s，全体实体通用时长）
-      EntityFX.drawHurt(ctx, pp, pp.x, pp.y, size / 2);
+    // 花瓣实体：入场/退场统一由 EntityFX 施加（特效驱动的延后到主角之后再画）
+    for (const b of this.petals) {
+      if (b.fxActive || b.dead) continue;
+      this._drawPetalEntity(ctx, b, false);
     }
-    // 被卸下/移除的花瓣：留在原地平滑放大并渐隐（0.2s 快速消失）
-    // 放大到 1.5 倍不会盖住主角：轨道半径约 43px、主角半径 15.6px，
-    // 花瓣放大后半宽 10.1px，内缘仍在 33px 处，离主角边缘还有 17px 余量。
-    for (const g of this.petalGhosts) {
-      const size = PETAL_ENT_SIZE;                         // 与在场花瓣同尺寸
-      const d = deathFade(clamp(g.age / FADE_T, 0, 1));
-      // 自带图片的幽灵（蛛网等场地实体）：与卡片幽灵同一套渐大渐隐
-      if (g.img) {
-        drawPetalArt(ctx, g.img, g.size, g.x, g.y, 0, d.scale, d.alpha * (g.alpha == null ? 1 : g.alpha));
-        continue;
-      }
-      const rot = Math.atan2(g.y - this.y, g.x - this.x) + Math.PI / 2;
-      const cv = CardRenderer.artCanvas(g.card.type.svg, 128);
-      if (cv) drawPetalArt(ctx, cv, size, g.x, g.y, rot, d.scale, d.alpha);
-      // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
-    }
+    // 被卸下/移除/碎裂的花瓣：留原地播放通用退场（放大 + 渐隐），播完由 petalExit 回收。
+    for (const b of this.petalExit) this._drawPetalEntity(ctx, b, true);
 
     // 主角：黄色笑脸（整体固定正放，不随朝向旋转；只有眼睛里的白色随移动方向偏移）。
     // 半径乘 spawnPop：出生/重生时 Q 弹弹出（过冲回落），五官全按 R 缩放同步跟随。
-    const R = this.r * 1.2 * spawnPop(this.age);   // 脸部半径
+    const R = this.r * 1.2 * EntityFX.pop(this.age);   // 脸部半径
     // 中毒：整张脸平滑过渡到淡紫（描边同步），嘴平滑过渡到哭脸 —— 见下方 mood/bulge。
     const pf = clamp(this.poisonFx || 0, 0, 1);
     const FACE_FILL = lerpHex('#fae26a', '#d9bce8', pf);
@@ -1269,22 +1227,9 @@ class Player {
       ctx.restore();
     }
     // 特效驱动中的花瓣：画在主角本体之上（图层比人物高）
-    for (const pp of this.petalWorld) {
-      if (!pp.fxActive || pp.dead) continue;
-      const p = this.slots[pp.index];
-      const size = PETAL_ENT_SIZE;
-      const rot = Math.atan2(pp.y - this.y, pp.x - this.x) + Math.PI / 2;
-      const a = spawnFade(pp.age);
-      const cv = CardRenderer.artCanvas(p.type.svg, 128);
-      if (cv) drawPetalArt(ctx, cv, size, pp.x, pp.y, rot, spawnPop(pp.age), a);
-      // 未就绪不画（同在场花瓣：回退 drawSprite 会得到极小尺寸）
-      if (pp.hurtT > 0) {
-        ctx.save();
-        ctx.globalAlpha = clamp(pp.hurtT / 0.3, 0, 1) * 0.4;
-        ctx.fillStyle = '#ff4040';
-        ctx.beginPath(); ctx.arc(pp.x, pp.y, size / 2, 0, TAU); ctx.fill();
-        ctx.restore();
-      }
+    for (const b of this.petals) {
+      if (!b.fxActive || b.dead) continue;
+      this._drawPetalEntity(ctx, b, false);
     }
     // 花朵血条：仅在非满血时显示（0.3s 渐显 / 0.3s 渐隐）。
     // 粗细/长度与昆虫完全同一份数据（HPBAR_W/HPBAR_H）；不显示名称与稀有度。
@@ -1328,7 +1273,7 @@ class Player {
     ctx.save();
     ctx.translate(this.x, this.y);
     // 死亡瞬间转身：0.35s easeOutCubic 从当前姿态平滑旋到随机角 deathRot（每死一次随机）
-    const rk = Math.min(1, this.deathTimer / 0.35);
+    const rk = Math.min(1, this.corpseT / 0.35);
     ctx.rotate(this.deathRot * (1 - Math.pow(1 - rk, 3)));
     ctx.fillStyle = '#fae26a';
     ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();

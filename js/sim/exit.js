@@ -7,33 +7,56 @@
 //   绕过引擎直接 splice/pop/filter/length= 删元素 = 实体凭空消失，全项目禁止。
 //
 // 曲线（引擎内部私有，不再向外暴露）：
-//   · 出场：spawnFade（alpha 渐显，0.1s）+ spawnPop（Q 弹缩放，easeOutBack）
-//   · 退场：deathFade（放大 ×1.5 + 渐隐，0.1s）—— 与生物死亡同一套
+//   · 出场：pop = alpha 渐显 + Q 弹缩放（easeOutBack）；spring = 三次缓出 + 过冲
+//   · 退场：growFade = 放大 ×1.5 + 渐隐；fade = 只渐隐；fadeShrink = 渐隐 + 缩 15%
 //   · 红闪：ENTITY_HURT_T=0.3s，最大不透明度 0.55
 // 种类注册表 registerKind(kind, {enter, enterT, exit, exitT}) 可按类型覆盖时长。
+// 业务代码只读 EntityFX.visual / draw，绝不再手算这些曲线。
 
 'use strict';
 
-// clamp / TAU 来自 util.js（全局），与原 exit.js 一致，不在此重复声明。
-// FADE_T / DEATH_SCALE / spawnFade / spawnPop / deathFade 来自 sim/constants.js
-//（全局函数/常量，可在此直接引用）。
-// ENTITY_HURT_T / ENTITY_HURT_A 是本模块专用，constants.js 里没有，须在此定义。
+// clamp 来自 util.js（全局）。
+// 曲线参数与函数全部收在本模块，constants.js 不再导出 spawnFade/spawnPop/deathFade。
 const ENTITY_HURT_T = 0.3;   // 红闪统一时长（秒）
 const ENTITY_HURT_A = 0.55;  // 红闪统一最大不透明度
+const ENTITY_ENTER_T = 0.1;  // 默认出场时长（秒）
+const ENTITY_EXIT_T = 0.1;   // 默认退场时长（秒）
+const ENTITY_DEATH_SCALE = 1.5;   // 退场放大倍率
 
-// ---------- 曲线（内部私有，复用 sim/constants.js 的全局常量与函数）----------
+// ---------- 曲线（内部私有）----------
 function hurtAlphaOf(t01) { return ENTITY_HURT_A * clamp(t01, 0, 1); }
+// Q 弹：easeOutBack —— 从小弹出、过冲到 ~1.1 再落回 1
+function enterPop(t) {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+// 蛛网：三次缓出 + 一点点过冲，"啪地张开"
+function enterSpring(t) {
+  return (1 - Math.pow(1 - t, 3)) * (1 + 0.16 * Math.sin(Math.PI * t));
+}
+function enterVisual(kind, age) {
+  const t = clamp((age || 0) / (kind.enterT || ENTITY_ENTER_T), 0, 1);
+  if (kind.enter === 'spring') return { scale: enterSpring(t), alpha: t };
+  if (kind.enter === 'none') return { scale: 1, alpha: 1 };
+  return { scale: enterPop(t), alpha: t };
+}
+function exitVisual(kind, t01) {
+  const t = clamp(t01, 0, 1);
+  if (kind.exit === 'fade') return { scale: 1, alpha: 1 - t };
+  if (kind.exit === 'fadeShrink') return { scale: 1 - 0.15 * t, alpha: 1 - t };
+  return { scale: 1 + (ENTITY_DEATH_SCALE - 1) * t, alpha: 1 - t };
+}
 
 // ---------- 种类注册表 ----------
 // 曲线参数只在这里改；新增实体类型只需 registerKind 一处，不再各文件各写一套。
 const KINDS = {
-  mob:        { enter: 'pop',    enterT: 0.10, exit: 'growFade', exitT: FADE_T },
-  web:        { enter: 'spring', enterT: 0.18, exit: 'growFade', exitT: FADE_T },
-  drop:       { enter: 'pop',    enterT: 0.10, exit: 'fade',     exitT: 0.50 },
-  petal:      { enter: 'pop',    enterT: 0.10, exit: 'growFade', exitT: FADE_T },
-  projectile: { enter: 'pop',    enterT: 0.10, exit: 'growFade', exitT: FADE_T },
-  summon:     { enter: 'pop',    enterT: 0.10, exit: 'growFade', exitT: FADE_T },
-  fx:         { enter: 'pop',    enterT: 0.10, exit: 'fade',     exitT: FADE_T },
+  mob:        { enter: 'pop',    enterT: 0.10, exit: 'growFade',  exitT: ENTITY_EXIT_T },
+  web:        { enter: 'spring', enterT: 0.18, exit: 'growFade',  exitT: ENTITY_EXIT_T },
+  drop:       { enter: 'pop',    enterT: 0.10, exit: 'fadeShrink', exitT: 0.50 },
+  petal:      { enter: 'pop',    enterT: 0.10, exit: 'growFade',  exitT: ENTITY_EXIT_T },
+  projectile: { enter: 'pop',    enterT: 0.10, exit: 'growFade',  exitT: ENTITY_EXIT_T },
+  summon:     { enter: 'pop',    enterT: 0.10, exit: 'growFade',  exitT: ENTITY_EXIT_T },
+  fx:         { enter: 'pop',    enterT: 0.10, exit: 'fade',      exitT: ENTITY_EXIT_T },
 };
 function registerKind(kind, def) { KINDS[kind] = { ...KINDS.mob, ...def }; }
 function kindOf(kind) { return KINDS[kind] || KINDS.mob; }
@@ -53,6 +76,8 @@ const EntityFX = {
     ent.exitAlpha = 1;
     ent.exitScale = 1;
     ent.fx = null;          // 由 visual() 懒算，每帧重算一次（幂等）
+    ent.fxAge = null;       // 附着型实体由渲染方每帧写入（见 state）
+    ent._inExitSet = false;
     ent._kind = kind || 'mob';
     return ent;
   },
@@ -67,6 +92,8 @@ const EntityFX = {
     if (!ent || !(ent.hurtT > 0)) return 0;
     return hurtAlphaOf(ent.hurtT / ENTITY_HURT_T);
   },
+  // 主角本体不是可回收实体，但出场 Q 弹与实体共用同一条曲线（唯一来源）。
+  pop(age) { return enterPop(clamp((age || 0) / ENTITY_ENTER_T, 0, 1)); },
 
   // 退场：唯一离场入口。opt = { dur, ghost(list, ent) }。绝不直接删元素。
   despawn(ent, opt) {
@@ -93,12 +120,12 @@ const EntityFX = {
     ent.fx = null;          // 计时后 fx 失效，下一帧 visual() 重算
     if (ent.exiting) {
       ent.exitT = (ent.exitT || 0) + dt;
-      // 退场进度 -> 缩放/透明度（deathFade：放大×1.5 + 渐隐，与 mob.js 旧 ExitFX.tick 同一套）
-      const t = clamp(ent.exitT / (ent.exitDur || FADE_T), 0, 1);
-      const d = deathFade(t);
+      // 退场进度 -> 缩放/透明度（曲线由 kind.exit 决定）
+      const k = kindOf(ent._kind);
+      const d = exitVisual(k, (ent.exitT || 0) / (ent.exitDur || k.exitT || ENTITY_EXIT_T));
       ent.exitAlpha = d.alpha;
       ent.exitScale = d.scale;
-      return (ent.exitT || 0) >= (ent.exitDur || FADE_T);
+      return (ent.exitT || 0) >= (ent.exitDur || k.exitT || ENTITY_EXIT_T);
     }
     return false;
   },
@@ -111,8 +138,9 @@ const EntityFX = {
       const e = list[i];
       if (!e) continue;
       this.tickEntity(e, dt);
-      if (e.exiting && (e.exitT || 0) >= (e.exitDur || FADE_T)) {
+      if (this.done(e)) {
         list.splice(i, 1);
+        e._inExitSet = false;
         removed++;
       }
     }
@@ -120,29 +148,35 @@ const EntityFX = {
   },
 
   // 渲染层统一读：{ alpha, scale, exiting, hurt, flash }
-  // alpha/scale 已经把 入场(spawn) × 退场(exit) 相乘好了，渲染方直接乘即可。
+  // alpha/scale 已经把 入场 × 退场 相乘好了，渲染方直接乘即可。
+  // fxAge：附着型实体（Hornet 挂载尾针）的入场计时跟宿主走，由渲染方每帧写入。
   state(ent) {
     if (!ent) return { alpha: 1, scale: 1, exiting: false, hurt: 0, flash: 0 };
-    const spawnA = spawnFade(ent.age || 0);
-    const spawnS = spawnPop(ent.age || 0);
+    const k = kindOf(ent._kind);
+    const enter = enterVisual(k, ent.fxAge != null ? ent.fxAge : (ent.age || 0));
     let exitA = 1, exitS = 1;
     if (ent.exiting) {
       exitA = ent.exitAlpha == null ? 1 : ent.exitAlpha;
       exitS = ent.exitScale == null ? 1 : ent.exitScale;
     }
     return {
-      alpha: exitA * spawnA,
-      scale: exitS * spawnS,
+      alpha: exitA * enter.alpha * (ent.fxAlpha == null ? 1 : ent.fxAlpha),
+      scale: exitS * enter.scale * (ent.fxScale == null ? 1 : ent.fxScale),
       exiting: !!ent.exiting,
       hurt: this.hurtAlpha(ent),
       flash: ent.flash || 0,
     };
   },
   isExiting(ent) { return !!(ent && ent.exiting); },
-  done(ent) { return ent && ent.exiting && (ent.exitT || 0) >= (ent.exitDur || FADE_T); },
+  done(ent) {
+    if (!ent || !ent.exiting) return false;
+    const k = kindOf(ent._kind);
+    return (ent.exitT || 0) >= (ent.exitDur || k.exitT || ENTITY_EXIT_T);
+  },
   progress(ent) {
     if (!ent || !ent.exiting) return 1;
-    return clamp((ent.exitT || 0) / (ent.exitDur || FADE_T), 0, 1);
+    const k = kindOf(ent._kind);
+    return clamp((ent.exitT || 0) / (ent.exitDur || k.exitT || ENTITY_EXIT_T), 0, 1);
   },
 
   // 算出并缓存到 ent.fx（每帧一次，幂等）。渲染方优先读 ent.fx。
@@ -159,11 +193,18 @@ const EntityFX = {
   advanceExit(ent, dt) {
     if (!ent || !ent.exiting) return false;
     ent.exitT = (ent.exitT || 0) + dt;
-    const t = clamp(ent.exitT / (ent.exitDur || FADE_T), 0, 1);
-    const d = deathFade(t);
+    const k = kindOf(ent._kind);
+    const d = exitVisual(k, (ent.exitT || 0) / (ent.exitDur || k.exitT || ENTITY_EXIT_T));
     ent.exitAlpha = d.alpha;
     ent.exitScale = d.scale;
-    return (ent.exitT || 0) >= (ent.exitDur || FADE_T);
+    ent.fx = null;
+    return (ent.exitT || 0) >= (ent.exitDur || k.exitT || ENTITY_EXIT_T);
+  },
+
+  // 复活（服务端把还活着的实体重新下发）：撤销退场标记并重新播入场。
+  revive(ent, kind) {
+    if (!ent) return null;
+    return this.spawn(ent, kind || ent._kind);
   },
 
   // ★ 强制统一绘制入口：所有实体画面只能通过这里画
@@ -211,27 +252,6 @@ const EntityFX = {
   },
 };
 
-// ---------- ExitFX 兼容层（废弃，逐步迁移后删除）----------
-// 所有旧调用点（ExitFX.begin/tick/done/alpha/scale/sweep）委托给 EntityFX，
-// 这样重构可分步进行，不必一次性改完所有文件。
-const ExitFX = {
-  begin(ent, dur) { return EntityFX.despawn(ent, { dur }); },
-  tick(ent, dt) { return EntityFX.tickEntity(ent, dt); },
-  alpha(ent) {
-    const s = EntityFX.state(ent);
-    return ent && ent.exiting ? (ent.exitAlpha == null ? 1 : ent.exitAlpha) : s.alpha;
-  },
-  scale(ent) {
-    const s = EntityFX.state(ent);
-    return ent && ent.exiting ? (ent.exitScale == null ? 1 : ent.exitScale) : s.scale;
-  },
-  done(ent) { return EntityFX.done(ent); },
-  progress(ent) { return EntityFX.progress(ent); },
-  sweep(arr, dt) { return EntityFX.tickList(arr, dt); },
-  // 独立实体（不在受控列表里）显式推进退场动画
-  advanceExit(ent, dt) { return EntityFX.tickEntity(ent, dt); },
-};
-
 // ---------- 受控实体表（唯一容器）----------
 // 内部数组被闭包封死，外面拿不到 —— 无法绕过退场动画直接删元素。
 // 对外只暴露"只读遍历 + add + tick/sweep"，刻意不提供 push/pop/splice/clear/length=。
@@ -239,6 +259,13 @@ function createEntitySet(kind) {
   const a = [];
   return {
     add(e) { a.push(e); return EntityFX.spawn(e, kind); },
+    // 收养一个已经在退场中的实体（不要把 spawn 再跑一遍，否则退场会被重置）
+    adopt(e) {
+      if (!e || e._inExitSet) return e;
+      e._inExitSet = true;
+      a.push(e);
+      return e;
+    },
     get length() { return a.length; },
     get(i) { return a[i]; },
     at(i) { return a[i]; },

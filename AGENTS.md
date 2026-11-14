@@ -1,7 +1,7 @@
 # florr2 项目记忆
 
 > 给后续开发者 / AI 的项目上下文。改代码前先读本文件；结构、约定或玩法有明显变化时同步更新。
-> 最后核对：2026-11（实体生命周期 EntityFX + 网单源 + 生物大招系统 + 悬浮框属性口径）
+> 最后核对：2026-11-14（重构 Stage 0~5 实际进度 + 实体生命周期 EntityFX + 网单源 + 生物大招系统 + 悬浮框属性口径）
 
 ## 1. 项目定位
 
@@ -56,7 +56,7 @@ python dev/check_versions.py   # 静态检查：引用是否存在、跨文件�
 | `js/petal-effects.js` | **`PetalFX`：花瓣能力 + 特效注册引擎**。按 `card.type.slug` 匹配，负责主动/被动特效，以及脱轨（`detach`）、飞行（`flightOf`）、硬碰撞（`onHit`）、仇恨吸引（`canAttract`）等物理能力；能力字段仍由 `data.js` 的 `PETAL_TRAITS` 声明，统一走 `trait()` 读取 |
 | `js/mob-fx.js` | **`MobFX`：生物通用特性注册引擎**（与 `PetalFX` 对称）。物种只在这里声明一次（如蜘蛛大招），`ai.js`/`sim/mob.js`/`net/server.js`/`game.js` 四层全部"向引擎问"，不再各写一份物种参数；场地实体种类也走 `registerField` |
 | `js/sim/constants.js` | 模拟层常量与纯规则（`InvulnFX`、击退份额、花瓣/花朵数值、大招节奏常量），无 DOM |
-| `js/sim/exit.js` | **实体生命周期的唯一通道**：`EntityFX`（`spawn/tick/hurt/despawn/state` + 红闪原语）对外，`ExitFX` 只是内部实现（不直接被业务代码调用）；`createExitList()` 是受控实体表（内部数组封在闭包里，外部拿不到 -> 无法绕过退场动画直接删元素） |
+| `js/sim/exit.js` | **实体生命周期引擎**：`EntityFX`（`spawn/tickEntity/tickList/hurt/despawn/visual/draw` + 红闪原语）、`registerKind`、`createEntitySet`；`createExitList()` 是同一容器的旧别名。**当前 `ExitFX` 仍是兼容层**，`Mob.draw` / `drops` / `drawWebList` 等旧调用点尚未迁移，`EntityFX.draw` 还没有调用点 |
 | `js/sim/physics.js` | `physicsPush`、`moveEntity`、击退冲量与衰减，无 DOM |
 | `js/sim/status.js` | **`StatusFX`：实体状态效果注册引擎**。`ent.status = [{id,dur,value}]`，移速统一走 `StatusFX.speedMul(ent)`；新增效果 = `register(id, {...})` |
 | `js/sim/crb.js` | **`CRB`：硬编码碰撞箱读取器**。读 `assets/crbs/{mobs,petals}/*.crb`（归一化多边形 + 外接半径），`CRB.get / getPetal` 是唯一入口；没数据才回落 SVG 轮廓 |
@@ -150,7 +150,7 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - **生物互相推挤用均匀网格宽相位**（`LocalServer.step` 第 4 步）：格距 192px，按最大半径自动扩相邻圈数，`_pseq` 序号保证每对只算一次。改造前是 O(醒着的只数²)（蜈蚣一条几十节，实测 50 万次配对/帧、`net.step` 14.7ms），改后约 6.9ms。
 - 换成真实网络时：新增一个 `Net` 子类（WebSocket）即可，客户端代码不用改。
 
-### 5.3 实体层（`entities.js`）
+### 5.3 实体层（`js/sim/*` + `js/render/*`）
 
 > **【硬规则】实体生命周期强绑定通用动画（`js/sim/exit.js`）**
 >
@@ -170,9 +170,13 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 > - 场地型实体用 `createExitList()`（受控实体表）：内部数组封在闭包里，
 >   **外部连语法上都拿不到**，`push/splice/pop/clear` 一律不提供 —— 结构性地堵死绕过退场的路。
 > - 已经踩过的坑：蜘蛛吐的网原来是 `splice` 直接删（凭空消失）；玩家蛛网走"退场幽灵"；
->   生物走 `deathTimer` —— 三套消失方式。现在统一成一套。
+>   生物走 `deathTimer` —— 三套消失方式。**目标是统一成一套，当前尚未完成**：
+>   `Mob` 仍用 `deathTimer` + `ExitFX`，`player.petalGhosts` 仍在，`DropCard` 仍自管 `fade/done`。
 > - 客户端的生物视图**屏外也必须推进退场计时**，否则退场永远播不完、那只生物永远回收不掉。
 > - 服务端从快照里消失的生物（可能死在两次快照之间）也必须补一个退场，不能硬删。
+>
+> **现状提示（2026-11-14）**：`ExitFX` 兼容层仍在，`Mob.draw` / `drops` / `drawWebList` 等旧调用点尚未迁移；
+> 新代码优先用 `EntityFX`，但不要假设旧实体已经走完全套引擎。
 
 - `Player`：位置/朝向/血量/等级、`slots`（主槽）/`subSlots`（副槽）/`invBar`（临时物品栏）/`backpack`、`reload` 装填状态、花瓣实体 `petals`、`recompute()` 重算属性。
 - `Mob`：按稀有度取 hp/dmg/armor/exp；视觉直径决定碰撞半径；`shape/hull` 是 SVG 轮廓；`weight` 按直径²（障碍型 ×5）；`threat` 仇恨表；`topThreat()` 中 Honey 强制优先。
@@ -469,10 +473,12 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   结算侧统一读 `StatusFX.speedMul(ent)`（玩家与生物都乘在"想走多快"上）。
   新增效果 = `StatusFX.register(id, {...})` + 需要的结算点调用 `add/has`，不要在别处硬乘系数。
 - **场地型实体（Web）**：飞行 0.5s 到期（或飞行途中被打碎）→ `PetalFX.onExpire / onPop`
-  调 `player.spawnWeb(x, y, r, dur)` 生成【独立】的场地实体 `player.webFields`
-  （`{x,y,r,t,dur,pop,spin}`，没有碰撞箱、不占轨道位、不参与伤害）；
+  调 `player.spawnWeb(x, y, r, dur)` 生成【独立】的场地实体
+  （`{x,y,r,t,dur,pop,spin}`，没有碰撞箱、不占轨道位、不参与伤害）。
+  **服务端**写入 `server.fields`（`createEntitySet('web')`，玩家网 + 蜘蛛网合并的唯一来源），
+  `LocalServer._fieldTick` 每步遍历它并按 `owner` 施加状态；**客户端**读快照建立的 `p.netWebs`
+  （`player.webFields` 只是还没收到快照时的兜底），绘制优先 `netWebs`。
   小 web 实体本体照常走通用移除接口（`_killPetalBody` / `_destroyPetal`）→ 有渐大渐隐退场。
-  谁被减速由服务端 `LocalServer._fieldTick` 每步扫 `webFields` 半径决定，客户端只负责画。
   网用的是自绘素材 `assets/petals/web_net.svg`（放射线 + 内凹环），不是 Web 花瓣贴图。
 - **眼珠（Third Eye）**：位置/大小全部由 `CardRenderer.contentBox()`（素材内容包围盒实测）推导，
   并裁剪在该椭圆内 —— 换素材也不会跑偏，不要再写死 viewBox 坐标。
@@ -550,7 +556,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 ## 10. 已知限制 / 待办
 
 - **Net 已抽象但未做真联机验证**：协议/服务端/传输已分层，`WebSocketNet` 骨架在 `js/net/client.js`（连接失败自动回退 `LocalNet`）；本机没有 Node 环境，端到端联机未测。`LocalServer.handleRequest` 是请求入口，`LocalNet.requestSync` 仅本地可用。
-- **快照仍是每帧全量**（未池化/未降频）：`LocalNet.step` 每帧推进模拟并立刻投递快照（约 2.5ms/帧，4700 只实体的对象分配是当前 GC 主要来源），本地零延迟优先；`SNAP_DT` 只用于客户端插值步长基准。真服务器应改为按 `SNAP_HZ` 投递 + 对象池。
+- **快照已降频，但池化未完成**：`LocalNet.step` 按 `SNAP_DT` 累加后投递快照（`SNAP_HZ`），`_fillEnts` 复用 `_entBuf`、`_fillHornetProjectiles` 复用 `_projectileBuf`、客户端 `netPetals` 复用 `Map`。剩余分配点：`_snapPetals` 每快照 `new` 对象、`o.fx` 每实体每快照新建、`_fillEnts` 里每只生物的 `o.hornetProjectiles` 仍 `.map()` 新数组。
 - **生物实体数远超 `GLOBAL_MAX_MOBS`**：上限按"只"统计，而一条蜈蚣会展开成多节实体（实测约 4500~4900 个视图实体）。
 - 只有 Garden 一张图；`/init <map>` 只能初始化当前地图，不能切图（其余 `.tmj` 未被加载）。
 - 当前启用 19 种花瓣；其中实际战斗花瓣有 `basic/light/rose/stinger/pollen/honey/peas/leaf/orange/missile/wax/rice/corn/wing/ant_egg`，另有 Faster、Third Eye、Antennae 等饰品/加成花瓣。大量 registry 数据仍未接入玩法。
@@ -561,7 +567,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 
 ### 待办（按价值排序）
 
-1. **快照降频 + 对象池**：`LocalNet` 里把"模拟推进"与"快照投递"分开，按 `SNAP_HZ` 投递并复用对象；客户端插值已就绪（`_applySnap` 支持任意 `snap.dt`）。
+1. **快照剩余对象池**：降频与 `_fillEnts` / `_fillHornetProjectiles` / `netPetals` 已落地；剩余 `_snapPetals`、`o.fx`、`_fillEnts` 里每只生物的 `o.hornetProjectiles` 仍每快照分配。客户端插值已就绪（`_applySnap` 支持任意 `snap.dt`）。
 2. **服务端 tick 降到 25Hz**：与服务端战斗步长、快照频率对齐，客户端预测（零延迟）不受影响；预计再省一半 `net.step` 时间。
 3. **真联机**：Node 起 `LocalServer` + 一个 `WebSocketNet` 连接，验证 `request/on/step` 三条契约；目前所有请求都是同进程同步返回。
 4. **快照裁剪**：远距离生物只下发 `(netId, x, y, 类型, 稀有度)`，详细字段按复制半径下发（小地图只需前者）。
@@ -644,40 +650,51 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
   模块表补齐 `sim/status.js`、`sim/crb.js`、`render/spider-gait.js`；合并两份重复的 2026-11-09 变更记录；
   实体硬规则从 `ExitFX` 改为 `EntityFX` 口径。
 
-## 2026-11 重构 Stage 1（实体引擎收口）+ Stage 2（网单源）
+## 2026-11 重构 Stage 1（实体引擎收口，🟡 进行中）+ Stage 2（网单源，🟡 基本完成）
 
-> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 1 只做引擎收口（零行为变更，旧调用点经 ExitFX 兼容层委托）；Stage 2 把网与场地实体收成单一来源。
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 1 先搭引擎（零行为变更，旧调用点经 ExitFX 兼容层委托），再逐点迁移；Stage 2 把网与场地实体收成单一来源。
+> **截至 2026-11-14：Stage 1 的引擎/容器已落地，但调用点迁移与 `EntityFX.draw` 尚未完成；Stage 2 的网单源已落地，绘制与 id 收口未完成。**
 
 - **Stage 1：`js/sim/exit.js` 重写为 `EntityFX` 统一实体生命周期引擎**
-  - `registerKind(kind, {enter, enterT, exit, exitT})` 按类型注册曲线：`mob / web / drop / petal / projectile / summon / fx`
-  - `spawn / tick / despawn / draw / visual / progress / done` 七条唯一 API；`draw(ctx, ent, paint)` 强制包装 `save/translate/scale/alpha/restore`，入场/退场/渐隐由引擎统一施加，渲染方不得再手写 `spawnFade/spawnPop/ExitFX.alpha/scale`
-  - `createEntitySet(kind)` 受控容器：唯一所有者，`tick/sweep` 里统一回收（退场播完才移除），刻意不提供 `splice/pop/filter/clear/length=`，堵死绕过退场动画直接删元素的路
-  - 曲线参数（`FADE_T / DEATH_SCALE / ENTITY_HURT_T / ENTITY_HURT_A`、`spawnFade / spawnPop / deathFade`）收进本模块私有；`PETAL_GHOST_T` 已删除（Stage 0）
-  - `ExitFX` 保留为兼容层，全部委托给 `EntityFX`，旧调用点零行为变更，可逐步迁移
+  - ✅ `registerKind(kind, {enter, enterT, exit, exitT})` 按类型注册曲线：`mob / web / drop / petal / projectile / summon / fx`
+  - 🟡 API：`spawn / tickEntity / tickList / hurt / despawn / done / progress / visual / draw / advanceExit`；`draw(ctx, ent, paint)` 已实现强制包装 `save/translate/scale/alpha/restore`，但**全项目 0 调用点**，`Mob.draw` / `drops` / `drawWebList` 仍在手算
+  - 🟡 `createEntitySet(kind)` 受控容器：`tick/sweep` 里统一回收（退场播完才移除），不提供 `splice/pop/filter/clear/length=`；当前只用于 `server.fields` 与玩家网列表，生物 / 花瓣 / 掉落卡仍是普通数组
+  - ❌ 曲线参数没有"收进本模块私有"：`FADE_T / DEATH_SCALE / spawnFade / spawnPop / deathFade` 仍在 `sim/constants.js`，`WEB_POP_T / DROP_POP_T / DROP_DESPAWN_T` 仍在各自文件；只有 `ENTITY_HURT_T / ENTITY_HURT_A` 在 `exit.js` 内
+  - 🟡 `ExitFX` 保留为兼容层，全部委托给 `EntityFX`；`Mob.draw` / `drops` / `drawWebList` / `mob-fx.js` / `game.js` 仍有大量调用点
+  - ❌ `EntityFX.spawn()` 只被 `createEntitySet.add()` 调用；`Mob/Player/花瓣/掉落卡` 构造函数仍手写 `age/exiting/exitT/...`
 - **Stage 2：网与场地实体单源**（`js/net/server.js` + `js/sim/player.js`）
-  - `server.fields = createEntitySet('web')` 成为场地型实体唯一来源（玩家网 + 蜘蛛自铺/大招网合并）；`_snapWebs` 只遍历它
-  - `_fieldCtx.addWeb` 用单调 `nextId++` 替代 `'m' + seq` 下标 id，消除一张网到期后其余网下标前移导致的张冠李戴（客户端按 id 对齐）
-  - `_fieldTick` 统一遍历 `fields`，按 `owner` 区分：玩家网只给【生物】挂减速，敌方蛛网只给【玩家】挂减速
-  - `player.spawnWeb` 支持 `webSink`（服务端写 `server.fields`；客户端落回 `webFields`）；`player.drawWebs` 只读 `p.netWebs`
-  - 客户端不再本地生成网、不再本地补网，`p.netWebs` 是网的唯一数据源（F3 网圈与本地减速均已改读 `netWebs`）
-- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常（map/player 就绪）；已 bump `index.html` 中对应脚本的 `?v=`。
+  - ✅ `server.fields = createEntitySet('web')` 成为场地型实体唯一来源（玩家网 + 蜘蛛自铺/大招网合并）；`_snapWebs` 只遍历它
+  - ✅ `_fieldCtx.addWeb` 用单调 `nextId++` 替代 `'m' + seq`；`_snapWebs` 下发实体 `netId`，不再用 `'w' + index` 兜底
+  - ✅ `_fieldTick` 统一遍历 `fields`，按 `owner` 区分：玩家网只给【生物】挂减速，敌方蛛网只给【玩家】挂减速
+  - 🟡 `player.spawnWeb` 支持 `webSink`（服务端写 `server.fields`；客户端落回 `webFields`）；`player.drawWebs` **优先**读 `p.netWebs`，未收到快照时仍回落 `webFields`
+  - 🟡 客户端不再本地生成网、不再本地补网，F3 网圈与本地减速已改读 `netWebs`；但 `player.webFields` 兜底与 `drawWebList` 独立绘制仍在
+  - ❌ 玩家网 id 仍是 `'p' + this._webSeq`，与敌方网的单调数字 id 混用；`world.nextEntityId()` 尚未实现
+- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常（map/player 就绪）；已 bump `index.html` 中对应脚本的 `?v=`。功能验收基本满足；Stage 1 的结构验收（统一绘制/回收）尚未开始。
 
-## 2026-11 重构 Stage 3（快照与协议）✅
+## 2026-11 重构 Stage 3（快照与协议，🟡 部分完成）
 
-> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 3 把快照表现字段收进 `o.fx`，`netPetals`/`hornetProjectiles` 改为 Map 索引，消除字符串拼接键与 O(n²) 查找的 GC 压力。
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 3 的目标是把快照表现字段收进 `o.fx`、把 `netPetals`/`hornetProjectiles` 改为 Map 索引、消除字符串拼接键与 O(n²) 查找的 GC 压力。
+> **当前已完成 `o.fx` 入口、`netPetals` Map、`hornetProjectiles` Map 与服务端池化；`_snapPetals` 池化、统一 `nextEntityId`、`check_versions` 的 `fx` 检查尚未完成。**
 
 - **`o.fx` 表现字段入口**（`js/net/server.js` + `js/game.js`）：
-  - 服务端 `_fillEnts` 下发 `o.fx = { hurt, flash, squash, rot, exitT, ult }`，新增表现字段只改这里一处，避免"服务端加了字段、客户端没回填"的半截 bug。
-  - 客户端 `_applySnap` 优先从 `e.fx` 表驱动回填，保留对 `e.hurtT/e.flash/e.squash/e.deathTimer/e.deathRot/e.ultActive` 的直接回填作为兼容。
+  - 🟡 服务端 `_fillEnts` 下发 `o.fx = { hurt, flash, squash, rot, exitT, ult }`，但**旧字段仍同时下发**（`hurtT/flash/squash/deathTimer/deathRot/ultActive`），`o.fx` 本身也是每快照新建对象。
+  - 🟡 客户端 `_applySnap` **优先读 `e.fx` 并显式回填**，同时保留旧字段兼容分支；还不是 `FX_FIELDS` 表驱动。
 - **`netPetals` Map 化**（`js/game.js` + `js/sim/player.js`）：
-  - 客户端 `netPetals` 改为复用 `Map<number, state>`，数字键 `slot*1e6 + sub*1e3 + gen`，每次快照 `clear()` 复用，不再每次 `new {}` + 字符串拼接。
-  - `player._netPetalFor` / `_netSlotHasLive` 适配 Map 接口（`np.get(key)` / `for (const [, x] of np)`），O(1) 命中。
+  - ✅ 客户端 `netPetals` 改为复用 `Map<number, state>`，数字键 `slot*1e6 + sub*1e3 + gen`，每次快照 `clear()` 复用，不再每次 `new {}` + 字符串拼接。
+  - ✅ `player._netPetalFor` / `_netSlotHasLive` 适配 Map 接口（`np.get(key)` / `for (const [, x] of np)`），O(1) 命中。
 - **`hornetProjectiles` Map 化**（`js/net/server.js` + `js/game.js`）：
-  - 服务端 `hornetProjectiles` 数组→`Map<id, projectile>`，`_tickHornetProjectiles` / `_fillHornetProjectiles` 按 id 复用。
-  - 客户端视图层 `v.hornetProjectiles` 同样改为 Map，删掉旧数组 `old.find` 的 O(n²) 查找与每帧 `new` 数组的 GC。
+  - ✅ 服务端 `hornetProjectiles` 数组→`Map<id, projectile>`，`_tickHornetProjectiles` / `_fillHornetProjectiles` 按 id 复用（`_projectileBuf`）。
+  - ✅ 客户端顶层 `game.hornetProjectiles` 同样改为 Map，删掉旧数组 `old.find` 的 O(n²) 查找。
+  - 🟡 但 `_fillEnts` 里每只生物的 `o.hornetProjectiles` 仍 `.map()` 新对象；`v.hornetProjectiles` 也仍按快照新建 Map。
+- **未完成项**：`_snapPetals` 每快照 `new` 对象且按槽扫 `p.petals`；`world.nextEntityId()`；`dev/check_versions.py` 的 `fx` 键一致性检查。
 - **Bug 修复（Stage 3 期间顺带修正）**：
   - `EntityFX.advanceExit` 缺失导致 Hornet 导弹退场时 `TypeError` 卡死，已补全。
   - `EntityFX.tickEntity` 补充 `exitAlpha/exitScale`（deathFade）更新，修复实体死亡渐隐/渐大动画缺失，全部转为僵硬显示的问题。
   - Hornet 蜂针挂载/发射角度：`draw` 直接传 `p.a`（由 `drawMissileAt` 内部抵消 `MISSILE_TIP_ANGLE`），不再双重补偿导致歪斜 >45°。
   - Hornet 针生成位置统一到尾巴（`hornetTailPoint`），不再生成在本体中心；针生成独立于 `hornetMode`，无论什么模式没有针且冷却结束就立即生成下一根，不再原地游荡。
-- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常；Hornet 发射导弹不再卡死；实体死亡渐隐/渐大动画正常；已 bump `index.html` 中对应脚本的 `?v=`。
+- **验收**：本地 HTTP 服务器打开 `index.html`，控制台 0 报错；`window.__game` 正常；Hornet 发射导弹不再卡死；实体死亡渐隐/渐大动画正常；已 bump `index.html` 中对应脚本的 `?v=`。以上为 Stage 3 已完成部分的验收；池化/统一 id/静态检查仍未验收。
+
+## 2026-11 重构 Stage 4 / Stage 5（未开始 / 部分）
+
+> 完整方案见 `docs/REFACTOR_PLAN_2026-11.md`。Stage 4 是服务端 `step()` 系统化（`STEP_SYSTEMS`），当前**未开始**：仍是 8 段过程式代码，`1/25` 与 `hurtT = 0.3` 仍有多处字面量。
+> Stage 5 是注释与文档清理，当前**部分完成**：Stage 0 已修正数字、模块表、重复记录；`exit.js` 头部压缩、`entities.js Mob.draw` 失效引用、`5.3.1 实体生命周期契约` 尚未做。

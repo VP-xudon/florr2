@@ -335,18 +335,7 @@ const PETAL_JELLY_IMPACT_MAX = 2.4;
 // 默认速度的 40%；同时所有花瓣被打回"待加载"（见 Player._tickReload / reloadDone）。
 const SLOW_TILE_SPEED = 0.4;
 
-// 通用出场 / 退场动画（所有实体统一遵守，时长 0.1s）
-//   出场：大小不变，仅渐显
-//   退场（死亡 / 被删除 / 卸下）：平滑放大到 1.5 倍，同时渐隐
-// 【退场的唯一通道是 sim/exit.js 的 ExitFX】：任何实体离场都必须先 ExitFX.begin()
-// 再由 ExitFX.sweep() 回收，绝不允许直接 splice/pop（那会让实体凭空消失）。
-const FADE_T      = 0.1;
-const DEATH_SCALE = 1.5;
-function spawnFade(age) { return clamp(age / FADE_T, 0, 1); }                 // 出场：0 -> 1 的 alpha
-// Q 弹出场：easeOutBack 缩放曲线 —— 从小弹出、过冲到 ~1.1 再落回 1，配合 0.1s 时长很有弹性
-function spawnPop(age) {
-  const t = clamp(age / FADE_T, 0, 1);
-  const c1 = 1.70158, c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
-function deathFade(t01) { return { scale: 1 + (DEATH_SCALE - 1) * t01, alpha: 1 - t01 }; }
+// 通用出场 / 退场动画统一由 sim/exit.js 的 EntityFX 维护（曲线参数也在那里）：
+//   出场：渐显 + Q 弹缩放；退场：放大 + 渐隐 / 只渐隐。
+// 任何实体离场都必须先 EntityFX.despawn()，再由 EntityFX.tickList/tickEntity 回收；
+// 绝不允许直接 splice/pop（那会让实体凭空消失）。

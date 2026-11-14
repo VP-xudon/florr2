@@ -47,26 +47,20 @@ function roundRectPath(ctx, x, y, w, h, r) {
 
 // 绘制生物贴图：用「裁剪到实际图案」的版本，使图案正好撑满 size（= 碰撞箱直径）。
 // 普通 drawSprite 按 viewBox 绘制，生物 SVG 外圈有一大片透明留白，图案会明显小一圈。
-// 场地型实体（蛛网）列表的统一绘制：生成时从中心快速渐大弹出（WEB_POP_T），
-// 到期【不是凭空消失】：进入通用退场（sim/exit.js 的 EntityFX）放大 + 渐隐，播完才被回收。
-// 退场中的网仍然要画（只是 alpha 在降），跳过它就等于"啪一下消失"。
-// list 元素 = { x, y, r, t, dur, pop }；img = 蛛网贴图（PetalFX.netImage()）。
+// 场地型实体（蛛网）列表的统一绘制：
+// 入场曲线（spring：三次缓出 + 过冲）与退场曲线（growFade：放大 + 渐隐）
+// 全部由 sim/exit.js 的 EntityFX 施加，这里只负责"在原点画一张网"。
+// list 元素 = { x, y, r, ... }（EntitySet 或普通数组都可以）；img = 蛛网贴图。
 function drawWebList(ctx, list, img) {
   if (!list || !list.length || !img) return;
   for (const f of list) {
-    // 0 -> 1 的弹出：三次缓出 + 一点点过冲，观感是"啪地张开"
-    const p = clamp(f.pop, 0, 1);
-    const grow = 1 - Math.pow(1 - p, 3);
-    const over = 1 + 0.16 * Math.sin(Math.PI * p);
-    const ex = ExitFX.scale(f);        // 退场缩放（未退场 = 1）
-    const ea = ExitFX.alpha(f);        // 退场透明度（未退场 = 1）
-    if (!(ea > 0.001)) continue;       // 已经完全透明（退场播完，还没被回收）才跳过
-    const d = f.r * 2 * grow * over * ex;
-    if (!(d > 1)) continue;
-    ctx.save();
-    ctx.globalAlpha = 0.9 * ea;
-    ctx.drawImage(img, f.x - d / 2, f.y - d / 2, d, d);
-    ctx.restore();
+    if (!f || f.dead) continue;
+    EntityFX.draw(ctx, f, (c) => {
+      const d = (f.r || 0) * 2;
+      if (!(d > 1)) return;
+      c.globalAlpha *= 0.9;
+      c.drawImage(img, -d / 2, -d / 2, d, d);
+    });
   }
 }
 

@@ -79,14 +79,12 @@ class DropCard {
     this.x = x; this.y = y;
     this.popT = 0;           // 弹出进度 0->1（easeOutBack：先冲出去、再轻轻回落）
     this.count = 1;          // 完全相同的卡牌堆叠在同一张卡上
-    this.age = 0;
     this.size = DROP_SIZE;
     this.life = (DROP_LIFETIME[this.rarity] != null) ? DROP_LIFETIME[this.rarity] : DROP_LIFETIME.common;
-    this.fade = 0;           // 到期渐隐进度 0~1（1 = 彻底消失）
     this.fly = 0;            // 0 = 停留；0~1 = 正在飞向玩家（同时缩小）
     this.sx = 0; this.sy = 0;
-    this.done = false;
     this.picked = false;     // 是否已被玩家捡走（到期自然消失 = false）
+    this.awarded = false;    // 是否已经入包（防止回收那一帧重复发放）
     // 掉落概率（0~1）：由 rollMobDrops 带上，用来决定持续粒子喷多久。
     this.chance = (chance == null) ? null : chance;
     this.sparkT = 0;         // 持续粒子的发射计时
@@ -95,6 +93,8 @@ class DropCard {
     // 随机偏转：-15° ~ +15°（左右各 15 度），让掉在地上的卡看起来是"散落"而非整齐排列。
     // 生成时定死，飞行拾取过程中不再变化。
     this.rot = rand(-Math.PI / 12, Math.PI / 12);
+    // 入门 / 退场 / 红闪统一由实体引擎维护（kind = 'drop'：Q 弹入场、到期渐隐缩 15%）
+    EntityFX.spawn(this, 'drop');
   }
   // 开始拾取：记下起点，之后沿缓出曲线飞向玩家中心
   pick() {
@@ -104,11 +104,11 @@ class DropCard {
     this.sx = this.x; this.sy = this.y;
   }
   update(dt, player) {
-    this.age += dt;
-    // ① 存活时长到期：没有被捡走就开始渐隐，直到完全消失（super 及以上永不过期）
-    if (!this.fly && Number.isFinite(this.life) && this.age >= this.life) {
-      this.fade = Math.min(1, this.fade + dt / DROP_DESPAWN_T);
-      if (this.fade >= 1) { this.done = true; return; }
+    if (this.exiting) return;                 // 退场由 EntityFX.tickList 推进
+    // ① 存活时长到期：没有被捡走就开始通用退场（渐隐 + 微缩），播完由引擎回收
+    if (!this.fly && Number.isFinite(this.life) && (this.age || 0) >= this.life) {
+      EntityFX.despawn(this);
+      return;
     }
     // ② 弹出阶段：从死亡点飞向目标位置（期间不可拾取）
     if (this.popT < 1) {
@@ -126,52 +126,47 @@ class DropCard {
     const e = 1 - Math.pow(1 - t, 2);            // easeOut：起步快、末端吸附
     this.x = this.sx + (player.x - this.sx) * e;
     this.y = this.sy + (player.y - this.sy) * e;
-    if (t >= 1) this.done = true;
+    // 飞完 = 已进入背包：真正移除仍走通用离场（时长≈0，不留渐隐尾巴）
+    if (t >= 1) EntityFX.despawn(this, { dur: 0.001 });
   }
   // 飞行中缩小到 0.18（看起来就是"被吸进背包"）
   get scale() { return this.fly ? (1 - 0.82 * this.fly) : 1; }
   draw(ctx) {
-    const pop = spawnPop(this.age);                 // 出场 Q 弹（与全局实体一致）
-    // 呼吸：幅度 2.4%，每 2 秒 3 个来回（周期 2/3 s）
-    const breathe = 1 + DROP_BREATH_AMP * Math.sin(this.age * DROP_BREATH_W);
-    // 到期渐隐时同步缩一点，读起来像"慢慢化掉"而不是突然消失
-    const fadeK = 1 - this.fade;
-    const d = this.size * this.scale * pop * breathe * (1 - 0.15 * this.fade);
-    if (d <= 0.5 || fadeK <= 0) return;
     const cv = dropFaceCanvas(this.slug, this.rarity, this.name, this.svg);
-    ctx.save();
-    if (this.fly || this.fade) {
-      const a = Math.max(0, 1 - this.fly * 0.85) * fadeK;
-      if (a < 1) ctx.globalAlpha = a;
-    }
-    // 整张卡绕自身中心旋转 Math.rot（随机 ±15°），角标跟着一起转
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rot);
-    if (cv) {
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(cv, -d / 2, -d / 2, d, d);
-    } else {
-      // 卡面素材尚未就绪：先用稀有度色块占位（不闪烁，拿不到真实卡面时才出现）
-      const col = (typeof RARITIES !== 'undefined' && RARITIES[this.rarity]) ? RARITIES[this.rarity].color : '#888';
-      ctx.fillStyle = col;
-      ctx.fillRect(-d / 2, -d / 2, d, d);
-    }
-    // 数量角标：与背包 .card-count 同一套样式（右上角、右倾 30°、白字黑描边、字号 0.236×卡宽）
-    if (this.count > 1) {
-      ctx.translate(d * 0.42, -d * 0.30);
-      ctx.rotate(Math.PI / 6);
-      const fs = Math.max(6, d * 0.236);
-      ctx.font = '800 ' + fs + 'px ' + CardRenderer.FONT;
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      ctx.lineJoin = 'round'; ctx.miterLimit = 2;
-      ctx.lineWidth = fs * 0.115;
-      ctx.strokeStyle = '#000';
-      ctx.fillStyle = '#fff';
-      const txt = 'x' + fmtNum(this.count);
-      ctx.strokeText(txt, 0, 0);
-      ctx.fillText(txt, 0, 0);
-    }
-    ctx.restore();
+    // 呼吸：幅度 2.4%，每 2 秒 3 个来回（周期 2/3 s）；飞行缩小由 scale 负责
+    const breathe = 1 + DROP_BREATH_AMP * Math.sin((this.age || 0) * DROP_BREATH_W);
+    const d = this.size * this.scale * breathe;
+    if (d <= 0.5) return;
+    // 飞行拾取时整体变淡（旧观感）；引擎把它与入场/退场 alpha 相乘
+    this.fxAlpha = this.fly ? Math.max(0, 1 - this.fly * 0.85) : null;
+    // 入场 Q 弹 / 到期渐隐 / 退场缩放全部由 EntityFX.draw 施加，这里只画局部坐标
+    EntityFX.draw(ctx, this, (c) => {
+      c.rotate(this.rot);
+      if (cv) {
+        c.imageSmoothingQuality = 'high';
+        c.drawImage(cv, -d / 2, -d / 2, d, d);
+      } else {
+        // 卡面素材尚未就绪：先用稀有度色块占位（不闪烁，拿不到真实卡面时才出现）
+        const col = (typeof RARITIES !== 'undefined' && RARITIES[this.rarity]) ? RARITIES[this.rarity].color : '#888';
+        c.fillStyle = col;
+        c.fillRect(-d / 2, -d / 2, d, d);
+      }
+      // 数量角标：与背包 .card-count 同一套样式
+      if (this.count > 1) {
+        c.translate(d * 0.42, -d * 0.30);
+        c.rotate(Math.PI / 6);
+        const fs = Math.max(6, d * 0.236);
+        c.font = '800 ' + fs + 'px ' + CardRenderer.FONT;
+        c.textAlign = 'right'; c.textBaseline = 'middle';
+        c.lineJoin = 'round'; c.miterLimit = 2;
+        c.lineWidth = fs * 0.115;
+        c.strokeStyle = '#000';
+        c.fillStyle = '#fff';
+        const txt = 'x' + fmtNum(this.count);
+        c.strokeText(txt, 0, 0);
+        c.fillText(txt, 0, 0);
+      }
+    });
   }
 }
 

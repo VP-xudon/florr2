@@ -389,7 +389,7 @@ class Game {
       if (sp.hurtT > (p.hurtT || 0)) p.hurtT = sp.hurtT;
       if (sp.flash > (p.flash || 0)) p.flash = sp.flash;
       // 死亡旋转角：服务端 die() 里随机生成，必须回填，否则客户端尸体不旋转
-      if (sp.dead) { p.deathRot = sp.deathRot; p.deathTimer = Math.max(p.deathTimer || 0, sp.deathTimer || 0); }
+      if (sp.dead) { p.deathRot = sp.deathRot; p.corpseT = Math.max(p.corpseT || 0, sp.corpseT || 0); }
       // 只记录权威位置，由 _reconcile 每帧按速率收敛（不再在这里硬拉，避免攒到阈值瞬移）
       this._netPos = { x: sp.x, y: sp.y };
     }
@@ -411,9 +411,9 @@ class Game {
 
     // ---- 场级实体（网）：全部来自服务端，客户端只渲染 ----
     // 玩家的网与蜘蛛的网合并成同一张表（p.netWebs），共用同一套到期/退场流程。
-    // 服务端不再下发的网 = 已经消失 -> 客户端走【同一套】退场（ExitFX），不是凭空消失。
+    // 服务端不再下发的网 = 已经消失 -> 客户端走【同一个】EntityFX.despawn。
     if (snap.webs) {
-      if (!p.netWebs) p.netWebs = createExitList();
+      if (!p.netWebs) p.netWebs = createEntitySet('web');
       const seen = {};
       for (const w of snap.webs) {
         if (!w) continue;
@@ -424,10 +424,10 @@ class Game {
           p.netWebs.add(f);
         }
         f.x = w.x; f.y = w.y; f.r = w.r; f.t = w.t; f.pop = w.pop;
-        if (w.exiting && !f.exiting) ExitFX.begin(f);
+        if (w.exiting) EntityFX.despawn(f);
       }
       p.netWebs.forEach((f) => {
-        if (f && !seen[f.netId] && !f.exiting) ExitFX.begin(f);
+        if (f && !seen[f.netId]) EntityFX.despawn(f);
       });
     }
 
@@ -495,7 +495,7 @@ class Game {
       }
       // 尾针（Missile）：【按 id 复用同一个客户端对象】。
       // 旧写法每帧 structuredClone 一个新对象，把"同一实体"打散了：
-      //   ① 对象引用每帧都变 —— 打在上面的退场标记（ExitFX）会丢；
+      //   ① 对象引用每帧都变 —— 打在上面的退场标记会丢；
       //   ② 服务端发射时只是把【同一个导弹对象】从 st.missile 移到 st.projectiles，
       //      客户端却在每帧"克隆一个新导弹"（用户口径：原地克隆一个一模一样的子实体）。
       // 现在：id 相同 → 就地更新字段（引用稳定，插值起点保留）；id 变了 → 才算新导弹。
@@ -513,16 +513,17 @@ class Game {
         } else {
           const dispX = (ms.x != null) ? ms.x : src.x;
           const dispY = (ms.y != null) ? ms.y : src.y;
-          Object.assign(ms, src);              // 权威字段（facing/hp/exiting…）
+          Object.assign(ms, src);              // 权威字段（facing/hp/exiting/exitT…）
           ms.px = dispX; ms.py = dispY;        // 插值起点 = 上一帧显示位置
           ms.tx = src.x; ms.ty = src.y;        // 插值目标 = 服务端权威位置
           ms.blend = 0;
         }
-        if (ms.exiting && !ms._exitBegan) { ms._exitBegan = true; ExitFX.begin(ms); }
+        // 退场由快照的 exiting/exitT 驱动，计时统一交给 EntityFX.tickEntity
+        ms._kind = 'projectile';
       } else if (v.hornetMissile) {
         if (!v.hornetMissile.exiting) {
-          v.hornetMissile.exiting = true;
-          ExitFX.begin(v.hornetMissile);
+          v.hornetMissile._kind = 'projectile';
+          EntityFX.despawn(v.hornetMissile);
         }
       }
       // 快照里没有挂载尾针（已发射 / 尾针被击碎）时，客户端视图构造阶段创建的
@@ -545,14 +546,14 @@ class Game {
             prev.px = dispX; prev.py = dispY;
             prev.tx = item.x; prev.ty = item.y;
             prev.blend = 0;
-            if (prev.exiting && !prev._exitBegan) { prev._exitBegan = true; ExitFX.begin(prev); }
+            prev._kind = 'projectile';
             next.set(item.id, prev);
           } else {
             const obj = Object.assign({}, item);
             obj.px = item.x; obj.py = item.y;
             obj.tx = item.x; obj.ty = item.y;
             obj.blend = 1;
-            if (obj.exiting && !obj._exitBegan) { obj._exitBegan = true; ExitFX.begin(obj); }
+            obj._kind = 'projectile';
             next.set(item.id, obj);
           }
         }
@@ -565,7 +566,7 @@ class Game {
       v.isSummon = !!e.isSummon;
       // 表现层状态全部由服务端权威置位，取较大值回填（本地同时在按时间衰减）。
       // 【Stage 3】优先读快照下发的 e.fx（表现字段统一入口），保留对 e.hurtT/e.flash/
-      // e.squash/e.deathTimer/e.deathRot/e.ultActive 的直接回填作为兼容，以免旧快照字段缺失。
+      // e.squash/e.deathRot 的直接回填作为兼容，以免旧快照字段缺失。
       if (e.fx) {
         if ((e.fx.hurt || 0) > (v.hurtT || 0)) v.hurtT = e.fx.hurt;
         else if ((e.hurtT || 0) > (v.hurtT || 0)) v.hurtT = e.hurtT;
@@ -576,9 +577,8 @@ class Game {
         if (e.dead) {
           if (e.fx.rot != null) v.deathRot = e.fx.rot;
           else if (e.deathRot != null) v.deathRot = e.deathRot;
-          if (!v.exiting) ExitFX.begin(v);
+          if (!v.exiting) EntityFX.despawn(v);
           if ((e.fx.exitT || 0) > (v.exitT || 0)) v.exitT = e.fx.exitT;
-          else if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
         }
         v.ultActive = e.fx.ult ? 1 : (e.ultActive ? 1 : 0);
       } else {
@@ -587,8 +587,8 @@ class Game {
         if (e.squash > (v.squash || 0)) v.squash = e.squash;
         if (e.dead) {
           if (e.deathRot != null) v.deathRot = e.deathRot;
-          if (!v.exiting) ExitFX.begin(v);
-          if ((e.deathTimer || 0) > (v.exitT || 0)) v.exitT = e.deathTimer;
+          if (!v.exiting) EntityFX.despawn(v);
+          if ((e.exitT || 0) > (v.exitT || 0)) v.exitT = e.exitT;
         }
         v.ultActive = !!e.ultActive;
       }
@@ -602,7 +602,7 @@ class Game {
       // 服务端可能刚好在两次快照之间把生物打死并回收（那 0.1s 的死亡窗口很短），
       // 客户端压根没看见 dead —— 这时也要补一个退场动画。
       if (!v.gone && !seen.has(v.netId)) { v.gone = true; this._goneDirty = true; }
-      if (v.gone && !v.exiting) ExitFX.begin(v);
+      if (v.gone && !v.exiting) EntityFX.despawn(v);
     }
   }
 
@@ -612,23 +612,23 @@ class Game {
       seen.add(item.id);
       const current = this.hornetProjectiles.get(item.id);
       const view = current || Object.assign({}, item);
-      view.px = current ? current.x : item.x;
-      view.py = current ? current.y : item.y;
-      view.tx = item.x; view.ty = item.y;
-      view.blend = current ? 0 : 1;
+      const wasExiting = !!view.exiting;
+      const px = current ? current.x : item.x;
+      const py = current ? current.y : item.y;
       Object.assign(view, item);
-      view.px = current ? current.x : item.x;
-      view.py = current ? current.y : item.y;
+      view.px = px; view.py = py;
       view.tx = item.x; view.ty = item.y;
       view.blend = current ? 0 : 1;
+      // 快照的 exiting 只是"服务端已判退场"；本地必须走 EntityFX.despawn 才能拿到曲线参数
+      if (item.exiting && !wasExiting) {
+        view.exiting = false;
+        EntityFX.despawn(view);
+      }
       this.hornetProjectiles.set(item.id, view);
     }
     for (const [id, projectile] of this.hornetProjectiles) {
       if (seen.has(id)) continue;
-      if (!projectile.exiting) {
-        projectile.exiting = true;
-        ExitFX.begin(projectile);
-      }
+      EntityFX.despawn(projectile);
     }
   }
 
@@ -710,7 +710,7 @@ class Game {
     for (const m of this.mobs) {
       // 【退场必须推进】屏外的生物也要走退场计时 ——
       // 否则退场永远播不完，那只生物就永远回收不掉（实体泄漏 + 屏幕外突然消失）。
-      if (m.exiting) ExitFX.tick(m, dt);
+      if (m.exiting) EntityFX.tickEntity(m, dt);
       const dxc = m.tx - cx, dyc = m.ty - cy;
       if (dxc > hw || dxc < -hw || dyc > hh || dyc < -hh) {
         m.blend = 1;
@@ -725,7 +725,7 @@ class Game {
       m.y = m.py + (m.ty - m.py) * b;
       if (m.hornetMissile) {
         const missile = m.hornetMissile;
-        if (missile.exiting) ExitFX.tick(missile, dt);
+        if (missile.exiting) EntityFX.tickEntity(missile, dt);
         else if (missile.blend < 1) {
           missile.blend = Math.min(1, missile.blend + k);
           missile.x = missile.px + (missile.tx - missile.px) * missile.blend;
@@ -733,7 +733,7 @@ class Game {
         }
       }
       for (const [, projectile] of m.hornetProjectiles || []) {
-        if (projectile.exiting) ExitFX.tick(projectile, dt);
+        if (projectile.exiting) EntityFX.tickEntity(projectile, dt);
         else if (projectile.blend < 1) {
           projectile.blend = Math.min(1, projectile.blend + k);
           projectile.x = projectile.px + (projectile.tx - projectile.px) * projectile.blend;
@@ -743,12 +743,9 @@ class Game {
       // 主角血条模式（多节生物的非头节）：血条满血渐隐 / 掉血渐显 —— 视图不走 Mob.update，
       // 所以这个淡入淡出必须在这里推进，否则 hpBarA 永远是 0，血条根本不出现。
       if (m.plateStyle === 'player') m._tickHpBarA(dt);
-      // 动画计时：出生渐显 / 受伤红闪 / 死亡放大渐隐
-      m.age += dt;
-      m.hurtT = Math.max(0, m.hurtT - dt);
-      // 白闪本地衰减：之前漏了这行 -> 服务端 flash 正常衰减，但客户端视图 forever 不衰减，
-      // 而 _applySnap 是"取较大值回填"，服务端值一旦低于它就不再更新 -> 生物永久变白。
-      m.flash = Math.max(0, m.flash - dt);
+      // 动画计时：出生渐显 / 受伤红闪 / 白闪 / 退场放大渐隐 —— 全部由实体引擎推进
+      //（age / hurtT / flash / exitT 只有一份来源，别再手写衰减）。
+      if (!m.exiting) EntityFX.tickEntity(m, dt);
       m.squash = damp(m.squash, 0, 10, dt);
       m._tickHpSmooth(dt);          // 血条双层平滑（主条 + 缓冲条），与花朵血条同款
       // 大招进行中（蜘蛛原地自转）：它不走位，步态不会自然推进 ——
@@ -763,14 +760,14 @@ class Game {
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
     // 【不要每步都 filter】：它会分配一个 4000+ 元素的新数组，每步一次就是纯 GC 压力。
     // 只在确实标记过 gone 时、且最多 0.25s 清一次。
-    // 【回收口径】ExitFX.done = 退场动画已播完；没播完的还在场（不许凭空消失）。
+    // 【回收口径】EntityFX.done = 退场动画已播完；没播完的还在场（不许凭空消失）。
     if (this._goneDirty) {
       this._cleanAcc = (this._cleanAcc || 0) + dt;
       if (this._cleanAcc >= 0.25) {
         this._cleanAcc = 0;
         const keep = [];
         for (const m of this.mobs) {
-          if (m.gone && ExitFX.done(m)) {
+          if (m.gone && EntityFX.done(m)) {
             // 回收时把视图映射一起清掉（否则 mobViews 一直涨，netId 复用会串）
             this.mobViews.delete(m.netId);
             continue;
@@ -1364,8 +1361,8 @@ class Game {
     const _x0 = camX - _vw / 2 - _px, _x1 = camX + _vw / 2 + _px;
     const _y0 = camY - _vh / 2 - _py, _y1 = camY + _vh / 2 + _py;
     for (const m of mobs || []) {
-      // 退场播完后不再画碰撞箱（口径与实体渲染一致：ExitFX）
-      if (m.dead && ExitFX.done(m)) continue;
+      // 退场播完后不再画碰撞箱（口径与实体渲染一致：EntityFX）
+      if (m.dead && EntityFX.done(m)) continue;
       const mr = (m.r || 0) + 4;
       if (m.x + mr < _x0 || m.x - mr > _x1 || m.y + mr < _y0 || m.y - mr > _y1) continue;  // 视口剔除：与实体渲染同源
       const sh = m.shape;

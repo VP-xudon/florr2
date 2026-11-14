@@ -110,11 +110,12 @@ class Mob {
     this.kbX = 0; this.kbY = 0; // 反弹冲量速度（px/s，指数衰减到 0）
     // 血条平滑管线（与花朵同款）：主条快速跟随 + 缓冲条慢速过冲
     this.dispHp = null; this.ghostHp = null; this.ghostV = 0;
-    this.dead = false; this.deathTimer = 0;
-    // 退场状态（统一由 sim/exit.js 的 ExitFX 维护）：
-    //   exiting / exitT / exitAlpha / exitScale —— 死亡后必须先播完退场动画才被回收。
-    // 【不许绕过】：任何地方想"让这只生物消失"，唯一入口是 ExitFX.begin(this)，
-    // 回收只由 ExitFX.sweep / ExitFX.done 判定（见 server.js 的 ents 清理）。
+    this.dead = false;
+    // 出场 / 退场 / 红闪状态全部由 sim/exit.js 的 EntityFX 维护：
+    //   exiting / exitT / exitAlpha / exitScale / age / hurtT / flash
+    // 任何地方想"让这只生物消失"，唯一入口是 EntityFX.despawn(this)，
+    // 回收只由 EntityFX.done / tickList 判定（见 server.js 的 ents 清理）。
+    this.age = 0;                       // 出场计时（由 EntityFX 推进）
     this.exiting = false; this.exitT = 0; this.exitDur = 0;
     this.exitAlpha = 1; this.exitScale = 1;
     // 大招（Super / Eternal 专属）：【状态由 MobFX 引擎维护】（js/mob-fx.js）
@@ -123,7 +124,6 @@ class Mob {
     //   ultFieldReq  = 大招结束时的【产出请求】（由 LocalServer 消费，例如超大蛛网）
     // 这一层只"读"这些状态（锁位 / 不参与推挤），不自己发明大招规则。
     this.ultActive = false; this.ultHold = null; this.ultFieldReq = null;
-    this.age = 0;                       // 出场计时（渐隐用）
     this.aggro = false;                 // 仇恨：暂不启用（还没有伤害）
     // 护甲（armor）：registry 有就整表取用，否则按稀有度默认表；攻击结算 = max(攻-甲, 0)
     this.armor = (rs && rs.armor != null) ? rs.armor
@@ -142,6 +142,7 @@ class Mob {
     // create 建立运行时状态。未注册的物种自动回落到通用游走。
     if (typeof MobFX !== 'undefined') MobFX.initMob(this);
     MobAI.attach(this);
+    EntityFX.spawn(this, 'mob');      // 统一实体引擎：出场计时/退场/红闪从 0 开始
   }
 
   // 受击结算：返回 { applied, killed }。
@@ -171,10 +172,9 @@ class Mob {
     if (applied > 0) MobAI.onHurt(this, src, applied);
     if (this.hp <= 0) {
       this.hp = 0;
-      this.dead = true; this.deathTimer = 0;
+      this.dead = true;
       // 【退场的唯一入口】生物死亡 = 进入通用退场（放大 + 渐隐）。
-      // 之后由 ExitFX.sweep 回收；直接改 dead 或从数组里删掉都是违规写法。
-      ExitFX.begin(this);
+      EntityFX.despawn(this);
       return { applied, killed: true };
     }
     return { applied, killed: false };
@@ -448,13 +448,12 @@ class Mob {
   }
 
   update(dt, player, map, others) {
-    // 死亡：只推进退场动画（放大渐隐），退场播完才由 ExitFX.sweep 回收。
-    if (this.dead) { ExitFX.tick(this, dt); return; }
-    this.age += dt;
+    // 死亡：只推进退场动画（放大渐隐），退场播完才由 EntityFX.tickList 回收。
+    if (this.dead) { EntityFX.tickEntity(this, dt); return; }
+    // 出场计时 / 受伤红闪 / 白闪：统一由实体引擎推进（与客户端视图同一条曲线）
+    EntityFX.tickEntity(this, dt);
     this._map = map || this._map;      // canSee 的视线检测要用（每帧刷新引用，成本为零）
     this._tickHpSmooth(dt);
-    this.flash = Math.max(0, this.flash - dt);
-    this.hurtT = Math.max(0, this.hurtT - dt);
     this.squash = damp(this.squash, 0, 10, dt);
     tickKnockback(this, dt);          // 反弹冲量衰减（在 moveEntity 之前）
     if (typeof StatusFX !== 'undefined') StatusFX.tick(this, dt);   // 状态效果时长推进
@@ -591,16 +590,9 @@ class Mob {
 
   draw(ctx) {
     this._ensureShape();          // 客户端视图也要建外形（见 _ensureShape）
-    let scale = 1 + this.squash * 0.4;
-    let alpha = spawnFade(this.age);        // 出场：0.1s 渐显
-    if (this.dead) {
-      // 退场：统一走 ExitFX（放大 + 渐隐）。生物 / 蛛网 / 场地实体同一套曲线，
-      // 不允许任何一种实体自己发明第二种"消失方式"。
-      scale *= ExitFX.scale(this);
-      alpha = ExitFX.alpha(this);
-    } else {
-      scale *= spawnPop(this.age);          // Q 弹出场（过冲回落）
-    }
+    // 出场/退场/红闪全部由 EntityFX 统一算好；这里只叠加受击挤压（业务表现）。
+    const fx = EntityFX.visual(this);
+    const squash = 1 + this.squash * 0.4;
     // 注意：生物【不做】呼吸/浮动特效（用户明确要求），尺寸只由受击挤压与退场缩放决定。
     // 多节生物：头节/身体节用不同贴图。本节贴图【没加载成功】时退回物种贴图，
     // 否则 drawMob 会直接 return —— 表现就是"整条蜈蚣没有头"（12_h 素材 404/缓存损坏时）。
@@ -610,7 +602,6 @@ class Mob {
     }
     const rot = this.facing + this.artRot;  // 头始终朝向移动方向
     // drawSize = 视觉直径 = 碰撞箱直径；贴图已按图案包围盒裁剪，正好撑满它
-    let bodyAlpha = alpha;
     // 步态（蜘蛛等）：按本帧位移累计 gait，站立不动时腿就停住。
     // 在 draw 里算而不是 update 里，是为了让客户端视图（不走 update）也同步摆动。
     if (this.gaitSprite && !this.dead) {
@@ -626,114 +617,107 @@ class Mob {
     // 步态生物（蜘蛛）的实际绘制键 = 无腿身体：红闪/白闪/红滤镜都必须跟它同源，
     // 否则红闪用的还是【带腿的旧剪影】，腿摆起来红闪却不动（观感就是"红闪没跟上"）。
     let keyBody = key;
-    if (gait) {
-      // 八条腿【矢量绘制】（在身体之下）+ 无腿身体贴图：
-      // 腿的相位由 gait 连续驱动 —— 不预渲染帧，任何缩放/角度都是矢量锐边。
-      // ① 腿：与本体同一变换（pivot 平移 + 旋转 + 挤压），在 artCanvas 局部坐标系里画
-      keyBody = 'mob21_body';
-      if (!SpriteStore.ready(keyBody)) {
-        const url = SpiderGait.bodyUrl();
-        if (url && !SpriteStore.images[keyBody]) SpriteStore.load(keyBody, url);
-      }
-      ctx.save();
-      ctx.translate(this.x, this.y);
-      if (rot) ctx.rotate(rot);
-      if (scale && scale !== 1) ctx.scale(scale, scale);
-      if (alpha != null) ctx.globalAlpha = alpha;
-      const pv = SpriteStore.mobPivot(keyBody);   // 与身体贴图同一轴心，腿才压得准
-      ctx.translate(-this.drawSize / 2 - pv.x * this.drawSize,
-        -this.drawSize / 2 - pv.y * this.drawSize);
-      // 受击时腿【一起变红】：红闪剪影只覆盖身体贴图，腿是矢量画的，必须自己变红
-      ctx.strokeStyle = (this.hurtT > 0 && !this.dead) ? '#ff4040' : '#333';
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = gait.lw;
-      ctx.beginPath();
-      for (const l of gait.legs) {
-        ctx.moveTo(l[0], l[1]);
-        ctx.quadraticCurveTo(l[2], l[3], l[4], l[5]);
-      }
-      ctx.stroke();
-      ctx.restore();
-      // ② 身体（无腿贴图，压在腿上面）
-      drawMob(ctx, keyBody, this.drawSize, this.x, this.y, rot, scale, alpha, false);
-    } else {
-      // 挂在身上的子实体（Hornet 尾针）：图层在【身体之下】（用户口径：尾针应在身体下面）。
-      // 偏移已按素材推到体外（0.55×drawSize），露出体外的部分照样看得见。
-      if (!this.dead && typeof MobFX !== 'undefined') {
-        this._drawScale = scale; this._drawAlpha = alpha;
-        MobFX.drawMob(ctx, this);
-        this._drawScale = null; this._drawAlpha = null;
-      }
-      drawMob(ctx, key, this.drawSize, this.x, this.y, rot, scale, alpha, false);
+    if (gait) keyBody = 'mob21_body';
+    // 挂在身上的子实体（Hornet 尾针）：图层在【身体之下】。它用世界坐标绘制，
+    // 所以放在 EntityFX.draw 之外，但 alpha/scale 仍取引擎合成值（唯一来源）。
+    if (!this.dead && typeof MobFX !== 'undefined') {
+      this._drawScale = fx.scale * squash;
+      this._drawAlpha = fx.alpha;
+      MobFX.drawMob(ctx, this);
+      this._drawScale = null; this._drawAlpha = null;
     }
-    // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。
-    // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
-    // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。
-    if (this.dots && this.dots.length) {
+    // ★ 本体统一走 EntityFX.draw：入场/退场/渐隐由引擎施加，paint 里全部用局部坐标 (0,0)。
+    EntityFX.draw(ctx, this, () => {
       ctx.save();
-      ctx.translate(this.x, this.y);
-      ctx.rotate(rot);
-      if (scale !== 1) ctx.scale(scale, scale);
-      ctx.globalAlpha = bodyAlpha;
-      ctx.beginPath();
-      ctx.arc(0, 0, 0.48 * this.drawSize, 0, TAU);
-      ctx.clip();
-      ctx.fillStyle = '#111';   // 斑点恒为黑色；受击由整体红色滤镜统一表现，不再随白闪变白
-      for (const d of this.dots) {
-        ctx.beginPath();
-        ctx.arc(d.x * this.drawSize, d.y * this.drawSize, d.r * this.drawSize, 0, TAU);
-        ctx.fill();
-      }
-      ctx.restore();
-      // 描边圈盖回（与本体同变换，按对齐矩形落位）
-      const ring = SpriteStore.getImage(LADYBUG_RING_KEY);
-      if (ring) {
+      if (squash !== 1) ctx.scale(squash, squash);
+      if (gait) {
+        // 八条腿【矢量绘制】（在身体之下）+ 无腿身体贴图：
+        // 腿的相位由 gait 连续驱动 —— 不预渲染帧，任何缩放/角度都是矢量锐边。
+        if (!SpriteStore.ready(keyBody)) {
+          const url = SpiderGait.bodyUrl();
+          if (url && !SpriteStore.images[keyBody]) SpriteStore.load(keyBody, url);
+        }
         ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(rot);
-        if (scale !== 1) ctx.scale(scale, scale);
-        ctx.globalAlpha = bodyAlpha;
-        const R = LADYBUG_RING_RECT;
-        ctx.drawImage(ring,
-          (R[0] - 0.5) * this.drawSize, (R[1] - 0.5) * this.drawSize,
-          R[2] * this.drawSize, R[3] * this.drawSize);
+        if (rot) ctx.rotate(rot);
+        const pv = SpriteStore.mobPivot(keyBody);   // 与身体贴图同一轴心，腿才压得准
+        ctx.translate(-this.drawSize / 2 - pv.x * this.drawSize,
+          -this.drawSize / 2 - pv.y * this.drawSize);
+        // 受击时腿【一起变红】：红闪剪影只覆盖身体贴图，腿是矢量画的，必须自己变红
+        ctx.strokeStyle = (this.hurtT > 0 && !this.dead) ? '#ff4040' : '#333';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = gait.lw;
+        ctx.beginPath();
+        for (const l of gait.legs) {
+          ctx.moveTo(l[0], l[1]);
+          ctx.quadraticCurveTo(l[2], l[3], l[4], l[5]);
+        }
+        ctx.stroke();
         ctx.restore();
+        // ② 身体（无腿贴图，压在腿上面）
+        drawMob(ctx, keyBody, this.drawSize, 0, 0, rot, 1, null, false);
+      } else {
+        drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null, false);
       }
-    }
-    // 受伤红色滤镜（0.3s）：红色剪影覆盖本体，随剩余时间渐隐。
-    // 瓢虫的描边圈是独立图层，单独补一层红色剪影，保证整个外观都被盖住。
-    if (this.hurtT > 0 && !this.dead) {
-      ctx.save();
-      ctx.translate(this.x, this.y);
-      ctx.rotate(rot);
-      if (scale !== 1) ctx.scale(scale, scale);
-      const ra = clamp(this.hurtT / 0.3, 0, 1) * 0.55;
-      // 步态生物（蜘蛛）用【无腿身体】的红剪影：腿的红色由矢量描边自己承担
-      const rc = SpriteStore.artRedCanvas(keyBody, this.drawSize);
-      if (rc) {
-        // 红闪必须和本体用【同一个旋转轴心位移】。之前这里只写了 -size/2，
-        // 于是像蜈蚣头这种主体不在画布中心的贴图，本体被平移了 -pv*size、
-        // 红闪却没有 —— 表现为"红闪偏后、和身体不重合"。三条绘制路径现在同源。
-        const pv = SpriteStore.mobPivot(keyBody);
-        ctx.globalAlpha = ra;
-        ctx.drawImage(rc,
-          -this.drawSize / 2 - pv.x * this.drawSize,
-          -this.drawSize / 2 - pv.y * this.drawSize,
-          this.drawSize, this.drawSize);
-      }
+      // 瓢虫随机斑点：与本体同变换（旋转/挤压/透明度），受击时随白闪变白。
+      // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
+      // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。
       if (this.dots && this.dots.length) {
-        const rr = SpriteStore.redCanvas(LADYBUG_RING_KEY, 512);
-        if (rr) {
+        ctx.save();
+        ctx.rotate(rot);
+        ctx.beginPath();
+        ctx.arc(0, 0, 0.48 * this.drawSize, 0, TAU);
+        ctx.clip();
+        ctx.fillStyle = '#111';   // 斑点恒为黑色；受击由整体红色滤镜统一表现
+        for (const d of this.dots) {
+          ctx.beginPath();
+          ctx.arc(d.x * this.drawSize, d.y * this.drawSize, d.r * this.drawSize, 0, TAU);
+          ctx.fill();
+        }
+        ctx.restore();
+        // 描边圈盖回（与本体同变换，按对齐矩形落位）
+        const ring = SpriteStore.getImage(LADYBUG_RING_KEY);
+        if (ring) {
+          ctx.save();
+          ctx.rotate(rot);
           const R = LADYBUG_RING_RECT;
-          ctx.globalAlpha = ra;
-          ctx.drawImage(rr,
+          ctx.drawImage(ring,
             (R[0] - 0.5) * this.drawSize, (R[1] - 0.5) * this.drawSize,
             R[2] * this.drawSize, R[3] * this.drawSize);
+          ctx.restore();
         }
       }
+      // 受伤红色滤镜（0.3s）：红色剪影覆盖本体，随剩余时间渐隐。
+      // 瓢虫的描边圈是独立图层，单独补一层红色剪影，保证整个外观都被盖住。
+      if (this.hurtT > 0 && !this.dead) {
+        ctx.save();
+        ctx.rotate(rot);
+        const ra = EntityFX.hurtAlpha(this);
+        // 步态生物（蜘蛛）用【无腿身体】的红剪影：腿的红色由矢量描边自己承担
+        const rc = SpriteStore.artRedCanvas(keyBody, this.drawSize);
+        if (rc) {
+          // 红闪必须和本体用【同一个旋转轴心位移】，三条绘制路径同源。
+          const pv = SpriteStore.mobPivot(keyBody);
+          ctx.globalAlpha *= ra;
+          ctx.drawImage(rc,
+            -this.drawSize / 2 - pv.x * this.drawSize,
+            -this.drawSize / 2 - pv.y * this.drawSize,
+            this.drawSize, this.drawSize);
+        }
+        if (this.dots && this.dots.length) {
+          const rr = SpriteStore.redCanvas(LADYBUG_RING_KEY, 512);
+          if (rr) {
+            const R = LADYBUG_RING_RECT;
+            ctx.globalAlpha *= ra;
+            ctx.drawImage(rr,
+              (R[0] - 0.5) * this.drawSize, (R[1] - 0.5) * this.drawSize,
+              R[2] * this.drawSize, R[3] * this.drawSize);
+          }
+        }
+        ctx.restore();
+      }
       ctx.restore();
-    }
+    });
     // 名牌（参照 生物.png）：名称(上) + 血条(中) + 稀有度(下)。
     // 文字统一 Ubuntu 800 + 纯黑描边（与卡牌/悬浮框同款漫画字）；名称白色，稀有度用其本色。
     // 名牌模式：'classic'（普通生物 / 蜈蚣【头节】）= 名称 + 血条 + 稀有度，常显；

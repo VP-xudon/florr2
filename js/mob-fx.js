@@ -266,7 +266,7 @@ const MobFX = {
     // 尾针也是实体：碰撞箱同样来自硬编码 .crb（11_missile），
     // 走与生物/花瓣完全相同的 shape/collSize 接口，F3 才能画出一致的轮廓。
     const crb = (typeof CRB !== 'undefined' && CRB.get) ? CRB.get('11_missile') : null;
-    return {
+    const missile = {
       shape: crb || null,
       collSize: crb ? (mob.drawSize * (this.hornetTail ? this.hornetTail.size : 0.3)) : 0,
       artRot: 0,
@@ -274,13 +274,15 @@ const MobFX = {
       parentId: mob.netId, x: mob.x, y: mob.y, facing: mob.facing + Math.PI,
       vx: 0, vy: 0, hp: stats.missileHp || 1, maxHp: stats.missileHp || 1,
       dmg: stats.missileDmg || 0, armor: mob.armor, life: stats.missileDur || 2,
-      age: 0, hurtT: 0, flight: false, dead: false, exiting: false,
+      flight: false, dead: false,
       radius: mob.drawSize * 0.12,
       // 视觉尺寸随【母体稀有度】固定：发射前挂在尾巴上、发射后在飞，都是同一个实体。
-      // 尺寸比例来自素材实测（hornetTail），prepareAssets 没跑完时用 0.3 兜底。
       drawSize: (this.hornetTail ? mob.drawSize * this.hornetTail.size : mob.drawSize * 0.3)
         // 与挂载态同尺寸：发射前后是同一个实体
     };
+    // 尾针也是完整实体：出场/退场/红闪统一由引擎维护。
+    EntityFX.spawn(missile, 'projectile');
+    return missile;
   },
 
   initMob(mob) {
@@ -381,19 +383,13 @@ const MobFX = {
   // 受伤红闪与其它实体同一套（红色蒙层），不再是"贴图不会闪"。
   drawMissileAt(ctx, missile, x, y, facing, size, alpha) {
     if (!missile || (missile.dead && !missile.exiting)) return;
-    // 【挂载态不做出生渐显】：它一直贴着本体，本体自己已经有出场动画了。
-    // 客户端视图不走 tick，missile.age 恒为 0 -> spawnFade(0)=0 -> 尾针永远全透明，
-    // 这就是"发射前的 Missile 不显示"的第二个原因。
-    // 挂载态：入场动画跟【本体】走（missile.age 在客户端恒为 0，用它就永远透明）；
-    // 飞行态：用自己的 age（发射那一刻开始渐显）。
     const attached = !missile.flight;
-    let scale = spawnPop(attached ? (missile.hostAge || missile.age || 0) : (missile.age || 0));
-    let a = (alpha == null ? 1 : alpha)
-      * spawnFade(attached ? (missile.hostAge || missile.age || 0) : (missile.age || 0));
-    if (missile.exiting) {
-      scale *= ExitFX.scale(missile);
-      a = ExitFX.alpha(missile);
-    }
+    const fx = EntityFX.visual(missile);
+    // 【挂载态】入场动画跟本体走：本体已经统一套过出场曲线，这里不再叠第二次；
+    // 【飞行态 / 正在退场】用导弹自己的实体状态（发射那一刻开始渐显、死亡放大渐隐）。
+    const useOwn = !attached || missile.exiting;
+    const scale = useOwn ? fx.scale : 1;
+    let a = (alpha == null ? 1 : alpha) * (useOwn ? fx.alpha : 1);
     // 【矢量】优先：128px 位图放大到高稀有度尺寸会糊成"千疮百孔"的一团
     const art = CardRenderer.artImage('9') || CardRenderer.artCanvas('9', 128);
     if (!art) return;
@@ -592,17 +588,15 @@ MobFX.register('hornet', {
     if (!missile || (missile.dead && !missile.exiting)) return;
     // 已经发射：挂载态尾针不再画（飞出去的那枚由 hornetProjectiles 独立绘制）
     if (missile.flight) return;
-    // 入场动画跟本体：客户端视图的 missile.age 恒为 0，用它就永远透明
-    missile.hostAge = mob.age || 0;
     const size = missile.drawSize || (mob.drawSize * ht.size);
     if (!missile.exiting) {
       // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
       // 挂点 = 素材向量(dx,dy)按本体旋转角旋转，见 hornetTailPoint。
       // p.a 已经是【最终旋转角】（包含了素材尖端方向补偿）。drawMissileAt 内部
-      // 会做 facing - MISSILE_TIP_ANGLE 抵消素材默认朝向，所以直接传 p.a 即可，
-      // 不要再加 MISSILE_TIP_ANGLE（否则会多偏转一截，约52°）。
+      // 会做 facing - MISSILE_TIP_ANGLE 抵消素材默认朝向，所以直接传 p.a 即可。
       const p = MobFX.hornetTailPoint(mob, size);
-      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
+      // size 乘本体合成缩放（出场 Q 弹 / 受击挤压 / 退场放大）：挂载态不叠自己的入场曲线。
+      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size * (scale || 1), alpha);
       return;
     }
     MobFX.drawMissile(ctx, missile, size, alpha);
@@ -628,12 +622,9 @@ MobFX.register('hornet', {
       st.missile.facing = pt.a;
     } else if (st.missile) {
       const missile = st.missile;
-      if (missile.exiting) {
-        ExitFX.tick(missile, dt);
-        if (ExitFX.done(missile)) st.missile = null;
-      }
-      missile.age += dt;
-      missile.hurtT = Math.max(0, missile.hurtT - dt);
+      // 统一实体引擎推进（age / hurtT / 退场计时），回收只看 EntityFX.done
+      EntityFX.tickEntity(missile, dt);
+      if (EntityFX.done(missile)) st.missile = null;
       if (!missile.flight && !missile.exiting) {
         // 与 def.draw 用同一个挂点函数：F3 / 受击判定 / 绘制位置三者永远一致
         const sz = missile.drawSize || mob.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3);
