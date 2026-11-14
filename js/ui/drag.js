@@ -4,8 +4,8 @@
 Object.assign(UI, {
   // ---------------- 交互：点击 / 拖拽 ----------------
   // 鼠标 / 触摸 / 触控笔统一走 Pointer Events（老浏览器退回 mouse + touch 双通道）。
-  // 触屏上必须声明 touch-action:none，否则浏览器会把"手指按住拖动"当成页面滚动，
-  // 直接发 pointercancel 把这次拖拽掐掉 —— 这就是移动端拖不动卡牌的根因。
+  // 触屏上必须声明 touch-action:none，否则浏览器会把按住拖动当成页面滚动，
+  // 并发出 pointercancel 终止这次拖拽。
   _bindCard(el, card, from, onClick) {
     el.style.touchAction = 'none';
     const down = (e) => {
@@ -290,11 +290,9 @@ Object.assign(UI, {
       if (done) done();          // 卡槽卡：交给同列互换动画
       return;
     }
-    // 【必须最先做】先把源卡的矩形量下来。
-    // 下面 renderInventory() 会重建整个画廊，srcEl 随即被摘掉；此时再取
-    // getBoundingClientRect() 只会得到全 0（left/top/width/height 都是 0），
-    // 于是飞行动画的起点变成 (0,0) —— 也就是屏幕左上角。这正是"没有从对应位置飞出"的根因。
-    // 也接受调用方已量好的矩形（拖拽原位松手转点击时，源元素早已被重建）。
+    // 必须先量源卡矩形：下面的 renderInventory() 会重建画廊并摘掉 srcEl，
+    // 之后再取 getBoundingClientRect() 只剩全 0，飞行起点会变成屏幕左上角。
+    // 也接受调用方已量好的矩形（拖拽原位松手转点击时源元素已被重建）。
     const sr = (srcElOrRect && srcElOrRect.getBoundingClientRect)
       ? srcElOrRect.getBoundingClientRect()
       : (srcElOrRect && srcElOrRect.width > 0 ? srcElOrRect : null);

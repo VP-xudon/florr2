@@ -517,8 +517,7 @@ function createGardenMap(data) {
     solid = new Uint8Array(W * H);
     solidQuad = new Uint8Array(FW * FH);
     // 四分之一格（角块）判定：扫描该象限内全部 Q×Q 个细网格采样，只要有一个落在碰撞体内就算实心。
-    // 旧实现只取象限正中一个采样点，细斜边/窄边的碰撞体会被整块漏判 -> 小地图上显示成"可走的白块"，
-    // 与实际碰撞不符（看着能走，走过去被挡）。
+    // 只取象限中心单点会漏判细斜边与窄边，使小地图出现"看着能走、实际被挡"的白块。
     const Q = N >> 1;                 // 每象限 Q×Q 个采样（N=48 -> 24×24）
     for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
       let occupied = false;
@@ -937,42 +936,3 @@ function createGardenMap(data) {
     }
     }
 
-// 从原始 TMJ 解码出的图层绘制可见瓦片；data 保留每格 GID 与翻转标志。
-// worldSize: 画布像素尺寸（对应世界直径，= 2*WORLD_R）
-function renderTileMap(data, worldSize) {
-  const W = data.width, H = data.height;
-  const cell = worldSize / W;
-  const cw = Math.ceil(cell) + 1;
-  // 预渲染每种瓦片到小画布一次（避免对矢量SVG重复栅格化 10 万次）
-  const cache = {};
-  for (const layer of data.layers) {
-    for (const t of layer.tiles) {
-      if (t === -1 || !t || cache[t]) continue;
-      let name = t, flags = 0;
-      const hash = (typeof t === 'string') ? t.indexOf('#') : -1;
-      if (hash >= 0) { name = t.slice(0, hash); flags = parseInt(t.slice(hash + 1), 10) || 0; }
-      const off = document.createElement('canvas');
-      off.width = cw; off.height = cw;
-      const oc = off.getContext('2d');
-      const base = SpriteStore.canvasFlip('tile' + name, cw, flags);
-      if (base) { oc.drawImage(base, 0, 0, cw, cw); }
-      else { oc.fillStyle = '#3a6b34'; oc.fillRect(0, 0, cw, cw); }
-      cache[t] = off;
-    }
-  }
-  const cv = document.createElement('canvas');
-  cv.width = worldSize; cv.height = worldSize;
-  const c = cv.getContext('2d');
-  c.fillStyle = '#274d22'; c.fillRect(0, 0, worldSize, worldSize); // 非草地区底色
-  for (const layer of data.layers) {
-    const tiles = layer.tiles;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const t = tiles[y * W + x];
-        if (t === -1 || !t) continue;
-        c.drawImage(cache[t], x * cell, y * cell, cell + 1, cell + 1);
-      }
-    }
-  }
-  return cv;
-}

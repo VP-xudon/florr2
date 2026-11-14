@@ -3,6 +3,7 @@
 
 // 花朵本体的红闪强度：比花瓣淡一点（时长与曲线仍由 sim/exit.js 统一给）。
 const PLAYER_HURT_A = 0.4;
+const PLAYER_POISON_HURT_T = 0.08;
 
 // 颜色插值（中毒脸的平滑过渡用）：#rrggbb -> #rrggbb
 function lerpHex(a, b, t) {
@@ -21,7 +22,6 @@ class Player {
     this.weight = rarityWeight('unusual');   // 花朵本体视为 unusual 生物的重量（玩家也是实体，参与重量推挤）
     this.maxHp = 100; this.hp = 100;
     this.xp = 0; this.level = 1; this.xpNext = 24;
-    this.damage = 0;
     this.slots = emptySlots();      // 花朵花瓣（主槽，已装备）
     this.subSlots = emptySlots();   // 副槽（临时存储，不参与装备）
     this.invBar = [];                              // 即时物品栏（底部常驻淡灰卡槽）
@@ -46,8 +46,7 @@ class Player {
     this.breath = 0; this.moving = false;
     this.spin = 0;              // 花瓣环绕角度
     this.petals = [];           // 花瓣实体（各自有实际坐标与速度）
-    // 已离场的花瓣实体：统一走 EntityFX 退场（放大 + 渐隐），由引擎表回收。
-    // 不再保留"幽灵副本"——那就是同一片花瓣的第二套消失方式。
+    // 已离场的花瓣实体：走 EntityFX 退场，播完由这张受控表回收。
     this.petalExit = createEntitySet('petal');
     // 场级实体（网）的唯一客户端容器：服务端下发的玩家网 + 蜘蛛网合并成一张表。
     // 网没有碰撞箱、不占轨道位、不参与伤害，只按半径挂状态（服务端算，客户端只画）。
@@ -71,33 +70,25 @@ class Player {
   }
 
   recompute() {
-    // 花瓣血量独立于人物血量：装备花瓣【不再】增加 maxHp（hp 是花瓣自己的"水缸"）。
-    let dmg = 0;
-    // 【不要再累加 type.spd】：spd 是【花瓣自身的移动速度】（Wing 44 = 飞得快、
-    // Rose -12 = 飞得慢），跟玩家移速毫无关系。以前把它加进 this.speed，
-    // 于是装一张 Wing 就 +44、装 5 张 eternal Wing 直接 +220 —— 人物越装越快。
-    // 真正影响玩家的加成只有下面 PetalFX.bonus 给的 rotSpeed / reach / sight。
-    // ---- 装备加成（装上就生效，与是否装填完成无关；同类可叠加）----
-    //   rotSpeed：Faster  → 加最大转速
-    //   reach   ：Third Eye → reach 模式下花瓣再向外伸的距离
-    //   sight   ：Antennae → 视野放大比例（相机缩放，1/(1+sight)）
-    // 数值由 PetalFX.bonus 统一给出（数据表 + 注册项），这里只求和，不认 slug。
+    // 装备加成（装上即生效，与装填进度无关；同类可叠加）。数值由 PetalFX.bonus 提供：
+    //   rotSpeed：Faster   → 最大转速
+    //   reach   ：Third Eye → reach 模式的花瓣外伸距离
+    //   sight   ：Antennae  → 视野放大比例，相机缩放 = 1/(1+sight)
+    // 花瓣的 type.spd 只描述花瓣自身飞行速度，不参与玩家移速。
     let rotBonus = 0, reachBonus = 0, sightBonus = 0;
     const seenType = Object.create(null);
-    this.slotActive = [];        // 每格是否"生效"（不可堆叠花瓣的重复件 = false）
-    this.accessories = [];       // 装备型饰品（不进入轨道，直接画在人物身上）
+    this.slotActive = [];        // 每格是否生效（不可堆叠花瓣的重复件为 false）
+    this.accessories = [];       // 装备型饰品：不进入轨道，直接画在人物身上
     for (let i = 0; i < this.slots.length; i++) {
       const p = this.slots[i];
       let active = !!p;
-      // 不可堆叠：只有最左边那格生效，往右的同类全部作废（UI 显示为暗灰未装填）
+      // 不可堆叠：只有最左边那格生效，其余同类显示为未装填
       if (p && p.type.stackable === false) {
         if (seenType[p.type.key]) active = false;
         else seenType[p.type.key] = 1;
       }
       this.slotActive[i] = active;
       if (!p || !active) continue;
-      const st = petalStatsFor(p.type, p.rarity);   // 按稀有度取值（倍率/整表）
-      dmg += st.dmg;
       if (typeof PetalFX !== 'undefined' && PetalFX.bonus) {
         const b = PetalFX.bonus(p.type, p.rarity);
         rotBonus += b.rotSpeed || 0;
@@ -106,13 +97,9 @@ class Player {
       }
       if (p.type.accessory) this.accessories.push({ card: p, slot: i });
     }
-    // 注意：maxHp 不在这里重置——它由构造函数给默认值 100，调试参数 ?hp=N 在之外覆盖。
-    // 若在此硬编码写回 FLOWER_BASE_HP，则每次换装 recompute() 都会把 ?hp 覆盖回 100，
-    // 表现为"一碰就死 / ?hp 无效"。speed / damage 等依赖装填的字段照常重算。
-    // 移速 = 基础值，不受装备花瓣影响（花瓣的 spd 只描述花瓣自己飞多快）。
+    // maxHp 只由构造函数与重生入口维护，换装不重置（?hp=N 依赖这一点）。
     this.speed = this.baseSpeed;
-    this.damage = dmg;
-    this.bodyDmg = FLOWER_BODY_DMG;   // 体伤：与 maxHp 同源，重算后稳定为 20
+    this.bodyDmg = FLOWER_BODY_DMG;
     // 最大转速 = 基础 + 所有 Faster 加成（叠加）。/rot-speed 只能在这个值上打 0.1~1.0 的倍率，
     // 所以转速上限是【动态】的，绝不硬编码在别处。
     this.rotMax = PETAL_SPIN + rotBonus;
@@ -121,11 +108,10 @@ class Player {
     this.sightBonus = sightBonus;
   }
 
-  // 受击结算：返回【本击是否真正扣到了血】（护甲已在调用方扣减）。
-  // 注意语义：返回 true 表示"掉血了"，不等于"死了"—— 是否致死看 this.dead / this.hp。
-  // （旧实现返回的是"是否致死"，导致非致命受伤时反弹/屏幕抖动全部不触发。）
-  // src = 伤害来源（Mob）：致死时记录其名称，死亡界面显示"你死于 XX"。
-  // invuln > 0 时完全免伤（不扣血、不触发红闪）——出生无敌/受伤无敌帧/未来的无敌花瓣都走这里。
+  // 受击结算：返回本次是否真正扣血（护甲已在调用方扣减），
+  // 与是否致死无关（致死看 this.dead / this.hp）。
+  // src = 伤害来源（Mob），致死时记录名称用于死亡界面。
+  // invuln > 0 或 hurtInvuln > 0 时完全免伤，也不触发红闪。
   hurt(dmg, src) {
     if (this.dead || dmg <= 0) return false;
     if (this.invuln > 0 || this.hurtInvuln > 0) return false;
@@ -167,8 +153,7 @@ class Player {
     const dmg = rec.value * dt;
     if (!(dmg > 0)) return;
     this.hp -= dmg;
-    // 持续红闪：取"当前剩余"与一个很淡的下限的较大值，不覆盖真实受击的 0.3s 红闪
-    this.hurtT = Math.max(this.hurtT || 0, 0.08);
+    EntityFX.hurt(this, PLAYER_POISON_HURT_T);
     if (this.hp <= 0) {
       this.hp = 0;
       if (!this.killedBy) {
@@ -180,10 +165,8 @@ class Player {
   }
 
   // ---- 场地型实体（Web 落地后的那张大网）----
-  // 只有【权威侧】能造网：webSink 指向 server.fields（由 LocalServer.attach 注入）。
-  // 客户端没有 sink -> 返回 null，于是"客户端自己造一张有减速效果的网"不可能发生；
-  // 客户端看到的网一律来自快照（p.netWebs）。
-  // 计时/退场/回收全部在服务端 _fieldTick 与客户端 netWebs.sweep 各跑一次，不在这里重复推进。
+  // 只有权威侧能造网：webSink 指向 server.fields（由 LocalServer.attach 注入），
+  // 客户端没有 sink 时返回 null，其网一律来自快照（p.netWebs）。
   spawnWeb(x, y, radius, duration, card) {
     const sink = this.webSink;
     if (!sink || !(radius > 0)) return null;
@@ -197,11 +180,9 @@ class Player {
     return f;
   }
 
-  // 出生 / 重生的【唯一】重置入口：客户端预测副本与服务端权威副本都必须走这里。
-  // 历史上两端各维护一份字段清单，服务端清了 _petalGen 而客户端没清：
-  // 花瓣实体的世代号只增不减，于是快照键 "槽|子序|世代" 永远匹配不上 ——
-  // 表现为「死过一次之后，那一槽花瓣再也不掉血、不红闪、不会碎」（伤害仍在服务端照算）。
-  // 同理，reloadHold 若残留 true，重生后该槽会一直卡在"换卡动画暂停"状态。
+  // 出生 / 重生的唯一重置入口：客户端预测副本与服务端权威副本都必须走这里。
+  // 重置字段必须覆盖花瓣实体、_petalGen 与 reloadHold：
+  // 世代号残留会让快照键永久失配（花瓣不掉血、不碎），reloadHold 残留会让该槽卡在暂停态。
   resetForSpawn(pos) {
     if (pos) { this.x = pos.x; this.y = pos.y; }
     this.vx = 0; this.vy = 0;
@@ -348,10 +329,9 @@ class Player {
 
   // 把服务端下发的花瓣战斗状态（hp / 受伤红闪 / 是否已碎）应用到当前花瓣实体上。
   // 由 _syncPetals 每帧调用；快照到达时也由 Game._applySnap 立即调一次，
-  // 保证同帧就能看到掉血/碎裂，不用等下一帧。
-  // 找到某片花瓣对应的服务端状态。
+  // 保证同帧就能看到掉血/碎裂。
   // 主键 = (槽位, 子序号, 世代号)：一张卡可能对应多个独立实体（Light 的每个光点），
-  // 滞留型花瓣（Pollen/Honey）还会同时存在多批（地上旧的一批 + 轨道上新的一批）。
+  // 滞留型花瓣（Pollen/Honey）还会同时存在多批（地上的 + 轨道上的）。
   // 【兜底】世代号是客户端/服务端各自维护的计数器（脱轨那一刻 +1），两者差一个 tick 就会永久错位；
   // 错位后按 key 永远匹配不到 -> hp/dead 全都不下发 -> 表现成"花瓣永远不受伤、也不会碎"。
   // 所以按 key 找不到时，退化成 (槽位, 子序号) 唯一匹配，并把世代号对齐到服务端。
@@ -359,11 +339,10 @@ class Player {
     const np = this.netPetals;
     if (!np) return null;
     const sub = b.sub || 0, gen = b.gen || 0;
-    // 【Stage 3】数字键：slot*1e6 + sub*1e3 + gen，O(1) 命中
-    const key = b.slotIndex * 1e6 + sub * 1e3 + gen;
+    const key = petalNetKey(b.slotIndex, sub, gen);
     let hit = np.get(key);
     if (hit) return hit;
-    // 兜底：同槽同子号有多代（gen 差一拍）。遍历查找同槽同子号且只有一个时退化匹配。
+    // 世代号两端可能相差一拍：同槽同子号只有唯一记录时退化匹配。
     let one = null, n = 0;
     for (const [, x] of np) {
       if (!x || x.slot !== b.slotIndex || (x.sub || 0) !== sub) continue;
@@ -442,7 +421,7 @@ class Player {
       if (!c) { this.reload[i] = null; this.reloadHold[i] = false; continue; }
       const r = this.reload[i];
       if (!r || r.card !== c) {
-        // 冷却时长：优先 type.reload（显式字段）；否则回退 type.spd（历史约定）
+        // 冷却时长：优先 type.reload（显式字段），否则取 type.spd
         const dur = (c.type && c.type.reload != null)
           ? c.type.reload : Math.max(0, (c.type && c.type.spd) || 0);
         this.reload[i] = { card: c, age: 0, dur };
@@ -622,10 +601,13 @@ class Player {
       for (let sub = 0; sub < cnt; sub++) {
         let body = null;
         for (const b of this.petals) {
-          // 匹配"本世代"的实体：脱轨后世代号 +1，旧实体不再被这里复用
-          if (!b.stationary && !b.dead && (b.gen | 0) === gen
+          // 匹配本世代的同一子体。死亡的独立子体也保留在 petals 中：
+          // 权威副本靠它推进 respawnT / holdRespawn，客户端靠它等待快照复活；
+          // 退场绘制与计时仍由 petalExit 负责，战斗、运动和正常绘制均跳过 dead。
+          if (!b.stationary && (b.gen | 0) === gen
             && b.slotIndex === slotIndex && b.card === card && b.sub === sub) { body = b; break; }
         }
+        if (body && body.dead) { bodies.push(body); continue; }
         if (!body) {
           // 【新实体只在服务端确实有它时才生成】。本地 reload 计时会早一两帧跑完，
           // 那几帧里服务端还没有这片花瓣：客户端照样画出来、从生物身上飘过去，
@@ -691,7 +673,7 @@ class Player {
             body.formArcBase = !!card.type.formationArcBase;
             body.formOff = body.formArcBase ? null : { x: s.x * entD, y: s.y * entD };
             body.formRot = s.rot || 0;
-            // （与 Stinger 完全一致：不再有任何"单球索引 / 二次缩放"的特例）
+            // 与 Stinger 同一套布局换算，不做单球索引或二次缩放。
           }
         }
         // 标记"会吸引仇恨的花瓣"：AI 据此判断"被吸引"的生物连被动型也会主动过来啃
@@ -753,17 +735,16 @@ class Player {
         bodies.push(body);
       }
     }
-    // 本次已不在装备栏里的实体 -> 转为"退场幽灵"（卸下/删除 = 放大 + 渐隐）
+    // 已不在装备栏里的实体：转入退场（放大 + 渐隐）
     for (const b of this.petals) {
       if (b.stationary) continue;                  // 滞留实体由 ① 保留
       let kept = false;
       for (const nb of bodies) {
         if (nb.slotIndex === b.slotIndex && nb.card === b.card && nb.sub === b.sub && !nb.stationary) { kept = true; break; }
       }
-      // 多体卡的已碎实体：死亡瞬间已经走过 EntityFX 退场，这里不重复
+      // 已碎的独立子体已在死亡时离场，这里不重复
       if (!kept && !b.exiting) {
-        // 卸下/删除 = 退场（放大 + 渐隐），交给引擎表回收；不能只"收养"不 despawn，
-        // 否则这片花瓣既不在 petals 里也不再计时，会变成永久挂着的幽灵。
+        // 卸下 = 离场：必须 despawn 后再收养，否则实体既不计时也无法被回收
         EntityFX.despawn(b);
         b.exitRot = b.selfRot || 0;
         this.petalExit.adopt(b);
@@ -992,11 +973,10 @@ class Player {
       // 模式切换 / 数量重排 / 急转向都表现为"甩一下再归位"的自然追赶
       if (b.vx == null) { b.vx = 0; b.vy = 0; }
       // ---- 公转解耦（重要）----
-      // 轨道点是【匀速公转】的。若让弹簧直接去追这个高速旋转的目标，显式积分的误差
-      // 会随角速度累积 —— 稳态半径随转速漂移，表现就是"装上 Faster 之后 Third Eye 的
-      // reach 伸距被吃掉一截"（两套互不相关的系统互相影响）。
-      // 解法：先把花瓣随轨道【整体搬运同一角度】（解析公转，零积分误差），
-      // 弹簧只负责修"残差"。于是轨道半径严格等于 reach、与转速完全无关；
+      // 轨道点是匀速公转的。若让弹簧直接追这个高速旋转的目标，显式积分误差会随角速度累积，
+      // 稳态半径随转速漂移（表现为转速越高、reach 伸距越短）。
+      // 解法：先把花瓣随轨道整体搬运同一角度（解析公转，零积分误差），弹簧只修残差；
+      // 于是轨道半径严格等于 reach、与转速无关；
       // 玩家位移造成的拖尾感（故意保留的缓冲）仍然来自残差弹簧，手感不变。
       // 吸附（sticky）时目标是生物表面而不是轨道点，不做搬运。
       const dang = mob ? 0 : (this.rotMax || PETAL_SPIN) * ROT_SCALE * dtc;

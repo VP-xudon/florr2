@@ -492,7 +492,7 @@ function buildPetalTypes() {
       // 不是玩家移速加成 —— 绝不能累加到 Player.speed 上（装多张 Wing 会让角色越跑越快）。
       // 玩家侧真正生效的加成只有 PetalFX.bonus 给的 rotSpeed / reach / sight。
       spd: (p.stats && p.stats.spd) || 0,
-      // 冷却秒数：优先用显式的 reload；否则回退 stats.spd（历史约定，目前只有 Basic 走这条）。
+      // 冷却秒数：优先用显式的 reload；否则取 stats.spd（目前只有 Basic 走这条）。
       // 注意 stats.spd 的本义是移动速度修正值（Rose 为 -12），所以有 reload 字段时以它为准。
       reload: (p.reload != null) ? p.reload : Math.max(0, (p.stats && p.stats.spd) || 0),
       reloadText: p.reloadText || null,          // 冷却的展示文本（如 "3.5s + 1.5s"），为空则按 reload 生成
@@ -617,14 +617,11 @@ const MOB_HOSTILITY = {
 };
 // Missile 素材（assets/petals/9.svg，已含 translate(3.606 9.458)）的三角形三点：
 //   底边 (67.096,70.538) - (42.903,48.723)，尖端 (57.328,39.461)。
-// 旋转轴心是【内容包围盒中心】(55,55)，所以尖端朝向要按"中心 -> 尖端"算：
-//   以前用"底边中点 -> 尖端"，两者差 1.9°，表现就是"尖端略微偏出瞄准线"。
-// 从 SVG 源码推导（9.svg，viewBox 0 0 110 110，g transform="translate(3.606 9.458)"）：
+// 旋转轴心是内容包围盒中心 (55,55)，尖端朝向必须按「中心 -> 尖端」计算。
+// SVG 源码（9.svg，viewBox 0 0 110 110，g transform="translate(3.606 9.458)"）：
 //   path d="m63.49 61.08-9.768-31.077-14.425 9.262z" 的三个绝对顶点：
 //     A(67.096, 70.538) / B(57.328, 39.461) / C(42.903, 48.723)
-//   A 的夹角约 30.6°（B、C 各约 74.7°）→ 【A 才是尖端】，在右下方向。
-//   绘制旋转轴心 = 内容包围盒中心 (55,55)，所以尖端角 = 轴心 -> A 的向量角（≈0.91rad，右下方）。
-// 早期误把 B（上方那个点）当尖端，于是尖端一直朝错的方向。
+//   A 的夹角约 30.6°（B、C 各约 74.7°），即尖端在右下方向。
 const MISSILE_TIP_ANGLE = Math.atan2(70.538 - 55, 67.096 - 55);
 // 手工校正的稀有度数值表（键 = 生物 id）。
 // registry 里部分生物是旧版数据或压根缺字段（例如 Bee 的 hp/dmg 全是错的、没有 armor），
@@ -723,7 +720,7 @@ const MOB_TRAITS = {
     sPath: true, sizeScale: 1.395 * 0.9, wanderSpeedK: 1.5,
     pollenEvery: 0.6
   },
-  // Hornet：体型同蜜蜂；血量条正常显示（hideHpBar 曾经被误开，看起来像"没做完"）。
+  // Hornet：体型同蜜蜂；血量条正常显示（hideHpBar = false）。
   //   shootCd  = 每次射击后的冷却（秒）：common 3 → super 1（等比例平滑）→ eternal 0.8
   hornet: {
     // 直径 1.4x（用户口径）；尾针挂点与画幅都按 drawSize 等比缩放，自动跟随
@@ -1280,34 +1277,11 @@ function rollMobDrops(mobId, rarity, magician) {
 }
 
 function getPetal(id) { return PETAL_BY_ID[id] || null; }
-function getMob(id) { return MOB_BY_ID[id] || null; }
-function petalByKey(key) { return PETAL_TYPES.find(t => t.key === key) || null; }
 
 // 调试/手填提示
 if (NEEDS_MANUAL.length) {
   console.warn('[数据] 以下项被忽略或需手填（二创/缺失名称，不臆造）：');
   for (const n of NEEDS_MANUAL) console.warn('  -', n.kind, 'id=' + n.id, n.name, '->', n.reason);
-}
-
-// 掉落 / 稀有度
-function rollRarity(tier) {
-  const shift = clamp(tier - 1, 0, 4);
-  const entries = [];
-  let total = 0;
-  RARITY_ORDER.forEach((k, i) => {
-    let w = RARITIES[k].weight * Math.pow(1.7, i - shift);
-    if (w < 1e-4) w = 1e-4;
-    entries.push([k, w]); total += w;
-  });
-  let r = Math.random() * total;
-  for (const [k, w] of entries) { if ((r -= w) <= 0) return k; }
-  return 'common';
-}
-
-function rollDrop(mob) {
-  const type = choice(PETAL_TYPES);
-  const rarity = rollRarity(mob.tier);
-  return { type, rarity };
 }
 
 // 权重选择生物（低 tier 更常见）

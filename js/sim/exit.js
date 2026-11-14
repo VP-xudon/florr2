@@ -46,8 +46,6 @@ const KINDS = {
   drop:       { enter: 'pop',    enterT: 0.10, exit: 'fadeShrink', exitT: 0.50 },
   petal:      { enter: 'pop',    enterT: 0.10, exit: 'growFade',   exitT: ENTITY_EXIT_T },
   projectile: { enter: 'pop',    enterT: 0.10, exit: 'growFade',   exitT: ENTITY_EXIT_T },
-  summon:     { enter: 'pop',    enterT: 0.10, exit: 'growFade',   exitT: ENTITY_EXIT_T },
-  fx:         { enter: 'pop',    enterT: 0.10, exit: 'fade',       exitT: ENTITY_EXIT_T },
 };
 function kindOf(kind) { return KINDS[kind] || KINDS.mob; }
 function exitDurOf(ent) {
@@ -71,10 +69,10 @@ const EntityFX = {
     return ent;
   },
 
-  // 红闪：全体实体同一个时长与强度，别再各处写 0.3 / 0.55
+  // 触发或延长红闪；较短的状态闪烁不会覆盖较长的受击闪烁。
   hurt(ent, dur) {
     if (!ent || ent.exiting) return;
-    ent.hurtT = (dur > 0) ? dur : ENTITY_HURT_T;
+    ent.hurtT = Math.max(ent.hurtT || 0, (dur > 0) ? dur : ENTITY_HURT_T);
   },
   // maxA：允许个别实体自定义红闪强度（花朵本体比花瓣淡），时长仍只有一份。
   hurtAlpha(ent, maxA) {
@@ -134,9 +132,7 @@ const EntityFX = {
     return (ent.exitT || 0) >= exitDurOf(ent);
   },
 
-  // 算出并缓存到 ent.fx（每帧一次，幂等）：{ alpha, scale, exiting, hurt }。
-  // alpha/scale 已经把 入场 × 退场 × 业务附加倍率 相乘好了，渲染方直接乘。
-  // fxAlpha / fxScale 是业务侧的临时倍率（掉落卡拾取时变淡），由拥有者每帧写。
+  // 计算并缓存 { alpha, scale, exiting, hurt }；fxAlpha 是业务透明度倍率。
   visual(ent) {
     if (!ent) return { alpha: 1, scale: 1, exiting: false, hurt: 0 };
     if (ent.fx != null) return ent.fx;
@@ -145,7 +141,7 @@ const EntityFX = {
     const exitS = ent.exiting ? (ent.exitScale == null ? 1 : ent.exitScale) : 1;
     ent.fx = {
       alpha: exitA * enter.alpha * (ent.fxAlpha == null ? 1 : ent.fxAlpha),
-      scale: exitS * enter.scale * (ent.fxScale == null ? 1 : ent.fxScale),
+      scale: exitS * enter.scale,
       exiting: !!ent.exiting,
       hurt: this.hurtAlpha(ent),
     };
@@ -231,8 +227,7 @@ function createEntitySet(kind, idGen) {
     forEach(fn, thisArg) { a.forEach(fn, thisArg); },
     find(fn) { return a.find(fn); },
     [Symbol.iterator]() { return a[Symbol.iterator](); },
-    // 推进所有元素动画，退场播完的才移除（唯一的移除路径）
-    tick(dt) { return EntityFX.tickList(a, dt); },
+    // 推进所有元素动画，退场播完的才移除（唯一的常规回收路径）。
     sweep(dt) { return EntityFX.tickList(a, dt); },
   };
 }

@@ -74,9 +74,8 @@ const MobFX = {
       bb = { x: b.x, y: b.y, w: b.width, h: b.height };
       // 尾针 = 【第 1 个 path】那枚三角形（"M96.896 96.896 84.64 75.447l-9.193 9.193z"）：
       //   尖端 P0（离贴图中心最远的点）+ 底边两点 P1/P2。
-      // 第 2 个 path 只是它的描边细节（同位置、形状更大）—— 旧实现把两者【合并】
-      // 求包围盒，中心被细节拉偏，尾针挂点就错了（表现：导弹挂偏 / 大小也不对）。
-      // 现在直接解析三角形的三个顶点：
+      // 第 2 个 path 是同一位置的描边细节（形状更大），不能与三角形合并求包围盒，
+      // 否则中心被带偏、挂点与尺寸都会错。直接解析三角形的三个顶点：
       //   · 挂点（针与身体相连处）= 底边中点
       //   · 轴向 = 挂点 -> 尖端
       //   · 长度 = |尖端 - 挂点|（导弹本体的可见长度）
@@ -290,9 +289,8 @@ const MobFX = {
     if (def && def.init) def.init(mob);
   },
 
-  // 尾针受击【统一入口】：不区分"挂在尾巴上"还是"飞出去"——
-  // 发射前后是同一个实体对象（只切 flight 标记），受击结算必须一视同仁。
-  // 旧实现只认 st.missile（挂载态），发射后移进 projectiles 的那枚完全打不到。
+  // 尾针受击唯一入口：发射前后是同一个实体对象（只切 flight 标记），
+  // 挂载态与飞行态都必须能被打到。
   hurtStinger(mob, missile, damage) {
     if (!missile || missile.dead || missile.exiting || !(damage > 0)) return 0;
     const applied = Math.min(damage, missile.hp);
@@ -688,9 +686,8 @@ MobFX.register('hornet', {
     const dx = tgt.x - mob.x, dy = tgt.y - mob.y;
     const d = Math.hypot(dx, dy) || 1;
     const desiredRange = Math.max(220, mob.drawSize * 1.8) * HORNET_RANGE_K;
-    // ---- 距离控制（用户口径：取消"离得太近就后撤"）----
-    // 旧实现：近到射击距离的 20% 时后撤（速度 1.10× 玩家最高速）。
-    // 现在 Hornet 只做两件事：超出射程就直线追，进入射程就停下转向瞄准。
+    // ---- 距离控制：不做近身后撤 ----
+    // Hornet 只做两件事：超出射程直线追击，进入射程停下转向瞄准。
     // 追击速度 = 0.95 × 玩家最高速（MOB_TRAITS.hornet.chaseMult）。
     if (d > desiredRange + 12) {
       mob.ai.hornetMode = 'approach';

@@ -185,12 +185,9 @@ class LocalServer {
     return null;
   }
 
-  // ---------------- 醒/睡分区（服务端性能的核心） ----------------
-  // 权威列表 this.ents 里是【全图人口】（要进快照给小地图看），但真正需要跑 AI/物理的
-  // 只有玩家附近的那批（MOB_ACTIVE_R = 2200px）。
-  // 以前每一步都遍历全图 4000+ 只只为判断一句"离玩家远不远"，实测占服务端步进的
-  // 4.3ms/步（总 6.5ms/步）—— 这是帧率的第一杀手。
-  // 现在拆成两张表：_act（醒着）/ _rest（睡着）。
+  // ---------------- 醒/睡分区 ----------------
+  // 权威列表 this.ents 是【全图人口】（要进快照给小地图看），只有玩家附近
+  // （MOB_ACTIVE_R = 2200px）的个体需要跑 AI/物理。拆成两张表：_act（醒着）/ _rest（睡着）。
   //   · 每步只遍历 _act；
   //   · _rest 每 0.2s 扫一次，把够近的叫醒（_wakeNearby）；
   //   · 数量对不上时自动重建（_rebuildPartition）—— 兜住"外部直接往 ents 塞个体"。
@@ -413,8 +410,7 @@ class LocalServer {
       // 朝向 = 朝向前方（头），即 dir 的反方向。
       m.facing = dir + Math.PI;
       m._lead = prev;                                    // 前一节（null = 自己是头）
-      // 被粘合的节完全不跑自己的 AI/移动 —— 位置与朝向由 _solveChains 刚性解算。
-      // 否则"跟随"和"刚性解算"两套逻辑会互相打架（表现为原地打转、左右抽搐）。
+      // 被粘合的节不跑自己的 AI/移动：位置与朝向只由 _solveChains 刚性解算。
       m._chainLocked = !!prev;
       if (prev) prev._next = m;                          // 后一节（用于刚性粘合解算）
       this._addEnt(m);
@@ -565,8 +561,7 @@ class LocalServer {
       return (e.drawSize || 24) * 0.35;
     };
 
-    // 只遍历【醒着】的个体（this._awake 由 sysMobs 每步重建）：全图 4000+ 只里绝大多数是休眠的，
-    // 以前每步都要为它们整表扫一遍再 continue，纯属白扫。
+    // 只遍历醒着的个体（this._awake 由 sysMobs 每步重建），休眠个体不参与链解算。
     const src = this._awake || this.ents;
     for (const m of src) {
       if (m.segIdx == null || m.dead) continue;
@@ -576,12 +571,11 @@ class LocalServer {
       if (m.sleeping) continue;
 
       // ---- 1) 段头记录自己的【行进轨迹】----
-      // 距离必须与【最后一个已记录的样本】比较。旧写法拿 trail[0] 当基准、
-      // 又每帧把它改写成头的位置，于是距离恒为 0 -> 轨迹永不增长 -> 整条变刚性直杆。
+      // 距离必须与【最后一个已记录的样本】比较：若拿 trail[0] 当基准并逐帧改写，
+      // 距离恒为 0，轨迹不会增长，整条会退化成刚性直杆。
       if (!m._trail) m._trail = [];
-      // 【断链不瞬移】原来那条的头被打死后，它的后一节会升为新头 —— 这个新头
-      // 没有轨迹。若直接往下走，第 2 步会用"沿 -facing 的一条直线"兜底补轨迹，
-      // 于是它后面所有节在第一帧被摆到那条直线上 -> 整段瞬移一下（用户看到的断裂瞬移）。
+      // 【断链不瞬移】原段的头被打死后，后一节升为新头且没有轨迹。
+      // 若用"沿 -facing 的直线"补轨迹，后续各节第一帧会被摆到那条直线上，整段瞬移。
       // 这里用【各节当前的真实位置】直接种一条轨迹：第一帧位置完全不变，
       // 之后随新头移动被逐步替换，和新生成时 _spawnChain 的做法一致。
       if (!m._trail.length) {
@@ -594,7 +588,7 @@ class LocalServer {
       }
       // 【被顶回来就回退轨迹】
       // 段首被蜜 / 墙 / 玩家推回原位时，若还照常记新点，轨迹会多出一段"前进又倒退"的锯齿；
-      // 后面每一节都沿这条锯齿摆放 -> 整条挤成一团并高频抖动（用户看到的"撞蜜时身体错位"）。
+      // 后面每一节都沿这条锯齿摆放，整条会挤成一团并高频抖动。
       // 规则：本帧位移与最后一段轨迹方向相反，就弹出该样本，直到方向一致（最多 8 个，防死循环）。
       if (m._trail.length >= 2) {
         for (let guard = 0; guard < 8 && m._trail.length >= 2; guard++) {
@@ -664,7 +658,6 @@ class LocalServer {
       }
 
       // ---- 3) 单趟摆放：弧长单调递增，光标只前进不回头 -> O(点数 + 节数) ----
-      // 旧写法对【每一节】都从头遍历一遍轨迹（O(节数 × 点数)），长个体会直接卡死。
       let acc = 0;                 // 本节需要的累积弧长
       let k = 0;                   // 光标：trail[k].s = 累计到 trail[k] 的弧长
       let px = m.x, py = m.y;      // trail[k-1] 的位置（k=0 时就是头）
@@ -745,8 +738,7 @@ class LocalServer {
       // 正常爬行时两节距离远大于阈值，一次都不会触发，等于没有开销。
       const cn = chain.length;
       if (cn > 2) {
-        // 半径/间距预算一次：以前每对 (i,j) 都调两次 radOf（读 shape.r、drawSize），
-        // 60 节的链一轮就是 3600 次调用 × 4 轮。
+        // 半径预算一次：逐对调用 radOf 在 60 节的链上是 3600 次 × 4 轮。
         const rad = this._chainR || (this._chainR = []);
         rad.length = cn;
         for (let i = 0; i < cn; i++) rad[i] = radOf(chain[i]);
@@ -910,11 +902,9 @@ class LocalServer {
     //    远处生物【休眠】：全图人口按生成表铺开，但只有近距离的才跑 AI/物理，
     //    所以"全图 100+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
     //
-    //    【醒/睡分区】= 把 this.ents 拆成 _act（醒着的，跑 AI/物理）与 _rest（睡着的，什么都不做）。
-    //    以前每一步都要遍历全部 4000+ 只，只为判断一句"离玩家远不远" ——
-    //    那一次全量扫描实测占服务端步进的 4.3ms/步（总 6.5ms），是帧率第一杀手。
-    //    现在：每步只遍历 _act；_rest 每 0.2s 扫一次，把够近的叫醒。
-    //    代价：醒/睡边界最多 0.2s 延迟（MOB_ACTIVE_R = 2200px，玩家 0.2s 走不到 150px），体感零影响。
+    //    【醒/睡分区】把 this.ents 拆成 _act（跑 AI/物理）与 _rest（休眠）。
+    //    每步只遍历 _act；_rest 每 0.2s 扫一次，把进入 MOB_ACTIVE_R 的个体叫醒。
+    //    醒/睡边界最多 0.2s 延迟（2200px 半径下玩家 0.2s 走不到 150px），不影响体感。
     const actR2 = MOB_ACTIVE_R * MOB_ACTIVE_R;
     const act = this._act || (this._act = []);
     const rest = this._rest || (this._rest = []);
@@ -985,7 +975,15 @@ class LocalServer {
     this._tickHornetProjectiles(dt);
   }
 
-  // 3/4/4b/4c) 推挤与硬碰撞：玩家↔生物、生物↔生物、Wax 落位块、召唤物
+  // 按 SPAWN_INTERVAL 从缺口最大的生成区补一个体；保留余量以维持真实生成频率。
+  sysSpawn(dt) {
+    this.spawnT = (this.spawnT || 0) + dt;
+    if (this.spawnT + 1e-9 < SPAWN_INTERVAL) return;
+    this.spawnT = Math.max(0, this.spawnT - SPAWN_INTERVAL);
+    this.spawnOne();
+  }
+
+  // 推挤与硬碰撞：玩家↔生物、生物↔生物、Wax 落位块、召唤物。
   sysPush(dt) {
     const p = this.player;
     const awake = this._awake || this.ents;
@@ -1507,9 +1505,7 @@ class LocalServer {
           }
           if (hurt && !p.dead) {
             const ux = phit.nx, uy = phit.ny;
-            // 击退总位移 = 设计值 FLOWER_KNOCKBACK × 主角直径，按稀有度在双方之间分配。
-            // 旧实现给玩家的是"随机 1/3~1/2 直径"且没乘 sh[0]：总位移是设计值的 2~2.5 倍，
-            // 同一只怪每次弹开距离还都不一样（KNOCKBACK_SHARE 的玩家一列从未被使用）。
+            // 击退总位移 = FLOWER_KNOCKBACK × 主角直径，按稀有度份额在双方之间分配。
             const total = FLOWER_KNOCKBACK * p.r * 2;
             const sh = KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common;
             const playerKb = total * sh[0];
@@ -1529,9 +1525,7 @@ class LocalServer {
     // 这里把它写进周围生物的仇恨表，让它们转火来啃蜜而不是玩家。
     // 限制条件：只在 HONEY_PULL_R 内、且稀有度不超过该蜜的 Max Mob Rarity。
     const TICK = SNAP_DT;
-    // 先挑出"可能吸引仇恨的花瓣"（静止摆在地上那种）。绝大多数时候一朵都没有，
-    // 那就整段跳过 —— 旧写法对全图 4000+ 只 × 每片花瓣调一次 canAttract，
-    // 25Hz 下是战斗 tick 的主要开销（实测 7ms/tick 里的大头）。
+    // 先挑出静止在地上、可能吸引仇恨的花瓣；通常一朵都没有，整段可直接跳过。
     const attr = this._attr || (this._attr = []);
     attr.length = 0;
     for (const b of p.petals) {
@@ -1940,7 +1934,6 @@ class LocalServer {
     const p = this.player;
     if (!p) return;
     // 统一重置入口（pos = null 表示不改坐标）：清花瓣实体/世代号/装填，与其它复活路径一致。
-    // 旧实现漏清 _petalGen -> /resphere 之后该槽花瓣的世代号与客户端失配。
     p.resetForSpawn(null);
     for (const m of this.ents) if (m.threat) m.threat.length = 0;
     // 通知客户端同步重置自己的预测副本（否则客户端不知道这次重生，世代号照样会漂）
@@ -2008,15 +2001,10 @@ class LocalServer {
     };
   }
 
-  // 快照里的花瓣状态。
-  // 【必须覆盖"有卡、但此刻没有实体"的槽位】——花瓣被打碎后 _destroyPetal 只打 dead 标记
-  // 并把该槽放进 reload，实体则在【下一帧】的 _syncPetals 里被移出 p.petals。
-  // 旧实现直接下发 p.petals，于是"这一槽已经没有了"这件事只能靠"打碎那一帧刚好发了快照"
-  // 才传得到客户端（快照 25Hz、模拟 60Hz，命中率约 40%）。
-  // 漏掉的那一次：客户端按 (slot, sub, gen) 永远找不到条目 -> 既不碎也不进装填，
-  // 变成一片绕圈飞的【幽灵花瓣】：画面上从生物身上直接飘过去，服务端却没有这片花瓣，
-  // 一点伤害都结算不到（"花瓣飘过去、和瓢虫不发生任何交互"的根因）。
-  // 所以这里为"槽位有卡、却没有对应实体记录"的槽位补一条 dead 记录。
+  // 快照里的花瓣状态：必须覆盖"有卡但此刻没有实体"的槽位。
+  // 花瓣打碎后 _destroyPetal 只打 dead 标记并进入 reload，实体要到下一帧才移出 p.petals；
+  // 若不补齐 dead 记录，客户端按 (slot, sub, gen) 找不到条目，就会留下一片
+  // 既不碎裂也不进入装填、且不参与伤害结算的幽灵花瓣。
   _snapPetals(p) {
     // 与 _fillEnts 同一套对象复用：25Hz 下每帧 new 一个数组 + 十几个对象是纯 GC 负担。
     // 快照是同步消费的（客户端在本次 step 里读完），没有人会把数组留到下一帧。
@@ -2036,10 +2024,8 @@ class LocalServer {
       o.slot = b.slotIndex; o.sub = b.sub || 0; o.gen = b.gen || 0;
       o.hp = b.hp; o.maxHp = b.maxHp;
       o.hurtT = b.hurtT || 0; o.dead = !!b.dead;
-      // 【所有花瓣都下发位置与速度】—— 客户端不再自己算花瓣运动（用户口径：
-      // "客户端只从服务端接收一切需要渲染的东西"）。只给滞留型下发的后果是
-      // Pollen/Honey 脱轨飞行的那一段仍由客户端本地模拟：客户端把它拉回轨道、
-      // 服务端却还让它在飞 —— 两套物理必然打架，表现为"飞出去又闪现回固定"。
+      // 所有花瓣都下发位置与速度：客户端不自行模拟花瓣运动，
+      // 否则脱轨飞行段会与服务端物理不一致（表现为飞出后闪现回轨道）。
       o.x = b.x; o.y = b.y; o.vx = b.vx || 0; o.vy = b.vy || 0;
       if (b.slotIndex >= 0 && b.slotIndex < hasSlot.length) hasSlot[b.slotIndex] = 1;
       n++;

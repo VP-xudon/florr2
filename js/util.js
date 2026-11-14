@@ -78,7 +78,6 @@ function emptySlots() { return new Array(slotCount()).fill(null); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function rand(a = 1, b) { if (b === undefined) { b = a; a = 0; } return a + Math.random() * (b - a); }
 function randInt(a, b) { return Math.floor(rand(a, b + 1)); }
-function choice(arr) { return arr[(Math.random() * arr.length) | 0]; }
 function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
 function dist(ax, ay, bx, by) { return Math.sqrt(dist2(ax, ay, bx, by)); }
 function angleTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }

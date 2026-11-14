@@ -146,9 +146,8 @@ Object.assign(UI, {
             + measure(FS_STAT, (typeof r.value === 'number' ? fmtNum(r.value) : String(r.value)));
           if (w > statW) statW = w;
         }
-        // 介绍：先按官方的换行标记 <n/> 强制断行（Honey 等卡面的介绍里就带这个），
-        // 每段再按宽度折行；宽度够就单行。以前直接把 <n/> 当普通文字测宽 -> 界面上
-        // 原样显示 "<n/>"，所以这里必须先拆再排。
+        // 介绍：先按官方的换行标记 <n/> 强制断行（Honey 等卡面的介绍里带这个），
+        // 每段再按宽度折行；不拆分会把 "<n/>" 当普通文字显示出来。
         const limit = MAX_W - PADX * 2;
         const lines = [];
         if (desc) {
@@ -214,9 +213,8 @@ Object.assign(UI, {
         else { L = this._tipLayout(ctx, t); W = L.W * S; H = L.H * S; }
         const pad = 10 * S;
         // 目标位置：卡牌正上方居中；顶部放不下则改到下方；再夹进视口
-    // 锚点元素会被重渲染销毁（点击装备 -> renderInvBar 重建卡槽），此时必须沿用
-    // 最后一次有效矩形原地渐隐；旧实现回退到屏幕中心 —— 而主角永远在屏幕中心，
-    // 于是悬浮框"飞到主角身上"再消失。
+    // 锚点元素可能被重渲染销毁（点击装备 -> renderInvBar 重建卡槽），
+    // 此时沿用最后一次有效矩形原地渐隐，不能回退到屏幕中心。
     if (this._tipOn && t.anchor && t.anchor.isConnected) {
       const ar = t.anchor.getBoundingClientRect();
       const last = this._tipLastRect;

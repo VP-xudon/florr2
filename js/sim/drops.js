@@ -98,7 +98,7 @@ class DropCard {
   }
   // 开始拾取：记下起点，之后沿缓出曲线飞向玩家中心
   pick() {
-    if (this.fly) return;
+    if (this.fly || this.exiting) return;
     this.fly = 0.0001;
     this.picked = true;        // 区分"被捡走"与"到期自然消失"（后者不能进背包）
     this.sx = this.x; this.sy = this.y;

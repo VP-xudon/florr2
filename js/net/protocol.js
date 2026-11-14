@@ -11,10 +11,13 @@
 //   as    : 客户端视图实体上的字段名
 //   merge : 'max'（本地同时在按时间衰减，不能把更亮的覆盖成更暗）/ 'bool'（直接采信）
 const FX_FIELDS = {
-  hurt: { merge: 'max', as: 'hurtT', get: (m) => m.hurtT || 0 },              // 受伤红闪剩余秒数
-  exitT: { merge: 'max', as: 'exitT', get: (m) => m.exitT || 0 },             // 退场已播时长
-  ult: { merge: 'bool', as: 'ultActive', get: (m) => (m.ultActive ? 1 : 0) }, // 大招进行中
+  hurt: { merge: 'max', as: 'hurtT', get: (m) => m.hurtT || 0 },
+  exitT: { merge: 'max', as: 'exitT', get: (m) => m.exitT || 0 },
+  ult: { merge: 'bool', as: 'ultActive', get: (m) => (m.ultActive ? 1 : 0) },
 };
+
+// 花瓣身份键：完整保留槽位、子序号与世代号，避免不同实体共享数值编码。
+function petalNetKey(slot, sub, gen) { return slot + '|' + (sub || 0) + '|' + (gen || 0); }
 
 // ---- 生物生成参数（按地图生成表，服务端全局管理） ----
 // 【密度口径】所有数值都是"生物总只数"，与物种种类数无关：

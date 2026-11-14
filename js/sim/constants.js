@@ -229,10 +229,9 @@ const InvulnFX = {
     for (const k in ent.invulnSrc) if (ent.invulnSrc[k] > latest) latest = ent.invulnSrc[k];
     const left = Math.max(0, latest - ent.clock);
     // 本段总时长 = 进入本段时的剩余量（只增不减，整段结束才归零）。
-    // 这样 (invulnTotal - invuln) 正好是"距本段开始过了多久"，可做淡入包络。
-    // 【旧实现是 Math.max(left, ent.invuln)】—— ent.invuln 是上一帧的剩余，
-    // 于是 invulnTotal 永远只比 invuln 大一个 dt，淡入包络恒等于 dt/0.25 ≈ 0.07，
-    // 光晕被压到设计亮度的 1/15，看起来就是"只闪了一下白色"。
+    // (invulnTotal - invuln) 即距本段开始的时间，用于淡入包络。
+    // 不能与上一帧的 ent.invuln 取 max：那会让 invulnTotal 只比 invuln 大一个 dt，
+    // 包络恒为 dt/0.25，光晕被压到接近不可见。
     if (left > (ent.invulnTotal || 0)) ent.invulnTotal = left;
     ent.invuln = left;
     if (left <= 0) { ent.invulnSrc = {}; ent.invulnTotal = 0; }
@@ -312,9 +311,8 @@ const PETAL_BOUNCE = 0.45;
 // 花瓣与生物都不带无敌帧，只有花朵本体有（FLOWER_HURT_INVULN）。
 // 揉搓：沿生物表面的切向摩擦上限(px/s)，让生物"蹭着"花瓣滑走，而不是被钉死在一个点上。
 const PETAL_RUB_MAX = 120;
-// 【击退强度与速度无关】：统一按"正常转速下动能的 1.5 倍"给一份固定冲量。
-// 以前强度 = 接近速度 / 参考速度，于是 reach 伸得远、转得快时击退翻倍，
-// 同一片花瓣"伸出去"和"贴着"手感完全不同。速度现在只用于判断接触，不再参与强度。
+// 击退强度与速度无关：统一按"正常转速下动能的 1.5 倍"给固定冲量。
+// 速度只用于判断接触，不参与强度，否则 reach 伸得远、转得快时击退会翻倍。
 const PETAL_KB_IMPACT = 1.5;
 // Wax（落位实体）：玩家来源的推力放大 50 倍；单帧位移封顶，保证是"被推动"而非飞出去
 const WAX_PLAYER_PUSH_K = 50;

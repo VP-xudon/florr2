@@ -55,11 +55,11 @@ const MOB_ART_ROT = {
 const LADYBUG_RING_KEY = 'mob3ring';
 const LADYBUG_RING_RECT = [-0.0582, -0.0590, 1.1172, 1.1181];
 // 生物 SVG 的实际图案只占 viewBox 的一部分（外圈是 clipPath 留白）。
-// 旧实现按 91.667/110 估算这个比例，但真实图案比 clipPath 更小，所以视觉总比碰撞箱小一圈。
-// 现在改为运行时按 alpha 通道实测包围盒并裁剪（见 SpriteStore.artCanvas），这里只留注释说明。
+// 运行时按 alpha 通道实测包围盒并裁剪（见 SpriteStore.artCanvas）；
+// 这里的 91.667/110 是 clipPath 名义比例，仅作无实测数据时的参考值。
 const MOB_ART_RATIO = 91.667 / 110;
 
-// 全实体【共用】的血条尺寸（花朵 / 昆虫同一份数据，绝不允许两套公式）。
+// 全实体共用的血条尺寸（花朵与昆虫同一份公式）。
 // 长度 = 基准公式 ×1.3；高度不变。
 const HPBAR_W = Math.max(30, Math.min(
   PLAYER_VISUAL_D * MOB_DIAM_BASE / 2 * 1.7,
@@ -71,7 +71,7 @@ const HPBAR_H = 6.6 * 0.8;
 // 消费方做「圆 vs 多边形」求交（思路同 map.js 的 circleContact）。
 
 // 生物轮廓几何核心：本地坐标下求"最近点 + 是否在内"。
-// 圆-多边形求交、花瓣吸附落点都复用这一份，避免两套几何算法各算各的。
+// 圆-多边形求交、花瓣吸附落点都复用这一份几何。
 function _mobLocalNearest(poly, D, lx, ly) {
   const pts = poly.pts;
   // 内外判定用射线法（与绕向无关，轮廓提取不保证绕向）

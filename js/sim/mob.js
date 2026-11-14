@@ -37,10 +37,7 @@ class Mob {
       * mobScale(this.level) * sizeScale);
     this.visualD = diam;
     this.drawSize = diam;               // 视觉裁剪框（含体型倍数，决定画多大）
-    // 碰撞尺寸 = 绘制尺寸。
-    // 旧写法是 diam / sizeScale（蜈蚣 1/1.4 =71%、蜜蜂 1/1.2555 =80%），
-    // 于是"看到的身体"比"实际判定"大一圈：玩家明明贴上了蜈蚣身体却不结算体伤，
-    // 明显打到了却打空。所有生物一视同仁 —— 画多大就判多大，没有按物种的口径。
+    // 碰撞尺寸 = 绘制尺寸：画多大就判多大，不按物种再折算。
     this.collSize = diam;
     this.r = this.collSize / 2;
     this.shape = null;                  // 碰撞外形：SVG 轮廓多边形 { pts, r }（玩家/接触判定用）
@@ -151,11 +148,10 @@ class Mob {
     EntityFX.hurt(this);                // 红闪统一走实体引擎（时长/强度只有一个来源）
     // 【被墙后的敌人偷袭 -> 逃开一段】：判定必须在 noteThreat 之前做，
     // 因为记完仇恨 topThreat() 就会返回攻击者（若可见）。
-    // 条件：① 攻击者与它之间隔着【墙】（视野 360° 无死角，只有墙会挡视线）
-    //       ② 自己当前也没在追任何【看得见】的目标
-    // 满足就往攻击者的反方向、以【追击速度】跑 MOB_FLEE_DIST 那么远。
-    // 旧实现用的是 !canSee()（还包含"对方站在减速瓦片里"和距离），于是玩家
-    // 在减速带上正对着打它也会被当成偷袭 -> 生物莫名其妙开始逃跑。
+    // 条件：① 攻击者与它之间隔着墙（视野 360° 无死角，只有墙挡视线）
+    //       ② 自己当前没在追任何看得见的目标
+    // 满足就往反方向、以追击速度跑 MOB_FLEE_DIST 距离。
+    // 判定只看墙，不看距离与减速瓦片，否则正对面的正常攻击也会被当成偷袭。
     if (src && applied > 0 && this.wallBlocked(src) && !this.topThreat()) {
       this.fleeT = MOB_FLEE_DIST / Math.max(1, this.chaseSpeed);
       this.fleeAX = src.x; this.fleeAY = src.y;
@@ -231,10 +227,8 @@ class Mob {
     return pick ? pick.ent : null;
   }
 
-  // 视线判定：360° 无死角 —— 只受【距离】与【墙体遮挡】两条约束。
-  // 旧实现里"站在减速瓦片里 = 隐身"，于是玩家在减速带上正对着打它，
-  // 也会被判成"被看不见的敌人偷袭" -> 生物莫名其妙开始逃跑。
-  // 减速瓦片本来就由 map.mobBlockedAt 禁止生物踏入，不需要再兼任隐身草。
+  // 视线判定：360° 无死角，只受距离与墙体遮挡两条约束。
+  // 减速瓦片不提供隐身（生物本就无法踏入，见 map.mobBlockedAt）。
   // 视线采样（lineBlocked）较贵，同一目标 0.15s 内复用上一次结果。
   canSee(ent) {
     if (!ent || ent.dead) return false;
@@ -291,14 +285,12 @@ class Mob {
     this.ghostHp = clamp(this.ghostHp + this.ghostV * dt, 0, this.maxHp);
   }
 
-  // 建立碰撞外形。服务端在 update 里建；【客户端视图也必须建】——
-  // 视图 Mob 不跑 update（只做插值/动画计时），不在 draw 里建的话 shape 永远是空的，
-  // 调试碰撞箱(/pending crash)就会显示空或残留的旧外形。
+  // 建立碰撞外形。服务端在 update 里建；客户端视图不跑 update，
+  // 因此 draw 路径也必须调用它，否则 shape 为空、调试碰撞箱显示不出来。
   _ensureShape() {
     if (this.shape && this._crbApplied === CRB.ready) return;
     let ct = null;
-    // ---- 1) 硬编码碰撞箱 .crb（唯一权威来源）----
-    // 生物/花瓣/F3 都读同一份文件，不存在"素材提取"和"手写"两套口径。
+    // ---- 1) 硬编码碰撞箱 .crb（唯一权威来源，生物/花瓣/F3 共用）----
     if (typeof CRB !== 'undefined' && CRB.ready) {
       // artSvg 可能是派生贴图（Hornet 的 '11_empty'）：先按它找，
       // 找不到再回落到物种 id（'11'）—— crb 文件是按素材 id 命名的。
@@ -310,8 +302,7 @@ class Mob {
     // ---- 手写碰撞箱（可选覆盖，默认【不走】）----
     // 默认口径 = 从【素材】提取轮廓（蜘蛛走"去掉腿的身体"素材，见下）。
     // 只有物种显式声明 MOB_TRAITS[slug].collider = { type:'circle', k } 时才手写：
-    // k = 圆半径 / 视觉直径，现场合成正多边形当轮廓，后面 r / hull / walkHull
-    // 全部照常从它算出来 —— 不存在第二套几何口径。
+    // k = 圆半径 / 视觉直径，现场合成正多边形当轮廓，r / hull / walkHull 均由它推导。
     const tr = (typeof MOB_TRAITS !== 'undefined' && MOB_TRAITS[this.type.slug]) || {};
     const col = tr.collider;
     if (col && col.type === 'circle' && col.k > 0) {
@@ -458,12 +449,11 @@ class Mob {
         this.shape = this.hull = null;
       }
     }
-    // 碰撞外形：统一走 _ensureShape（客户端 draw 也调它）——
-    // 之前这里内联复制了一份一模一样的逻辑，改一处漏一处，正是"两套碰撞"的来源之一。
+    // 碰撞外形统一由 _ensureShape 建立（客户端 draw 也走它）。
     if (!this.shape) this._ensureShape();
 
-    // 多节生物里被【刚性粘合】的节：位置与朝向全由 net/server.js 的 _solveChains 解算，
-    // 这里绝不跑 AI / 位移（两套逻辑同时改坐标 = 原地打转、左右抽搐、连不成一条）。
+    // 多节生物里被刚性粘合的节：位置与朝向全由 net/server.js 的 _solveChains 解算，
+    // 这里不跑 AI / 位移。
     // 但【击退冲量不能丢】：把它积分成"相对轨迹槽位的局部偏移"（pushX/pushY），
     // 由链解算叠加上去并沿相邻节扩散，然后按弹性速率回位。
     // 少了这一段，冲量只会写进 kbX 又被下一帧的解算覆盖 —— 打中段等于没打。
@@ -550,10 +540,8 @@ class Mob {
       else { this.x = px; this.y = py; this.vx = 0; this.vy = 0; }
       if (this.ai) this.ai.blockedT = 0.6;
     }
-    // —— 3.3) 墙体（瓦片碰撞）也算"堵住了" ——
-    // 旧实现只有减速瓦片会给 AI 打 blocked 标记，撞到普通墙体时 AI 完全不知道，
-    // 于是蜈蚣会一直顶着墙按原弧线硬蹭（看起来就是"没有 AI、只会贴着墙走"）。
-    // 【判定口径】用移动前的真实速度算期望位移，且必须持续 ≥0.2s：
+    // —— 3.3) 墙体（瓦片碰撞）也算堵住 ——
+    // 判定口径：用移动前的真实速度算期望位移，且必须持续 ≥0.2s：
     // 刚起步/刚转向的几帧里阻尼还没把速度拉满，实际位移天然只有 30%，
     // 拿 AI 的 want 去比会把"正常起步"误判成撞墙 —— 全体生物每走一步就被打断、
     // 停下、随机换个方向再起步，表现就是"原地不动、疯狂转头"。

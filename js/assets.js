@@ -128,9 +128,8 @@ const SpriteStore = {
   //
   // 两条数据源，优先像素（最忠实），像素不可用时用向量几何：
   //   ① 像素网格：从实绘像素的 alpha 提取，连抗锯齿边缘都算进去；
-  //   ② 向量轮廓（assets/mob-shapes.js）：file:// 下画布会被标记为"污染"，
-  //      getImageData 直接抛异常 —— 此时只能退到这份离线预计算的外形，
-  //      否则所有生物的碰撞箱都会退化成外接圆（这就是"全是圆的"的根因）。
+  //   ② 向量轮廓（assets/mob-shapes.js）：画布不可读取像素时（如 file:// 污染）
+  //      退回这份离线预计算外形，避免碰撞箱退化成外接圆。
   contour(key, size) {
     const ck = key + '@' + size;
     const hit = this.contourCache[ck];
@@ -163,12 +162,10 @@ const SpriteStore = {
   // 关键换算：pv = (pivotNorm - 0.5) / cropRatio
   //   （由 pv = (nx - off)/d - 0.5 化简而来，与 artCanvas 的裁剪换算严格等价）
   //
-  // 【为什么不能等 cropRatio 就绪再算】：
-  //   cropRatio 来自瓢虫贴图的像素实测，开局时还没就绪。曾经的写法在未就绪时
-  //   直接 return {0,0}，而 vectorContour 的结果会被 contour() 缓存下来 ——
-  //   于是碰撞轮廓永久停在 pv=0，画面却用真实 pv 平移，两者相差 0.119×size ≈ 5px：
-  //   表现为"渲染的头比碰撞箱靠前，转弯时错位随朝向一起转"。
-  //   现在未就绪时按 1.0（= 不裁剪的回退渲染路径，等价）计算且不缓存，永远不会算错。
+  // 【cropRatio 未就绪时按 1.0 计算且不缓存】：
+  //   cropRatio 依赖贴图像素实测，开局阶段可能尚不可用。
+  //   此时按不裁剪的渲染路径（比例 1.0）换算，等数据就绪后再算一次并缓存；
+  //   若在未就绪时缓存 pv=0，碰撞轮廓会与真实渲染位置永久相差约 5px。
   mobPivot(key) {
     const D = (typeof window !== 'undefined') ? window.MOB_PIVOT : null;
     const bare = String(key).replace(/^mob/, '');
@@ -265,8 +262,8 @@ const SpriteStore = {
   },
 
   // 把贴图裁剪到实际图案范围，再缩放至 size×size —— 图案正好撑满 size。
-  // 关键：先按 2x 超采样渲染 SVG，再裁剪缩小回来 —— 旧实现按 size 渲染后裁剪
-  // 放大，图案区域被放大 ~1.6 倍导致边缘发糊（看着不像矢量）。
+  // 先按 2x 超采样渲染 SVG，再裁剪缩小回来：直接按 size 渲染再裁剪放大
+  // 会使图案区域被放大约 1.6 倍，边缘发糊。
   artCanvas(key, size) {
     const ck = key + '@' + size;
     if (this.artCache[ck]) return this.artCache[ck];
@@ -285,9 +282,8 @@ const SpriteStore = {
   },
 
   // 裁剪到图案包围盒的红色剪影（受击红闪用），与 artCanvas 同一裁剪管线。
-  // 关键：红闪必须和本体（artCanvas 裁剪版）同坐标系同尺寸，否则会偏小且偏移，
-  // 表现为"红闪没盖住、只糊在中间一小块"。旧实现直接拿未裁剪的 redCanvas(key,512)
-  // （全 viewBox 带留白）来画，自然对不上。
+  // 红闪必须和本体（artCanvas 裁剪版）同坐标系、同尺寸；
+  // 直接使用未裁剪的 redCanvas（全 viewBox 带留白）会偏小且偏移。
   artRedCanvas(key, size) {
     const ck = key + '@' + size;
     if (this.artRedCache[ck]) return this.artRedCache[ck];

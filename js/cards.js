@@ -51,11 +51,9 @@ const CardRenderer = (function () {
     return (RARITIES[rarity] && RARITIES[rarity].color) || '#9aa3a0';
   }
 
-  // 唯一的素材来源：petal/（已去掉底部名称字母、图形已平移到画布正中央、大小与 viewBox 均不变）。
-  // 带 ASSET_VER：素材内容换过但文件名没变，必须靠版本号强制浏览器重新拉取，
-  // 否则会一直用缓存里的旧文件（表现为"花瓣还带着字"）。
-  // 早期还有第二份"原始素材"（名称字母烘焙在图上）专供卡牌显示名字；现在卡牌名字改由
-  // i18n 实时绘制，那份素材已彻底删除，本文件只认 petal/ 这一个目录。
+  // 唯一素材来源：assets/petals/（无名称字母、图形居中、viewBox 不变）。
+  // 带 ASSET_VER：素材内容变化但文件名不变时靠它强制刷新浏览器缓存。
+  // 卡面名称由 i18n 实时绘制，不依赖素材中的文字。
   function loadRaw(svgId) {
     if (_raw[svgId]) return _raw[svgId];
     _raw[svgId] = fetch('assets/petals/' + svgId + '.svg?v=' + ASSET_VER)
@@ -288,12 +286,8 @@ const CardRenderer = (function () {
       // 子体尺寸 = 整张素材框 × k（所有阵型花瓣统一口径，不能改这里）。
       const w = boxW * s.k, h = boxH * s.k;
       const dx = s.x * D, dy = s.y * D;
-      // 阵型型子体（如 Peas）：每个实例画【单球】素材，由布局摆回原图排列。
-      // 未就绪时【不画】，绝不能回退整张素材 cv —— 那会让 4 个实例各画一整张 44.svg
-      // （表现为"开局先冒出 4 个完整的四球图"）。
-      // 一套逻辑，没有兜底：每个实例一律画【单球】素材 44_s.svg，由布局摆成菱形。
-      // 素材还没加载完就不画（绝不回退成整张素材，也不存在第二种显示）。
-      // 与 Stinger 完全一致：每个实例画的就是素材本身（44.svg 现在就是一颗球）
+      // 阵型型子体（如 Peas）：每个实例画单球素材，由布局摆回原图排列。
+      // 素材未就绪时直接跳过：回退到整张素材会让每个实例各画一张完整图形。
       const im = cv;
       if (!im) continue;
       if (!s.rot) { ctx.drawImage(im, dx - w / 2, dy - h / 2, w, h); continue; }

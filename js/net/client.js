@@ -73,18 +73,16 @@ class LocalNet extends Net {
   // 调试专用：读取权威世界内部状态。业务代码请走 request / 快照。
   get debugServer() { return this._server; }
 
-  // 由客户端主循环驱动：本地实现零延迟，因此每帧都推进服务端。
-  // 【快照按 SNAP_HZ 下发，不是每个模拟步都发】：一帧固定步长循环最多补 3 步，
-  // 以前每一步都 snapshot() 一份全量（4000+ 个生物对象）+ 客户端再整套镜像一次，
-  // 60 步/秒 ≈ 26 万个对象/秒，GC 直接把帧率拖到个位数。
-  // 客户端本来就有插值缓冲（_snapDt / _applySnap 的 px->tx blend），25Hz 快照不会卡顿。
+  // 由客户端主循环驱动：本地实现零延迟，每步推进服务端。
+  // 快照按 SNAP_HZ 下发而不是每个模拟步都发：一帧最多补 3 步，
+  // 逐步发全量快照会造成大量对象分配。客户端用插值缓冲（_snapDt / px->tx blend）补齐间隔。
   step(dt) {
     if (!this._connected) return;
     this._server.step(dt);
     this._snapAcc = (this._snapAcc || 0) + dt;
     if (this._snapAcc + 1e-9 >= SNAP_DT) {
-      const span = this._snapAcc;             // 本快照覆盖的模拟时长（可能跨多个步长）
-      this._snapAcc = 0;
+      const span = this._snapAcc;
+      this._snapAcc = Math.max(0, this._snapAcc - SNAP_DT); // 保留余量，长期平均频率等于 SNAP_HZ
       this._deliver({ t: 'snap', snap: this._server.snapshot(span) });
     }
     // 服务端在 step 中产生的事件（聊天/伤害飘字/击杀）每步都投递，不受快照节流影响
@@ -139,9 +137,10 @@ class WebSocketNet extends Net {
       };
     }).then((ok) => {
       if (!ok) {
-        // 连不上就用本地世界兜底，保证单机始终可玩
         this._fallback = new LocalNet();
-        return this._fallback.connect(opts).then(() => false);
+        this._fallback.onMessage((msg) => this._deliver(msg));
+        this._fallback.connect(opts);
+        return false;
       }
       return true;
     });
@@ -170,9 +169,11 @@ class WebSocketNet extends Net {
     });
   }
 
-  requestSync() { return undefined; }   // 远端必然异步
+  requestSync(kind, payload) {
+    return this._fallback ? this._fallback.requestSync(kind, payload) : undefined;
+  }
 
-  step(dt) { if (this._fallback) this._fallback.step(dt); }   // 远端：什么都不做
+  step(dt) { if (this._fallback) this._fallback.step(dt); }
 
   close() {
     if (this._fallback) this._fallback.close();

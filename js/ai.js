@@ -12,9 +12,7 @@
 // 真正的加速/减速/位移由底层引擎完成（Mob.update 里与主角同一套 damp + moveEntity），
 // 因此生物和人物一样是「渐渐起步、渐渐停住」，不会有瞬移和抖动。
 //
-// —— 为什么做成注册表（与 PetalFX 同一套路）——
-// 以前所有行为都塞在 MobAI._step 里按字段分支（noPause / sPath / turnRate …），
-// 想加一只新怪就得改引擎内核，还得小心不影响其它物种。现在：
+// —— 注册表结构（与 PetalFX 同一套路）——
 //   1. 引擎只负责「问 AI -> 限速 -> 位移 -> 回馈」这条固定管线；
 //   2. 每个物种的 AI 是一个独立注册项（key = type.slug，如 'ladybug' / 'bee' / 'centipede'）；
 //   3. 新增生物只要 MobAI.register('slug', {...})，不必动内核，也不会串味。
@@ -63,8 +61,7 @@ const MobAI = {
     if (!ai || !mob) return { x: 0, y: 0 };
     const def = mob.aiDef;
     if (!def || !def.step) return { x: 0, y: 0 };
-    // 撞墙/禁行标记统一在这里衰减：各 AI 只管「看到 >0 就换方向」，
-    // 不必自己计时（旧实现里只要有一个分支忘了清零，标记就永远挂着）。
+    // 撞墙标记统一在这里衰减：各 AI 只需判断 ai.blockedT > 0。
     if (ai.blockedT > 0) ai.blockedT = Math.max(0, ai.blockedT - dt);
     // ---- 大招接管（Super / Eternal 专属）----
     // 调度与通用表现全部在【MobFX 引擎】里（js/mob-fx.js）：
@@ -499,12 +496,10 @@ MobAI.register('spider', {
   facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
 
   // ---- 大招（Super / Eternal 专属）----
-  // 【已移入 MobFX 引擎】js/mob-fx.js 里：
+  // 调度、参数、服务端产出与客户端表现统一在 MobFX 引擎（js/mob-fx.js）：
   //   MobFX.register('spider', { ultimate: { minRarity, cooldownTicks, duration,
   //     hold, spin, gaitRate, field } })
-  // 以前这一整套（调度 + 蜘蛛的参数 + 服务端产出 + 客户端镜像）分散在 4 个文件里，
-  // 加第二个物种的大招要同时改 4 处；现在只加一条 register。
-  // 这里的 AI 只负责"平时的游荡/追击"，大招期间引擎接管。
+  // 这里的 AI 只负责平时的游荡/追击，大招期间由引擎接管。
 });
 
 // ============================================================================

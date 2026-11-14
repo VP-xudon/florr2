@@ -108,8 +108,7 @@ const DebugScreen = {
       const cps = (g.map && g.map.checkpoints) || [];
       const cp = cps[g.cpIdx] || cps[0];
       this._set('cp', cp ? ('#' + (g.cpIdx || 0) + ' (' + Math.round(cp.cx) + ', ' + Math.round(cp.cy) + ')') : '—');
-      // 朝向：先归一到 [0,360) 再显示。facing 本身可能被写成 -3.7rad 之类的任意值，
-      // 直接乘 180/PI 会得到负角/上千度的数字（曾经的 "Facing 无穷大" 就是这个）。
+      // 朝向：facing 可能是任意弧度量，先归一到 [0,360) 再显示。
       const deg = (((p.facing || 0) * 180 / Math.PI) % 360 + 360) % 360;
       this._set('facing', deg.toFixed(0) + '°');
       const spd = Math.hypot(p.vx || 0, p.vy || 0);
@@ -153,9 +152,7 @@ const DebugScreen = {
 
     // 花瓣栏：按【装备槽】列（不是按存活实体）——装填中/已碎的槽也要看得见。
     //   · 血量百分比 = 本槽所有存活实体的 hp 总和 / maxHp 总和，并钳到 0~100。
-    //     以前直接拿单个实体的 b.hp 算：实体碎裂后 hp 可能是 -29 这种负值，
-    //     于是显示成 -2900%，除此之外只有满血的 100%（中间值永远看不到，因为
-    //     客户端花瓣血量是整体替换的，掉血那一下就已经碎了）。
+    //     单体 hp 可能为负（碎裂那一帧），单看一个实体会出现负百分比。
     //   · 状态：装填中 / 已碎 / 转速，三者只显示一个。
     const spin = (typeof PETAL_SPIN !== 'undefined')
       ? PETAL_SPIN * (typeof ROT_SCALE !== 'undefined' ? ROT_SCALE : 1) : 0;

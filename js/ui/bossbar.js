@@ -205,11 +205,8 @@ const BossBar = {
     const fsR = 10 * FS * 0.9;      // 稀有度字号 = 1.8 × 0.9 = 1.62 倍（比名称小一档）
     ctx.font = `800 ${fsR}px ${CardRenderer.FONT}`;
     ctx.lineWidth = fsR * 0.2;
-    // 【稀有度压半个字高】：视觉垂直中心正好落在【条底边】上 ——
-    // 上半截压在血条上、下半截出血条（与名称落在条顶边的规则严格对称，合起来就是
-    // "名称上半截在条外、稀有度下半截在条外"）。旧写法是硬编码 `cy + bhv*0.4`，
-    // 实测视觉中心落在条内、离底边还有 8px，看起来"整块都挤在条里且偏上"。
-    // 与名称一样用实测 ascent/descent 定位，换语言/换单词都不会变形。
+    // 【稀有度压半个字高】：视觉垂直中心落在条底边上，上半截压在血条上、下半截出血条，
+    // 与名称落在条顶边严格对称。用实测 ascent/descent 定位，换语言或单词都不会变形。
     const tmR = ctx.measureText(rarName);
     const ascR = (tmR.actualBoundingBoxAscent > 0) ? tmR.actualBoundingBoxAscent : fsR * 0.72;
     const descR = (tmR.actualBoundingBoxDescent >= 0) ? tmR.actualBoundingBoxDescent : fsR * 0.2;

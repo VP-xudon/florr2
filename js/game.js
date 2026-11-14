@@ -26,9 +26,9 @@ const KEY_ACTION = {
   Space: 'mode1',                        // reach
   ShiftLeft: 'sLeft', ShiftRight: 'sRight' // detect（左右 Shift 分开记，避免同时按下一个松开即整体取消）
 };
-// 兜底：个别环境 e.code 缺失时，用 e.key 反查【物理键位】。
-// 注意这里必须映射成 e.code 的形式（KeyW / ArrowRight …），而不是直接的逻辑动作：
-// 方向由"按住的物理键位集合"推导，任何中间映射层都可能丢键（历史上右方向键就在这层丢失）。
+// 个别环境 e.code 缺失时，用 e.key 反查物理键位。
+// 映射目标必须是 e.code 形式（KeyW / ArrowRight …）而不是逻辑动作：
+// 方向由按住的物理键位集合推导，中间再加一层动作映射会丢失组合键。
 const KEY_CODE_FALLBACK = {
   w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD',
   arrowup: 'ArrowUp', arrowdown: 'ArrowDown', arrowleft: 'ArrowLeft', arrowright: 'ArrowRight',
@@ -102,9 +102,9 @@ class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
-    // 输入：把"当前按住的物理键位"记进 _down 集合，方向直接由集合推导（见 _readDir）。
-    // 用集合而不是"逻辑动作布尔值"：任意多个方向键可以同时按住且互不覆盖，
-    // 与 Shift/空格等修饰键组合也不会互相干扰（右方向键曾经在别名映射层被吃掉）。
+    // 输入：把当前按住的物理键位记进 _down 集合，方向直接由集合推导（见 _readDir）。
+    // 用集合而不是逻辑动作布尔值：多个方向键可同时按住且互不覆盖，
+    // 与 Shift/空格组合时也不会互相干扰。
     this._down = new Set();
     const codeOf = (e) => e.code || KEY_CODE_FALLBACK[(e.key || '').toLowerCase()] || '';
     window.addEventListener('keydown', (e) => {
@@ -242,10 +242,8 @@ class Game {
     // 调试参数 ?hp=N（可与 mode/lang 逗号混搭）：直接设定人物血量上限与当前血量。
     // 【必须在 attach 之前应用】服务端副本要从这里继承 maxHp/hp，
     // 否则服务端停留在默认 100 血，而客户端每帧被快照的 hp 覆盖 -> "?hp 无效、一碰就死"。
-    // 非法值（非有限数 / ≤0）忽略，并钳到 1e7 上限。
-    // 旧实现 `?hp=Infinity` 会把 Infinity 灌进 maxHp：血条比例 hp/maxHp 变成 NaN，
-    // 平滑血条 Infinity-Infinity=NaN，飘字/快照里出现 Infinity —— 这就是"开挂 bug 多"的源头之一。
-    // （`?hp=inf` 因为 parseFloat 得到 NaN，本来是被忽略的；这里连 Infinity 一起挡。）
+    // 非法值（非有限数 / ≤0）忽略，并钳到 1e7 上限：
+    // Infinity 进入 maxHp 会让血条比例、平滑血量与飘字全部变成 NaN。
     const hpParam = parseFloat(window.__queryParams && window.__queryParams.hp);
     if (Number.isFinite(hpParam) && hpParam > 0) {
       const hpVal = Math.min(hpParam, 1e7);
@@ -391,13 +389,10 @@ class Game {
     // （客户端不跑战斗，必须靠这个才能看到花瓣掉血/红闪/碎掉重装）
     // 这里立即应用一次，不用等下一帧的 _syncPetals —— 否则掉血/碎裂会慢一帧才看到。
     if (snap.petals) {
-      // 【Stage 3】netPetals 改为复用 Map + 数字键（slot*1e6 + sub*1e3 + gen），
-      // 避免每次快照 new 对象 + 字符串拼接键的 GC 压力与 O(n²) 查找。
+      // netPetals 复用同一个 Map，键由 petalNetKey 生成（槽位 | 子序号 | 世代号）。
       const map = this._petalNetMap || (this._petalNetMap = new Map());
       map.clear();
-      for (const q of snap.petals) {
-        map.set(q.slot * 1e6 + (q.sub || 0) * 1e3 + (q.gen || 0), q);
-      }
+      for (const q of snap.petals) map.set(petalNetKey(q.slot, q.sub, q.gen), q);
       p.netPetals = map;
       p._applyNetPetalStates();
     }
@@ -478,6 +473,10 @@ class Game {
         v.gone = false;
         this.mobViews.set(e.id, v);
         this.mobs.push(v);
+      } else if (v.gone) {
+        // 实体重新进入近视图：撤销回收标记；活体若正在退场则重新入场。
+        v.gone = false;
+        if (!e.dead && v.exiting) EntityFX.spawn(v, 'mob');
       }
       // 最新权威状态 -> 插值目标
       v.px = v.x; v.py = v.y;          // 从"当前显示位置"起步，避免跳变
@@ -485,19 +484,14 @@ class Game {
       v.blend = 0;
       v.hp = e.hp; v.maxHp = e.maxHp; v.dead = e.dead;
       v.vx = e.vx || 0; v.vy = e.vy || 0;   // 只用于推挤的动能项（视图实体不积分位置）
-      if (e.artSvg) v.artSvg = e.artSvg;   // 多节生物：头节/身体节贴图区分
-      if (e.pollenShot) v.pollenShot = true;   // Bumble Bee 尾部产出的 Pollen
-      if (e.typeId === 11 && e.artSvg && v.artSvg !== e.artSvg) {
+      if (e.artSvg && v.artSvg !== e.artSvg) {
         v.artSvg = e.artSvg;
-        v.artRot = MOB_ART_ROT[e.artSvg] || MOB_ART_ROT['11'] || 0;
-        v.shape = v.hull = null;
+        v.artRot = MOB_ART_ROT[e.artSvg] || v.artRot || 0;
+        v.shape = v.hull = null;             // 贴图变化后按新主体重新提取碰撞轮廓
       }
-      // 尾针（Missile）：【按 id 复用同一个客户端对象】。
-      // 旧写法每帧 structuredClone 一个新对象，把"同一实体"打散了：
-      //   ① 对象引用每帧都变 —— 打在上面的退场标记会丢；
-      //   ② 服务端发射时只是把【同一个导弹对象】从 st.missile 移到 st.projectiles，
-      //      客户端却在每帧"克隆一个新导弹"（用户口径：原地克隆一个一模一样的子实体）。
-      // 现在：id 相同 → 就地更新字段（引用稳定，插值起点保留）；id 变了 → 才算新导弹。
+      if (e.pollenShot) v.pollenShot = true;
+      // 尾针（Missile）按 id 复用同一个客户端对象：
+      // id 相同则就地更新字段（引用稳定，退场标记与插值起点都保留），id 变化才算新导弹。
       if (e.hornetMissile) {
         const src = e.hornetMissile;
         let ms = v.hornetMissile;
@@ -653,10 +647,8 @@ class Game {
     // 远处生物（不在屏幕附近）只贴位置、不做插值与动画计时：
     // 全图 4600+ 只，每帧给它们算插值/血条/轮廓纯属白做（本帧根本不会画）。
     const cx = this.camera.x, cy = this.camera.y;
-    // 判定用【屏幕矩形 + 200 余量】(渲染本身也是这么裁的)：
-    // 旧写法用半径 max(W,H)*0.85+260 ≈ 1350px 的圆，差不多覆盖半张地图 ——
-    // 4000+ 只里绝大多数都在"近处"，每只都跑一遍插值/血条平滑/动画计时，白烧 1.4ms/步。
-    // 屏幕外的个体这一帧根本不会被画，贴位置就够；进屏后 blend 从 1 开始，不会跳。
+    // 判定用屏幕矩形 + 200 余量（与渲染裁剪一致）。屏幕外个体只贴位置、不跑插值与动画计时；
+    // 进屏后 blend 从 1 开始，不会跳变。
     // 可见范围随相机缩放变化（Antennae 拉远镜头）：屏幕尺寸 / z 才是世界里的可见宽度，
     // 剔除矩形必须跟着放大，否则"看得更远"却只给近处的生物做动画（远处的会闪一下才出现）。
     const _vz = this.camZoom || 1;
@@ -772,10 +764,8 @@ class Game {
       pf.renderMs = t2 - t1;
       pf.frameMs = dt * 1000;
       pf.steps = n;
-      // 【真实帧率】必须用 rAF 的间隔算，不能数"模拟步"：
-      // 旧写法在 0.5s 窗口里数 update() 被调用的次数，而 update 是按固定步长补的，
-      // 于是无论卡到几帧都恒显示 60（甚至更高）。这里另算"实际模拟步/秒"——
-      // 它低于 60 就说明游戏在慢放（补步被 MAX_STEPS 截断了）。
+      // 真实帧率按 rAF 间隔统计；另记实际模拟步/秒（sps），
+      // 它低于 60 说明补步被 MAX_STEPS 截断、游戏在慢放。
       this._fpsT = (this._fpsT || 0) + dt;
       this._fpsF = (this._fpsF || 0) + 1;
       this._stepN = (this._stepN || 0) + n;
@@ -872,8 +862,7 @@ class Game {
     this._tickMobViews(dt);
 
     // 玩家 vs 昆虫：同一套 physicsPush（反质量 + 动能）。生物速度来自快照（vx/vy），
-    // 因此"生物冲过来"的动能与服务端同源；视图实体不积分位置，冲量写入后下一帧即被覆盖，
-    // 不会像旧实现那样在视图对象上留下永不衰减的幽灵速度。
+    // 视图实体不积分位置，速度字段每份快照都会被权威值覆盖。
     if (!p.dead) {
       // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个做轮廓判定是纯浪费，
       // 预筛半径必须按【外接尺寸】算（collSize×0.75 ≈ 轮廓最远点），
@@ -925,7 +914,7 @@ class Game {
     const pickR = (p.r * 2) * DROP_PICK_R;
     for (const d of this.drops) {
       d.update(dt, p);
-      if (!d.fly && d.popT >= 1 && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
+      if (!d.fly && !d.exiting && d.popT >= 1 && !p.dead && dist2(d.x, d.y, p.x, p.y) < pickR * pickR) d.pick();
       if (EntityFX.done(d)) {
         // 只有"被捡走"的才进背包；到期渐隐消失的不给（d.picked 由 DropCard.pick 置位）
         if (d.picked) {
@@ -1220,10 +1209,7 @@ class Game {
     const me = this.player;
     if (me && me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw corpse]', e); } }
     // 视口裁剪：先筛出可见集合，再只对可见集合按 y 排序。
-    // 旧实现每次 render 都对全图（4600+ 只）切片排序（约百万次比较/秒），
-    // 而真正在屏内的只有个位数到十几只 —— 排序成本全花在屏幕外。
-    // 余量取半屏：足够覆盖一帧最大位移（约 4px）与最大生物半径（约 105px），
-    // 又不至于像旧的 2 屏余量那样把 95% 的绘制留在屏幕外白做。
+    // 余量取半屏：覆盖一帧最大位移与最大生物半径，同时不把排序成本花在屏幕外。
     // 判定用「圆心 ± 半径」而不是只测圆心：大生物贴边时必须照常绘制。
     const padX = this.W * 0.5 / z, padY = this.H * 0.5 / z;
     const mx0 = camX - vw / 2 - padX, mx1 = camX + vw / 2 + padX;

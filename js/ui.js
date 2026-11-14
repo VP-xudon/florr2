@@ -338,7 +338,7 @@ const UI = {
     // 兜底：窗口失焦/右键菜单时，清掉可能残留的拖拽幽灵
     window.addEventListener('blur', () => this._removeGhost());
     root.addEventListener('contextmenu', (e) => { this._removeGhost(); e.preventDefault(); });
-    // ---- 焦点保护（曾经的"按空格反复开关窗口"）----
+    // ---- 焦点保护 ----
     // <button> 被点击后会保持 focus，之后按空格 / 回车时浏览器会把它当成"再次点击"，
     // 于是游戏里的空格（reach）与 UI 按钮各执行一次 —— 窗口开了又关、关了又开。
     // 两条规则同时生效：
@@ -519,10 +519,9 @@ const UI = {
   // 行尺寸用 CSS zoom 整体缩放（0.9 / 0.75），描边、圆角、字体等所有子元素同步缩放。
   // 卡槽格子完全静态，不参与任何动画/变换，只作为对齐辅助。
   //
-  // 【重要】采用「增量更新」而不是 innerHTML 清空重建：
-  //   .qslot 元素本身永远复用，只有卡牌内容变化时才替换内部的 .card。
-  //   旧实现每次 renderInvBar 都 main.innerHTML=''，会把正在播放入换动画的 .card 一起销毁，
-  //   于是连续切换多个栏位时，只有最后一次动画能播完（前面的元素已经没了）。
+  // 采用增量更新而不是 innerHTML 清空重建：
+  //   .qslot 元素复用，只有卡牌内容变化时才替换内部的 .card，
+  //   这样连续切换多个栏位时，各栏位的入换动画互不打断。
   renderInvBar(p) {
     this._rowsVer++;                       // 行结构可能变化：失效卡槽矩形缓存
     this._renderRow(this.refs.slotRow, p.slots, 'slot', false);
@@ -613,7 +612,7 @@ const UI = {
       const mc = mb.querySelector('.card'), sc = sb.querySelector('.card');
       // 冷却结算与阴影动画都要等翻转动画完全播完才开始
       this._holdReload(i);
-      // zoom 传"卡片所在行"（即目标行）的缩放：旧实现传反了，位移量会多出约 20%
+      // zoom 传卡片所在行（即目标行）的缩放，两行缩放不同，传错会让位移量偏差约 20%
       const a1 = mc ? this._flipVertical(mc, sr, mr, zm,
         () => this._releaseReload(i)) : false;   // 主槽卡：从副槽出发落回主槽
       const a2 = sc ? this._flipVertical(sc, mr, sr, zs,
@@ -623,9 +622,8 @@ const UI = {
     }
   },
   // 卡面从 fromRect 平滑回到其原位（toRect）：按两行「实测矩形」算出斜向位移 + 等比缩放。
-  // 上下两行 zoom 不同（0.9 / 0.75）-> 卡槽并不对齐，必须同时补 X 与 Y；只动 Y 会让横向差
-  // 直接跳过去（旧实现抖动/跳动的来源）。终点严格回到 transform:''（即本槽原位），
-  // 因此到位后绝不会有残留偏移。多列可同时播放（各自元素独立）。
+  // 上下两行 zoom 不同（0.9 / 0.75），卡槽并不对齐，必须同时补 X 与 Y。
+  // 终点严格回到 transform:''（本槽原位），到位后不会有残留偏移；多列可同时播放。
   // 返回 true 表示确实播了动画（调用方据此决定是否放行装填计时）。
   //
   // 【关键】起始状态必须【同步】写好：Anim.play 只在下一帧才第一次 apply，若不先摆好起始
@@ -656,10 +654,8 @@ const UI = {
 
   // ---------------- 背包窗口 = 全部花瓣画廊（每张卡带数量角标） ----------------
   // 调试模式 ?mode=debug：全部显示 ∞，怎么拿都拿不空；否则每种默认 2 张。
-  // 【结构只建一次，之后只更新数量/显隐】
-  // 卡片操作（装配 / 切换 / 拾取 / 卸下）非常频繁，以前每次都 innerHTML='' 重建整表：
-  // 一次 = 几十上百个 canvas + 各自一个 ResizeObserver + 各自一次强制重排 —— 这就是
-  // "一碰卡片 UI 就卡一下"的来源。现在重建成本只在第一次打开背包时付一次。
+  // 结构只建一次，之后只更新数量与显隐。整表重建一次会创建几十上百个 canvas、
+  // 各自的 ResizeObserver 与强制重排，因此重建成本只付一次。
   renderInventory() {
     if (!this.isBagVisible()) { this._invDirty = true; return; }   // 关着：只标脏
     this._invDirty = false;
@@ -959,9 +955,8 @@ const UI = {
       // 因此不算"进行中"——否则 honey 卡面会被当成在装填、hpShadow 被强行归零（水桶特效不显示）。
       const active = !p.dead && !!(r && !r.hold && r.dur > 0 && r.age < r.dur);
       // —— 花瓣血量阴影（"水缸"）——目标值即时生效，不做过渡：
-      // 阴影与 reload 阴影颜色天然相同（同色同级），状态切换无需动画；
-      // 旧版指数平滑会让花瓣死亡瞬间的 hp 阴影回退与 reload 扇形短暂叠加
-      // （两层 0.5 alpha 重叠变深），这正是"颜色略有不同"的来源。
+      // 阴影与 reload 阴影同色同级，状态切换无需动画；
+      // 指数平滑会让花瓣死亡瞬间的 hp 阴影与 reload 扇形短暂叠加（两层叠加变深）。
       //   · 玩家死亡          -> 全 1：所有卡【快速平滑】过渡到 reload 前的全阴影
       //                          状态（reload 待命），重生后统一重新装填
       //   · reload 阴影进行中 -> 0（视觉全部交给扇形阴影，绝不叠加）

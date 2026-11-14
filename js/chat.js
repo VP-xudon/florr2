@@ -584,9 +584,8 @@ const Chat = {
       if (now - this.float[i].born > CHAT_FADE_T * 1000) this.float.splice(i, 1);
     }
     // DOM 与队列按索引对齐：多了就删；某条消息变了就【整行替换】。
-    // 不能只换子节点：外层类名（.chat-line / .sys / .whisper / .chat-hint）是按消息
-    // 类型在 _line() 里决定的，复用旧元素会让系统消息丢掉 .sys -> 红字规则失效，
-    // 文字退回面板默认色（白色）——这就是"漂浮态偶发白字丢样式"的根因。
+    // 外层类名（.chat-line / .sys / .whisper / .chat-hint）由 _line() 按消息类型生成，
+    // 因此消息变化时必须整行替换：复用元素会让系统消息丢失 .sys 与红字样式。
     while (layer.children.length > this.float.length) {
       layer.removeChild(layer.lastChild);
     }
