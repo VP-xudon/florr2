@@ -466,16 +466,15 @@ PetalFX.register('orange', {
   }
 });
 
-// 口径（用户要求）：
-//   · 不在 reach 模式：正常公转，【尖端朝外】（orientOutward），轨道紧贴本体、不吃 reach；
-//   · 进入 reach：立刻从【当前角度】沿尖端方向直线飞出，速度不变，飞行中【不旋转】，
+// 行为：
+//   · 不在 reach 模式：正常公转，尖端朝外（orientOutward），轨道紧贴本体、不吃 reach；
+//   · 进入 reach：立刻从当前角度沿尖端方向直线飞出，速度不变，飞行中不旋转，
 //     2 秒后消失（launch.life）。
-// 早期版本会"自动瞄准 ±10° 内最近的生物"，那不是 Missile 的行为，已删除。
 PetalFX.register('missile', {
   detach(ctx) {
     const body = ctx.petal, player = ctx.player;
-    // 方向 = 它【装填完成、蹦出来那一刻】的轨道角（body.spawnAng）：
-    // 用 detach 时刻的当前轨道角会偏离（自转已经转过一段），表现为"朝之前的角度飞"。
+    // 方向 = 实体出现那一刻的轨道角（body.spawnAng）：
+    // 用脱轨瞬间的当前轨道角会因自转而偏离。
     // 老实体没有 spawnAng 时才退回引擎传的轨道角 / 坐标夹角。
     const ang = (body.spawnAng != null) ? body.spawnAng
       : ((ctx.orbitAngle != null) ? ctx.orbitAngle

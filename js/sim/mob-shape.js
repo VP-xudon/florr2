@@ -54,10 +54,8 @@ const MOB_ART_ROT = {
 // RING_RECT = 圈在 base 贴图（3.svg）坐标系里的比例矩形（tools/_split_ring.py 算出）。
 const LADYBUG_RING_KEY = 'mob3ring';
 const LADYBUG_RING_RECT = [-0.0582, -0.0590, 1.1172, 1.1181];
-// 生物 SVG 的实际图案只占 viewBox 的一部分（外圈是 clipPath 留白）。
-// 运行时按 alpha 通道实测包围盒并裁剪（见 SpriteStore.artCanvas）；
-// 这里的 91.667/110 是 clipPath 名义比例，仅作无实测数据时的参考值。
-const MOB_ART_RATIO = 91.667 / 110;
+// 生物 SVG 的实际图案只占 viewBox 的一部分（外圈是 clipPath 留白），
+// 运行时按 alpha 通道实测包围盒并裁剪（见 SpriteStore.artCanvas）。
 
 // 全实体共用的血条尺寸（花朵与昆虫同一份公式）。
 // 长度 = 基准公式 ×1.3；高度不变。

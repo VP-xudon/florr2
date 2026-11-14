@@ -97,7 +97,7 @@ function drawSprite(ctx, key, size, x, y, rot, scale, alpha) {
 // 绘制"花瓣实体"画布（已去字母、已收紧画布），支持旋转/缩放/透明
 // ox / oy（可选，归一化到 size）：把【图形中心】相对旋转原点偏移一段距离。
 // 用于"自转轴心不在图形中心"的素材（Wing：轴心 = 外边缘圆弧的圆心）。
-// 不传则退化为"绕图形中心旋转"，与旧行为完全一致。
+// 不传则绕图形中心旋转。
 function drawArt(ctx, cv, size, x, y, rot, scale, alpha, ox, oy) {
   if (!cv) return;
   ctx.save();

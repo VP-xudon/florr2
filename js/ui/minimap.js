@@ -23,10 +23,9 @@ Object.assign(UI, {
     nm.textContent = I18N.t('Maps/garden/Name', 'Garden');
     document.body.appendChild(nm);
     this.refs.mmName = nm;
-    // 悬浮进入二档：用「移动命中」而不是 mouseenter。
-    // 原因：从大档按 M 缩回小档时，指针本来就在小地图那片区域，把热区的 pointer-events
-    // 从 none 改回 auto 并不会补发 mouseenter —— 残留的 _mmHover 会立刻再把小档顶成二档，
-    // 于是表现为"最大档按一下只回到中档，小档永远切不回去"。改成每帧按矩形判定即可。
+    // 悬浮进入二档：按指针位置每帧做矩形判定，不用 mouseenter。
+    // 热区的 pointer-events 从小档切回 auto 时不会补发 mouseenter，
+    // 仅靠该事件会让二档状态残留。
     // 命中区域 = 二档地图的矩形（与一档同锚点、尺寸更大）。
     window.addEventListener('mousemove', (e) => {
       if (this._mmMode !== 0) { this._mmHover = false; return; }
@@ -47,9 +46,8 @@ Object.assign(UI, {
   },
   cycleMinimapMode() {
     this._mmMode = (this._mmMode + 1) % 3;
-    // 必须无条件清掉悬浮标记：否则从大档回到小档的瞬间，指针仍在小地图上，
-    // mouseenter 早已触发过、不会再发一次，_mmHover 残留为 true 会立刻又把小档顶成中档
-    // （表现为"最大档按一下只回到中档，再按又去最大档"，小档永远切不回去）。
+    // 必须无条件清掉悬浮标记：切档瞬间指针可能仍在小地图上，
+    // _mmHover 残留会立刻把小档再次顶成中档。
     this._mmHover = false;
   },
   // 每帧推进小地图动画（由 overlay 的 rAF 循环驱动）
@@ -166,7 +164,7 @@ Object.assign(UI, {
 
     ctx.save();
     ctx.globalAlpha = m.alpha;
-    // 取消描边：只做「略微圆角」的内容裁剪（原来是深色实心外框，现已移除）
+    // 只做略微圆角的内容裁剪，不描边。
     const rad = Math.max(3, S * 0.09);
     ctx.save();
     ctx.beginPath();

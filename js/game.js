@@ -131,7 +131,7 @@ class Game {
         e.preventDefault();
         this.showHitbox = !this.showHitbox;
       }
-      // 背包热键：Z（B / Tab 已移除）；生物图鉴没有热键，只能点左下角按钮。
+      // 背包热键：Z；生物图鉴没有热键，只能点左下角按钮。
       if (k === 'z') { e.preventDefault(); this.toggleBag(); }
       if (k === 'r') { e.preventDefault(); this.swapSlotRows(); }
       if (k === 'm') { e.preventDefault(); if (UI.cycleMinimapMode) UI.cycleMinimapMode(); }
@@ -303,8 +303,7 @@ class Game {
     let pos = null;
     const canSync = this.net && typeof this.net.requestSync === 'function';
     if (canSync) pos = this.net.requestSync('respawn');
-    // 统一重置：客户端与服务端走同一个 Player.resetForSpawn，
-    // 不再各维护一份字段清单（客户端此前漏清 petals/_petalGen，导致重生后花瓣世代号失配）。
+    // 统一重置：客户端与服务端都走 Player.resetForSpawn，字段清单只有一份。
     p.resetForSpawn(pos);
     if (!canSync && this.net) {
       // 远端实现没有本地世界：先本地重置（位置稍后对齐），回执到了再搬到服务端指定的复活点
@@ -313,14 +312,14 @@ class Game {
         this.camera.x = p.x; this.camera.y = p.y;
       }).catch(() => {});
     }
-    this._netPos = null;                           // 旧权威坐标作废，避免复活当帧被拉回死亡点
+    this._netPos = null;                           // 作废权威坐标缓存，避免复活当帧被拉回死亡点
     this._deathShown = false;
     this._aggroCleared = false;      // 复位一次性标志：下次死亡要再清一次仇恨
     this.camera.x = p.x; this.camera.y = p.y;
     // 非本地服务端（真实网络）：走消息让服务端结算并广播。
     // 本地模拟服务端上面已经直接结算过，再发一次会多消耗一次保底次数。
     if (!pos && this.net) this.net.send({ t: 'respawn' });
-    // 仇恨豁免（兜底）：复活后再清一次，确保没有生物带着旧仇恨追杀过来
+    // 仇恨豁免：复活后再清一次，避免生物继续追击已死亡的玩家
     this._clearAggro();
 
   }
@@ -519,9 +518,8 @@ class Game {
           EntityFX.despawn(v.hornetMissile);
         }
       }
-      // 快照里没有挂载尾针（已发射 / 尾针被击碎）时，客户端视图构造阶段创建的
-      // 占位 missile 也必须一起失效 —— 否则 def.draw 会一直画一根"永远不发射"的
-      // 挂载尾针，表现为发射后还留着一根针。
+      // 快照里没有挂载尾针（已发射 / 尾针被击碎）时，视图构造阶段创建的
+      // 占位 missile 必须一起失效，否则会一直画出挂载尾针。
       if (v.hornet && e.hornetMissile == null && v.hornet.missile) {
         if (!v.hornet.missile.exiting) v.hornet.missile = null;
       }
@@ -688,10 +686,8 @@ class Game {
       // 大招进行中（蜘蛛原地自转）：它不走位，步态不会自然推进 ——
       // 腿要摆动就得补步态。补多少由 MobFX 引擎按物种声明给（与服务端口径一致）。
       MobFX.clientTick(m, dt);
-      // 碰撞外形贴图就绪后提取一次（与绘制同源）
-      // 必须走 Mob._ensureShape：它会按【本节实际贴图】(artSvg) 取轮廓。
-      // 早期这里手写了一份 'mob' + m.svg，多节生物（蜈蚣）就变成了整条 12.svg 的轮廓，
-      // 套在单节上又长又大（还会把触角算进碰撞）—— 与服务端的判定完全不是一回事。
+      // 碰撞外形就绪后提取一次（与绘制同源）。
+      // 必须走 Mob._ensureShape：它按本节实际贴图 artSvg 取轮廓。
       if (!m.shape && !m.gone) m._ensureShape();
     }
     // 退场播完的个体才真正移除（保持与其它实体一致的渐隐观感）。
@@ -736,12 +732,9 @@ class Game {
 
   // ---------- 主循环 ----------
   start() {
-    // 固定步长累加器：真实经过多少时间就模拟多少（低帧率不再"减速"）。
-    // 单帧最多补 MAX_STEPS 步并丢弃剩余，避免卡顿后"螺旋补偿"越积越多。
-    // 【MAX_STEPS 从 8 降到 3】：补 8 步意味着一帧要干 8 份模拟，本来 12ms 的步长
-    // 会膨胀成 96ms 一帧 —— 一旦掉到 8fps 就永远回不来（每帧都补满 8 步）。
-    // 上限 3 时一帧 36ms 左右，模拟时间（50ms）≈ 真实时间，帧率明显回升；
-    // 真的跟不上时表现为轻微慢放，而不是整帧卡死。
+    // 固定步长累加器：真实经过多少时间就模拟多少。
+    // 单帧最多补 MAX_STEPS 步并丢弃剩余，避免卡顿后补偿量越积越多。
+    // 上限取 3：每帧最多 3 份模拟，跟不上时表现为轻微慢放而不是整帧卡死。
     const STEP = 1 / 60, MAX_STEPS = 3;
     this._running = true;
     const loop = (ts) => {
@@ -805,8 +798,7 @@ class Game {
     }
 
     // —— 近处生物视图清单（一次扫描，三处复用）——
-    // 花瓣分离 / 玩家推挤都只需要"够近"的个体；全图 4000+ 只每帧各扫一遍是纯浪费
-    // （这三遍曾占 ~1ms/帧）。这里按玩家周围的固定半径扫一次，后面全部复用。
+    // 花瓣分离与玩家推挤都只需要"够近"的个体：按玩家周围的固定半径扫一次，后面复用。
     const near = this._nearViews || (this._nearViews = []);
     near.length = 0;
     {
@@ -822,12 +814,9 @@ class Game {
       }
     }
 
-    // 场地型实体（网）：站在网里的【本地玩家】也要挂"蛛网减速"。
-    // 状态效果不进快照，服务端那份只管权威结算；本地这份负责
-    //   ① 预测移动速度（否则本地比服务端快半拍、贴网时会被拉回）
-    //   ② 卡槽上方的状态图标（用户看到的就是它）。
-    // 蜘蛛免疫网（immuneStatus），玩家不免疫。
-    // 【唯一数据源】p.netWebs（服务端下发，玩家的网与蜘蛛的网合并成一张表）。
+    // 场地型实体（网）：站在网里的本地玩家也要挂蛛网减速。
+    // 状态效果不进快照，服务端负责权威结算；本地这份负责预测移动速度与状态图标。
+    // 蜘蛛免疫网（immuneStatus），玩家不免疫。数据源只有 p.netWebs。
     if (p && !p.dead && p.netWebs && p.netWebs.length && typeof StatusFX !== 'undefined') {
       for (const w of p.netWebs) {
         if (w.exiting) continue;
@@ -1688,8 +1677,7 @@ class Game {
     const from = drag.from;
     if (!from) return false;
     if (!target) {
-      // 拖到空白处：卡槽卡 / 副槽卡都卸下回背包画廊；背包卡留在背包（回退）
-      // 早先这里漏了 subslot 分支 -> 副槽卡拖到空白处毫无反应，表现为"无法从副槽拖出花瓣"
+      // 拖到空白处：卡槽卡 / 副槽卡都卸下回背包画廊；背包卡留在背包
       if (from.type === 'slot') return this.moveSlotToInv(from.index);
       if (from.type === 'subslot') return this.moveSubToBag(from.index);
       return false;
@@ -1726,8 +1714,7 @@ class Game {
   }
 
   // ---------- HUD / 背包 ----------
-  // （注意：这里【不能】再定义第二个 updateHUD —— 类内后定义的会覆盖前面的，
-  //  曾导致带 updatePetalShadows 的版本被顶掉、卡槽水缸阴影永远 0% 看不见。）
+  // 同类方法名只能出现一次：类内后定义的会覆盖前面的实现。
 
   syncInventory() {
     UI.renderInvBar(this.player);

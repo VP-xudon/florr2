@@ -37,9 +37,8 @@ const PETAL_ATTACK_DUR = 0.004;     // 花瓣每次命中(25Hz)按最大耐久�
 // 多节生物（一次生成整条、每一节独立结算）由数据表字段 MOB_TYPES[].segmented 声明。
 // 这里只保留唯一读取入口，不再维护 slug 白名单 —— 新增多节物种只改数据表。
 function isSegmentMob(type) { return !!(type && type.segmented); }
-// 所有花瓣使用旧版 Legendary 花瓣的固定击退质量（见 sim/constants.js）。
-// 注意别再退回 b.weight：那是实体分离用的真实重量，两者口径不同 ——
-// 混用会让花瓣"很轻却推得动怪"或者"很重却推不动"，手感直接失控。
+// 所有花瓣使用 Legendary 档的固定击退质量（见 sim/constants.js）。
+// 与 b.weight 区分：后者是实体分离用的真实重量，两者口径不同，不能混用。
 function petalWeight(b) {
   const r = (b && b.card && b.card.rarity) || 'common';
   if (typeof petalKnockbackWeight === 'function') return petalKnockbackWeight(r);

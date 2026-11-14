@@ -219,7 +219,8 @@ function createEntitySet(kind, idGen) {
     reclaim(e) {
       if (!e) return null;
       const i = a.indexOf(e);
-      if (i >= 0) { a.splice(i, 1); e._inExitSet = false; }
+      if (i >= 0) a.splice(i, 1);
+      e._inExitSet = false;
       return EntityFX.spawn(e, kind);
     },
     get length() { return a.length; },

@@ -37,9 +37,8 @@ class LocalServer {
   }
 
   // 绑定地图与玩家副本；客户端在 init 后调用一次。
-  // 注意：调用方必须已经把 ?hp=N 等调试参数应用到 playerTemplate 上，
-  // 否则服务端副本会停留在 new Player() 的默认 100 血，
-  // 而客户端每帧都用快照的 hp 覆盖自己 -> 表现为"?hp 无效、一碰就死"。
+  // 调用方必须先把 ?hp=N 等调试参数应用到 playerTemplate：
+  // 客户端每帧会用快照的 hp 覆盖自己，服务端副本的初始血量必须与之一致。
   attach(map, playerTemplate) {
     this.map = map;
     // 权威玩家副本：复用 Player 类（移动 + 花瓣 + 装填全都在），
@@ -68,8 +67,8 @@ class LocalServer {
   syncLoadout(slots, hold) {
     const p = this.player;
     if (!p || !slots) return;
-    // 换卡动画期间的"装填暂停"是客户端表现层状态，必须上行同步给权威副本；
-    // 否则服务端按真实时间继续装填、客户端还在扇形阴影里 —— 表现为"卡没转好怪就已经开始掉血"。
+    // 换卡动画期间的"装填暂停"是客户端表现层状态，必须上行同步给权威副本，
+    // 否则两端装填进度不一致。
     if (hold && p.reloadHold) {
       if (p.reloadHold.length !== hold.length) p.reloadHold = hold.slice();
       else for (let i = 0; i < hold.length; i++) p.reloadHold[i] = !!hold[i];
@@ -383,8 +382,7 @@ class LocalServer {
     const segs = [];                                     // 本链全部节（用于预置轨迹）
     // 出生摆位：带一点【随机弯曲】—— 每条链随机一个总弯曲角（±23°~±69°），
     // 再按节数均摊到每一节，所以有的个体几乎笔直、有的明显盘着。
-    // 关键：弯曲量是【总量】而不是"每节固定角" —— 早期用 0.11 rad/节时，
-    // 8 节只有 50°，45 节的超长个体却绕了一整圈（那条"无中生有的 S"就是它）。
+    // 弯曲量是总角度而不是每节固定角：后者会让长链的总弯曲随节数线性放大。
     const bendTotal = rand(0.4, 1.2) * (Math.random() < 0.5 ? -1 : 1);
     const CURVE = (n > 1) ? bendTotal / (n - 1) : 0;     // 相邻两节之间的转角(rad)
     let px = x, py = y, dir = a + Math.PI;               // dir = 由头指向尾的方向
@@ -866,9 +864,8 @@ class LocalServer {
     }
 
     // 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
-    // 【必须把坐标拉回花朵中心】：实体死亡时就地冻结，若复活时沿用旧坐标，
-    // 它会在"死掉的那个位置"（往往正贴着生物）凭空出现并立刻判定命中 ——
-    // 表现为"新装填的 light 从生物身上/背后冒出，玩家拉开距离也照样打得到"。
+    // 【必须把坐标拉回花朵中心】：死亡实体就地冻结，复活时沿用旧坐标,
+    // 会在贴身位置凭空出现并立刻判定命中。
     for (const b of p.petals) {
       if (!b.dead || !(b.respawnT > 0)) continue;
       // 内容物还活着：这个蛋的重装填被挂起（召唤物死亡时才解除）
@@ -936,22 +933,17 @@ class LocalServer {
       // 多节生物：前节已死 -> 本节升为"头"（重新跑自己的 AI 驱动它后面那整段）
       // —— 这就是【中间被打断分裂成多段】：每段由自己最前一节的 AI 控制，与有没有触角无关。
       if (m._lead && m._lead.dead) {
-        // 断链：本节立刻成为新段首 —— 【继承旧段首的仇恨表】。
-        // 少了这一步，从中间把头打断后，后半截的威胁表是空的（仇恨只记在头与被打的那一节上），
-        // 新头会一脸茫然地继续游荡；继承之后两段都会继续追打它的人。
+        // 断链：本节立刻成为新段首，并继承旧段首的仇恨表，
+        // 使两段都继续追打原来的目标。
         m.inheritThreat(m._lead);
-        // 【继承仇恨后不转向】（用户口径："如果天然继承仇恨那就继续沿着前面的路径
-        // 不转向奔向玩家"）：新段首沿打断那一刻的航向继续直行一小段时间。
-        // 旧行为是继承完立刻朝仇恨目标转身 —— 整条会先绕一大圈才扑上来。
+        // 继承仇恨后不立刻转向：新段首沿打断那一刻的航向继续直行一小段时间。
         m.keepCourse = 0.9;   // 保持航向的时长（秒）
         m.keepDir = { x: Math.cos(m.facing || 0), y: Math.sin(m.facing || 0) };
         m._lead = null;
       }
-      // 段首（没有前一节）= 这一段的新头：必须解除"被粘合"标记，否则它会一直
-      // 跳过自己的 AI/位移，整段就此冻结（表现为被打断后剩下的半条再也不动）。
+      // 段首（没有前一节）必须解除粘合标记，否则它会跳过 AI 与位移。
       m._chainLocked = !!m._lead;
-      // 位置一律由 _solveChains 沿头的【实际路径】解算，不再使用"跟随前一节"那套
-      // （跟随=被头拽着走，与轨迹法冲突，已彻底移除）。
+      // 位置一律由 _solveChains 沿头的实际路径解算。
       m._followPt = null;
       // 传入本帧醒着的个体：AI 的目标按【阵营】从"玩家 + 其它实体"里选最近的，
       // 而不是固定盯着玩家（召唤物要打敌对生物，敌对生物也会打召唤物）。
@@ -1052,9 +1044,9 @@ class LocalServer {
     }
 
     // 4b) 带 shape 的花瓣实体（Wax）：同一个 physicsPush，按【推者阵营】只改两个输入：
-    //   · 玩家阵营推：w.static=false, w.weight≈0 —— 蜡块无限轻，一碰就被推走，
-    //     玩家自己几乎不被顶开（用户口径"重量为 0"）。weight 取极小正数，因为
-    //     physicsPush 的 `weight || 1` 会把 0 当成缺省值 1。
+    //   · 玩家阵营推：w.static=false, w.weight≈0 —— 蜡块几乎无质量，一碰就被推走，
+    //     玩家几乎不被顶开。weight 取极小正数，因为 physicsPush 的 `weight || 1`
+    //     会把 0 当成缺省值 1。
     //   · 生物推：w.static=true —— inv=0，生物吃下【全部】重叠修正，蜡块纹丝不动，
     //     于是生物被硬阻挡，不可能从蜡块底下穿过去。
     //   · 蜡块 ↔ 蜡块：双方 static=false、按 weight 反质量分配，正常互相挤压。
@@ -1198,9 +1190,8 @@ class LocalServer {
       // 临时对象没有 id 的话快照里 typeId=undefined，客户端直接 continue -> 永远看不见。
       // 尺寸口径：common 的 Pollen 与玩家放出来的 Pollen 【视觉上】一样大（PETAL_ENT_SIZE），
       // 之后按【生物体型比例】MOB_DIAM[rarity] 递增 —— 由 sizeScale 一次性给出。
-      // 【除以内容占比】：生物贴图走 SpriteStore 的固定裁剪框，图形只占画布约 30%
-      //（花瓣管线 artCanvas 是按内容包围盒裁满的）。不补偿这一项，
-      // 实际画出来只有目标的一半 —— 表现为"common 太小、rare 才刚好"。
+      // 除以内容占比：生物贴图走固定裁剪框、图形只占画布约 30%，
+      // 花瓣管线 artCanvas 按内容包围盒裁满，两者坐标系不同，需换算。
       const type = Object.assign({}, POLLEN_SHOT_TYPE, {
         sizeScale: PETAL_ENT_SIZE / (PLAYER_VISUAL_D * MOB_DIAM_BASE * MOB_ART_FILL),
         rarityStats: { [m.rarity]: { hp: st.hp || 1, dmg: st.dmg || 0, armor: 0, exp: 0 } }
@@ -1587,8 +1578,8 @@ class LocalServer {
     const invP = 1 / (b.weight || 1);
     const invM = 1 / (m.weight || 1);
     const shareM = invM / ((invP + invM) || 1);
-    // 落位型实体（Wax）是【不可推动的障碍】：单帧分离上限提高到 40px，
-    // 否则生物 200px/s（8px/帧）能靠持续挤压慢慢"蹭"进蜡块里（表现为没有碰撞）。
+    // 落位型实体（Wax）是不可推动的障碍：单帧分离上限提高到 40px，
+    // 低于生物单帧位移时会靠持续挤压穿过去。
     const cap = b.anchor ? 40 : 16;
     const push = Math.min((hit.depth - PETAL_CONTACT_SKIN) * PETAL_SEP_K * shareM, cap);
     if (push > 0) { m.x -= hit.nx * push; m.y -= hit.ny * push; }
@@ -1984,16 +1975,12 @@ class LocalServer {
         hurtT: p.hurtT || 0, deathRot: p.deathRot || 0
       } : null,
       // 花瓣战斗状态：客户端不跑战斗，只按这里的 hp/hurtT/dead 做表现。
-      // 少了这一段，服务端花瓣掉血甚至碎掉，客户端都看不到（表现为"花瓣不受伤"）。
       // 一张卡可能对应多个独立实体（Light 的每个光点）：用 (slot, sub, gen) 唯一定位。
       // gen = 世代号：滞留型花瓣（Pollen / Honey）脱轨后重新装填，同一槽会同时存在多批实体。
-      // 滞留实体（放在地上的 Pollen / Honey）的【位置与速度】必须由服务端权威下发：
-      // 它们会被生物硬碰撞推挤，客户端若只按自己算的就永远停在原地 ——
-      // 表现为"生物与蜜重合"（服务端其实已经分开了，客户端看不见）。
+      // 滞留实体的位置与速度也由服务端下发：它们会被生物硬碰撞推挤。
       petals: this._snapPetals(p),
       // 场级实体（网）：玩家的网 + 蜘蛛自铺/大招的网，全部下发。
-      // 客户端只渲染这里下发的网 —— 不本地"补一张"，于是两类网共用同一套
-      // 生成 / 到期 / 退场（EntityFX）流程，蜘蛛的网也有退场动画。
+      // 客户端只渲染这里下发的网；玩家网与蜘蛛网共用同一套生成 / 到期 / 退场流程。
       webs: this._snapWebs(),
       // 全量下发：小地图要能看到全图人口（远处生物的 AI 仍由 MOB_ACTIVE_R 休眠省算力）
       ents: this._fillEnts(),
@@ -2073,9 +2060,8 @@ class LocalServer {
   }
 
   // ---- 快照里的生物数组 ----
-  // 【复用同一批对象】而不是每次 map() 造 4000+ 个新对象（25Hz 下 = 10 万+ 对象/秒，GC 拉满）。
-  // 快照是同步消费的：本地实现由客户端在本次 step 里立刻读走，远端实现会先 JSON 序列化，
-  // 两种情况下都不会有人把这份数组留到下一个快照。
+  // 复用同一批对象，避免每次快照创建数千个新对象。
+  // 快照在本步内被同步消费；远端实现会先序列化，都不会保留到下一个快照。
   _fillEnts() {
     const src = this.ents;
     const buf = this._entBuf || (this._entBuf = []);

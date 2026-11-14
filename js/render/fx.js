@@ -93,7 +93,7 @@ class DamageText {
     const pt = clamp(this.age / 0.15, 0, 1);
     const c1 = 1.70158, c3 = c1 + 1;
     const scale = 1 + c3 * Math.pow(pt - 1, 3) + c1 * Math.pow(pt - 1, 2);
-    // 末段 0.25s 加速渐隐（比旧版 0.8s 全程线性短促得多）
+    // 末段 0.25s 加速渐隐
     const alpha = clamp(this.life / 0.25, 0, 1);
     ctx.save();
     ctx.globalAlpha = alpha;

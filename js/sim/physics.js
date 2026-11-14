@@ -25,8 +25,8 @@ function _pairHit(a, b) {
   //     对方（玩家/生物）必须被这个真实多边形挡住；
   //   ② 生物轮廓（shape，随朝向旋转）；
   //   ③ 圆 vs 圆兜底。
-  // 早期把生物轮廓放在最前，于是 physicsPush(生物, 蜡块) 实际用的是
-  // "蜡块的外接圆 vs 生物轮廓"—— 圆比六边形大一圈，视觉上就是"碰撞箱比 F3 大"。
+  // 顺序不能颠倒：静态多边形的外接圆比其实际形状大一圈，
+  // 用它参与判定会让碰撞范围大于 F3 显示的轮廓。
   if (b && b.shapePoly && b.shapePoly.length >= 3 && typeof polyVsCircle === 'function') {
     // polyVsCircle 的法线是 多边形 -> 圆心(a)，即 b -> a，取反成 a -> b
     const h = polyVsCircle(b.shapePoly, b.x, b.y, b.cr || b.r || 1, a.x, a.y, a.r || 0);

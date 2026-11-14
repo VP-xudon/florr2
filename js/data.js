@@ -364,7 +364,7 @@ const MAX_MOB_RARITY_COLOR = '#d2eb34';
 //   launch                 脱轨瞬间喷射 { count 方向数, speedK 速度倍率, life 存活秒数 }
 //   sticky                 【会不会被生物"吸"过去黏在表面揉搓】。只影响吸附/落点，不影响碰撞——
 //                          所有花瓣都是实体、都和生物结算碰撞（分离 + 双向伤害），
-//                          这一项不再决定"能不能穿过去"（旧字段 solid 已废弃）。
+//                          该字段不决定"能不能穿过去"。
 //   attractMobs            把周围生物的仇恨拉到自己身上
 //   holdReloadUntilDeath   实体未死亡前卡片不重新装填
 //   noDamage               不造成伤害（只挨打）
@@ -624,8 +624,8 @@ const MOB_HOSTILITY = {
 //   A 的夹角约 30.6°（B、C 各约 74.7°），即尖端在右下方向。
 const MISSILE_TIP_ANGLE = Math.atan2(70.538 - 55, 67.096 - 55);
 // 手工校正的稀有度数值表（键 = 生物 id）。
-// registry 里部分生物是旧版数据或压根缺字段（例如 Bee 的 hp/dmg 全是错的、没有 armor），
-// 这里按官方最新口径整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
+// registry 中部分生物缺少字段或数值不完整，
+// 这里按官方数据整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
 // 只覆盖列出的稀有度，其余沿用 registry。
 const MOB_RARITY_OVERRIDES = {
   // Soldier Ant 兵蚁（id 7）：官方表逐档写实。
@@ -685,8 +685,7 @@ const MOB_RARITY_OVERRIDES = {
   },
   // Hornet 黄蜂 —— 数值【严格取自官方表 scripts/mobs_real.json（id 11）】：
   //   官方只有两列：hp 与 dmg。HP 是 x3 档（50->150->450->...->328050），
-  //   伤害是 x5 档（5->25->125->...->1953125）。两列必须各归各位 ——
-  //   旧表把官方 hp 填进了 dmg、官方 dmg 填进了 missileHp，属于整列错位。
+  //   伤害是 x5 档（5->25->125->...->1953125）。hp 与 dmg 必须各归各位。
   //   导弹（尾针）是 Hornet 的延伸，官方没单列第三组数，这里取同档的 hp/dmg
   //   （血量 = 本档 hp，命中伤害 = 本档 dmg），装填时间仍是本地设计（2->10s 递增）。
   11: {  // Hornet 黄蜂
@@ -723,7 +722,7 @@ const MOB_TRAITS = {
   // Hornet：体型同蜜蜂；血量条正常显示（hideHpBar = false）。
   //   shootCd  = 每次射击后的冷却（秒）：common 3 → super 1（等比例平滑）→ eternal 0.8
   hornet: {
-    // 直径 1.4x（用户口径）；尾针挂点与画幅都按 drawSize 等比缩放，自动跟随
+    // 直径 1.4x；尾针挂点与画幅按 drawSize 等比缩放
     sizeScale: 1.395 * 0.9 * 1.4, chaseMult: 0.95,
     shootCd: {
       common: 3.0, unusual: 2.714, rare: 2.429, epic: 2.143, legendary: 1.857,
@@ -902,10 +901,7 @@ const MOB_DROP_ITEMS = {
 //   · stinger 没有专属表 -> 沿用 MOB_DROP_TABLE（正好就是官方 Stinger 表）
 //   · pollen / honey 用下面这两张；某档稀有度没写 = 这只生物在这一档不掉这件
 const MOB_DROP_TABLE_ITEM = {
-  // Missile：Hornet 专属掉落。【它的表本来就没有 Common 档】——
-  // common 蜘蛛/蜜蜂那套"Common 59.8%"在这里不存在，最低是 Unusual。
-  // Hornet 的四件掉落【各有自己的表】，全部不走标准表（用户口径）。
-  // Missile / Magic Missile / Orange：三张完全相同 —— 最低档是 Unusual（无 Common 档）。
+  // Missile / Magic Missile / Orange：三张相同的 Hornet 专属表，最低档为 Unusual，无 Common 档。
   missile: {
     common:    [['unusual', 0.164]],
     unusual:   [['unusual', 0.512]],

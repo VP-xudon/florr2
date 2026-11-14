@@ -110,16 +110,14 @@ Object.assign(UI, {
       clearTimeout(clickTimer);
       const q = pt(e) || { x: startX, y: startY };
       if (!dragging) {
-        // —— 点击（按住 < 0.1s）：无幽灵、无放大、无形态变化 ——
-        // 但仍要播「飞入空槽」动画并正常扣数量（这两件事此前被一起弄丢了）。
+        // 点击（按住 < 0.1s）：无幽灵、无放大，但要走「飞入空槽」动画并扣数量。
         this._snap = null; this._snapPos = null; this._snapScale = null;
         this._clickFly(card, from, srcEl, (t) => { if (onClick) onClick(card, t); });
         return;
       }
       // 按住≥0.2s -> 拖拽，窗口已关闭；吸附中的槽位优先作为落点（幽灵已对齐，松手即装）
-      // 【原位松手修正】：指针几乎没动（≤6px）说明用户是想"点一下"，只是按住超过了 0.1s。
-      // 旧逻辑把它当拖拽取消 -> 幽灵飞向背包按钮（用户看到"飞向背包按钮"）。
-      // 正确行为：回滚数量、移除拖拽幽灵，用幽灵当前位置当起点走点击装备路径（飞向空槽）。
+      // 原位松手：指针几乎没动（≤6px）说明用户想点击，只是按住超过 0.1s。
+      // 此时回滚数量、移除拖拽幽灵，并以幽灵当前位置为起点走点击装备路径。
       if (from.type === 'gallery' && movedMax <= 6) {
         const ghost = this._drag;
         const gr = ghost ? ghost.getBoundingClientRect() : null;

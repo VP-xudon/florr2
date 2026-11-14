@@ -130,7 +130,7 @@ def check_contracts(scripts: list[Path]) -> None:
     game = js_dir / "game.js"
     if game.is_file():
         for ln, line in enumerate(read(game).splitlines(), 1):
-            if re.search(r"(?<![A-Za-z])fx\.\w+", line.split("//")[0]) and "FX_FIELDS" not in line:
+            if re.search(r"\.fx\.\w+", line.split("//")[0]):
                 err(f"js/game.js:{ln} 直接读了 fx 字段，必须走 FX_FIELDS 表: {line.strip()}")
 
     # 3) 模拟节奏只能有一份：SNAP_HZ / SNAP_DT 定义在 sim/constants.js，

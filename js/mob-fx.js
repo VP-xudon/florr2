@@ -48,7 +48,7 @@ const MobFX = {
       const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
     if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
     const raw = await response.text();
-    // 11.svg 顶部保留着旧版（已注释）：先剥掉，否则解析出来是空的
+    // 11.svg 顶部有一段注释，解析前先剥掉
     let source = raw;
     const cmt = source.indexOf('-->');
     if (source.trim().startsWith('<!--') && cmt >= 0) source = source.slice(cmt + 3).trim();
@@ -181,8 +181,8 @@ const MobFX = {
     if (pollen && pollen.svg != null) {
       SpriteStore.load('mobpollen', 'assets/petals/' + pollen.svg + '.svg?v=' + ASSET_VER);
     }
-    // Wax 是落位实体：首次 draw 时 artCanvas 会返回 null（异步加载），
-    // 表现为"装备后第一帧什么都不显示"。这里统一预热，保证一落地就能画出来。
+    // Wax 等落位实体的素材需要预热：artCanvas 异步构建期间返回 null，
+    // 预热可保证首次绘制即可显示。
     // 【碰撞箱只算身体】Hornet(11) / Bumble Bee(27)：把触角（stroke path）从素材里删掉，
     // 生成一份"只有中间椭圆身体"的素材，碰撞轮廓改用它 —— 触角不该撑大碰撞箱。
     for (const id of ['11', '27']) {
@@ -566,16 +566,11 @@ MobFX.register('hornet', {
   // 两者用【同一张素材、同一个尺寸、同一个尖端角】，所以观感完全连续。
   draw(ctx, mob, scale, alpha) {
     const st = mob.hornet;
-    // 【快照优先】真实游戏里客户端视图是 _applySnap 重建的：它自带的 hornet.missile
-    // 永远是"刚生成、未发射"的占位对象，如果用它就会一直画挂载尾针（发射后也不消失）。
-    // 权威状态在 mob.hornetMissile（服务端每帧下发）；只有完全没收到快照时
-    //（离屏/刚创建）才回退到占位对象。
+    // 快照优先：客户端视图自带的 hornet.missile 可能只是占位对象；
+    // 权威状态在 mob.hornetMissile（服务端每帧下发），未收到快照时才使用占位对象。
     const snap = mob.hornetMissile;
-    // 【this 陷阱】这个 draw 是 register('hornet', {...}) 的注册对象方法，
-    // MobFX.drawMob 用 def.draw(...) 调它 —— this 是 def，不是 MobFX。
-    // 之前写成 this.hornetTail 恒为 undefined -> `if (!ht) return`
-    // -> 挂载尾针【永远不画】；而发射出去的那枚由 game.js 直接调
-    // MobFX.drawMissile（不经过 def.draw）所以能看见。这正是用户看到的现象。
+    // 本方法由 MobFX.drawMob 以 def.draw(...) 调用，this 指向注册定义而不是 MobFX，
+    // 因此读取挂点要用 MobFX.hornetTail。
     const ht = MobFX.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
     // 素材尚未就绪（prepareAssets 异步）时用兜底向量，保证尾针能先画出来，
     // 素材就绪后下一帧自动用精确值覆盖；不直接 return，避免"永远不画"。
@@ -636,7 +631,7 @@ MobFX.register('hornet', {
     const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
     const spinRate = TAU * 3;
     if (st.spinPhase === 'return') {
-      // 射击完【转身面对玩家】（用户口径）：目标 = 发射角（尾针指向玩家的反方向 +π 即面对玩家）
+      // 射击后转身面对玩家：目标角 = 发射角 + π（尾针指向玩家）
       const back = MobAI._util.angNorm(wrapAngle(st.launchAngle) - mob.facing);
       const step = Math.sign(back) * Math.min(Math.abs(back), spinRate * dt);
       mob.facing = wrapAngle(mob.facing + step);

@@ -290,8 +290,8 @@ const Chat = {
       case 'help': this._help(args[0]); break;
       case 'rot-speed': this._rotSpeed(args[0]); break;
       case 'speed': this._speed(args[0]); break;              // /speed <倍数>：主人物最高移速倍率
-      // /pending crash 与 /show-coord 已移除：调试信息统一走 F3 调试屏幕
-      // （碰撞箱 / 坐标 / 移速 / 花瓣转速 / 引擎计数都在那里，见 ui/debug-screen.js）。
+      // 调试信息（碰撞箱 / 坐标 / 移速 / 花瓣转速 / 引擎计数）统一走 F3 调试屏幕，
+      // 见 ui/debug-screen.js。
       case 'print-players': this._printPlayers(); break;
       case 'unblock': this._unblock(args[0]); break;
       case 'unblock-all': this._unblockAll(); break;

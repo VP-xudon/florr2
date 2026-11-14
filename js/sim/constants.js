@@ -14,13 +14,13 @@ const MOB_WANDER_SCALE = 0.75;        // 游荡速度在基础值上再打 0.75 
 const SPIDER_CHASE_K = 1.10;
 const SPIDER_WANDER_K = 0.90;
 // Bumble Bee（被动）：S 形游荡、没有停顿；游荡速度 = 1.5× 玩家默认最高移速
-const BUMBLE_SPEED_K = 1.05;   // 1.5 × 0.7：用户要求整体降速到原来的 0.7 倍
+const BUMBLE_SPEED_K = 1.05;   // 1.5 × 0.7
 const BUMBLE_POLLEN_EVERY = 0.6;      // 每 0.6s 在尾部生一颗 Pollen
 // Hornet：完全转向后停住、把尾部实体尾针稳稳对准玩家的时间（秒）
 const HORNET_AIM_HOLD = 0.3;
-// Hornet 射击距离系数（用户要求：在原有基础距离上再放大 1.5 倍）
+// Hornet 射击距离系数
 const HORNET_RANGE_K = 1.5;
-// Hornet 尾针的位置与画幅 —— 全部来自 11.svg 的 getBBox() 实测（不是试出来的）：
+// Hornet 尾针的位置与画幅由 11.svg 的 getBBox() 推导：
 //   整体内容框  (9.47, 9.47) 90.13 × 90.13   -> 裁剪窗口边长 W = 90.13，其中心 (54.535,54.535)
 //   身体 #ffd363 (33.27,33.27) 55.24 × 55.24   -> 身体中心 (60.89, 60.89)，半径 27.62
 //   尾针 path0/1 (72.74,72.74) 26.87 × 26.87   -> 尾针中心 (86.17, 86.17)
@@ -39,9 +39,8 @@ const HORNET_RANGE_K = 1.5;
 //            窗口 38.2 -> 画进 size 画布后 = 15.7/38.2 × SIZE = 0.411 × SIZE
 //   ⇒ 中心偏移 OFF = 0.500×drawSize − 0.411×(0.2982×drawSize) = 0.377×drawSize
 // 这样 9.svg 画出来的尖端正好落在原图尖端的位置（像素实测 33px→27px 对齐）。
-// Hornet 尾针的位置/画幅【不再有常量】：prepareAssets 运行时从
-// 11.svg（尾针 bbox）与 9.svg（尖端）实测，存到 MobFX.hornetTail / missileTipBack。
-// 素材怎么改都自动跟随 —— 偏移补丁从根上移除。
+// 运行时 prepareAssets 从 11.svg（尾针 bbox）与 9.svg（尖端）解析，
+// 存到 MobFX.hornetTail / missileTipBack，素材变化会自动跟随。
 // 生物贴图的有效图形占比：SpriteStore 用固定裁剪框（不是内容包围盒），
 // 花瓣素材的内容只占画布约 30%。需要"看起来一样大"的地方（Pollen）按它反算。
 const MOB_ART_FILL = 0.30;
@@ -69,9 +68,9 @@ const PEAS_FLIGHT_T = 2.0;            // Peas 喷射后的存活时长（s）：
 // 新增物种的移速口径同理 —— 写在各自 AI 的 init 里，不再往这张常量表里堆特判。
 // 花瓣【自转】：独立于公转（绕主角的轨道运动），从实体加载好那一刻起持续、缓慢地转。
 // 绘制朝向 = 公转朝向(阵型基准) + 自转；普通花瓣则完全用自转（不再由轨道位置反推）。
-// 自转：口径是「公转 + 自转 = PETAL_SELF_TURN_T 秒一圈」。
-// 每片花瓣在【生成那一刻】按当时的公转角速度算出自己的自转速率并存死（b.selfRate），
-// 之后公转怎么变（/rot-speed、装上 Faster）都不会反过来改它 —— 这就是"不受公转影响"。
+// 自转：口径为「公转 + 自转 = PETAL_SELF_TURN_T 秒一圈」。
+// 每片花瓣在生成那一刻按当时的公转角速度算出并固定 b.selfRate，
+// 之后改变公转（/rot-speed、Faster）不会反过来修改它。
 // 不同花瓣要不同的自转速度时，在它的注册项/数据里声明 selfSpin（rad/s，优先于上式）。
 const PETAL_SELF_TURN_T = 1.5;        // 合计一圈所需秒数
 const PETAL_SELF_SPIN = 0.9;          // 兜底自转速度（rad/s，没有公转时用）
@@ -84,7 +83,7 @@ function rarityWeight(rarity) {
   return Math.pow(d / MOB_DIAM.common, 2);
 }
 // ---- 花瓣在【击退引擎】里的物理重量 ----
-// 所有稀有度的花瓣统一采用旧版 Legendary 花瓣的绝对击退质量；生物仍按 rarityWeight 分档。
+// 所有稀有度的花瓣统一采用 Legendary 档的击退质量；生物仍按 rarityWeight 分档。
 const PETAL_KB_WEIGHT_SHARE_LEGENDARY = 0.5 * Math.pow(0.05 / 0.5, 4 / 8);
 function petalKnockbackWeight() {
   return rarityWeight('legendary') * PETAL_KB_WEIGHT_SHARE_LEGENDARY;

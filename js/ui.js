@@ -20,8 +20,7 @@ function darken(color, amt) {
   return `rgb(${f(r)},${f(g)},${f(b)})`;
 }
 
-// 圆角矩形路径统一由 render/render-util.js 提供（本文件加载更早，调用发生在运行时，无前向引用问题）。
-// 这里曾有一份同算法副本，会静默覆盖后者；已删除，全项目只保留一份实现。
+// 圆角矩形路径统一由 render/render-util.js 提供：本文件加载更早，但调用发生在运行时。
 
 // 卡牌数据悬浮框整体缩放（相对 info.png 基准尺寸）
 const TIP_SCALE = 0.6;
@@ -320,7 +319,7 @@ const UI = {
     // 硬窗口风格：左下角按钮不接收键盘焦点，避免按空格（reach）误触发其默认 click /
     // 回车等，导致非主动的焦点交互（如空格开关 Mob Gallery）。鼠标点击不受影响。
     [this.refs.bagBtn, this.refs.dexBtn, this.refs.setBtn].forEach(b => { if (b) b.tabIndex = -1; });
-    // 按钮悬浮提示：原生 title 已移除，改用与卡牌同款式的 canvas 悬浮框
+    // 按钮悬浮提示：使用与卡牌同款式的 canvas 悬浮框，不用原生 title
     this._bindSimpleTip(this.refs.bagBtn, () => I18N.t('UI/Inventory/Title', 'Inventory'));
     this._bindSimpleTip(this.refs.dexBtn, () => I18N.t('UI/MobGallery/Title', 'Mob Gallery'));
     this._bindSimpleTip(this.refs.setBtn, () => I18N.t('UI/Settings/Title', 'Settings'));
@@ -995,8 +994,8 @@ const UI = {
       // —— 平滑过渡（上升/下降都要能感知）——
       // 统一用指数逼近：cur += (target - cur) * (1 - e^(-dt/τ))，帧率无关；
       // τ ≈ 0.25s 让"掉血变深 / 回血变浅"都看得见，而不是瞬间跳变。
-      // reload 扇形激活期间直接归零（扇形本身代表进度，避免两层 0.5 alpha 叠加变深，
-      // 那正是旧版"颜色略有不同"的来源）。
+      // reload 扇形激活期间血量阴影直接归零：扇形本身代表进度，
+      // 两层 0.5 alpha 叠加会变深。
       let cur;
       const prev = (cv._hpShadowSm != null) ? cv._hpShadowSm : hpTarget;
       if (active) {

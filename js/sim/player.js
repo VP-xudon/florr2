@@ -142,9 +142,8 @@ class Player {
   }
 
   // 中毒：按 StatusFX 记录的 dps 每帧连续扣血。
-  // 刻意【不走 hurt()】——它有 0.2s 受伤无敌帧，会把 DoT 吃掉大半（1 秒只剩 5 次）。
-  // 但【无敌就是无敌】：出生/召唤无敌期间不吃毒（用户口径），受伤无敌帧同样挡毒。
-  // 死亡仍走同一条 die()，所以表现/复活流程完全一致。
+  // 不走 hurt()：它有 0.2s 受伤无敌帧，会把持续伤害吃掉大半。
+  // 无敌期间不吃毒；致死仍走同一条 die()。
   _tickPoison(dt) {
     if (this.dead || typeof StatusFX === 'undefined') return;
     if (this.invuln > 0 || this.hurtInvuln > 0) return;   // 无敌不吃毒
@@ -190,7 +189,7 @@ class Player {
     this.dead = false; this.corpseT = 0; this.deathRot = 0;
     this.hurtT = 0; this.killedBy = null;
     this.hurtInvuln = 0;
-    // 状态效果一并清空：死亡重生不该继承毒伤（用户口径：死亡后毒伤清零）
+    // 状态效果一并清空：重生不继承毒伤
     if (typeof StatusFX !== 'undefined') this.status = [];
     this.poisonFx = 0;                     // 脸色/嘴型从"中毒"平滑回到正常
     this.invuln = 0; this.invulnSrc = {}; this.invulnTotal = 0; this.invulnA = 0;
@@ -375,12 +374,8 @@ class Player {
       const ns = this._netPetalFor(b);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
-      // 花瓣位置与速度【一律取服务端权威值】：客户端不再本地算花瓣运动
-      // （用户口径："客户端只从服务端接收一切需要渲染的东西，自己什么逻辑都不计算"）。
-      // 之前只有滞留型（Pollen / Honey）走权威位置，在轨/飞行中的花瓣仍由客户端本地模拟，
-      // 于是脱轨飞行的那一段两边算法不一致 —— 客户端先把它拉回轨道、服务端还在飞，
-      // 表现就是"向前飞出去，然后突然闪现回来固定"。
-      // 插值（而不是直接赋值）：快照 25Hz，直接采信会按台阶跳。
+      // 花瓣位置与速度一律取服务端权威值，客户端只负责渲染与插值。
+      // 插值而不是直接赋值：快照 25Hz，直接采信会按台阶跳变。
       if (ns.x != null) {
         // 不把坐标硬赋值过去：那样它会跟着 25Hz 的快照台阶跳 —— 被连续推挤时
         // 就是明显的"一卡一卡 / 很粘"。改为记录起终点，由每帧插值还原平滑位移。
@@ -609,15 +604,10 @@ class Player {
         }
         if (body && body.dead) { bodies.push(body); continue; }
         if (!body) {
-          // 【新实体只在服务端确实有它时才生成】。本地 reload 计时会早一两帧跑完，
-          // 那几帧里服务端还没有这片花瓣：客户端照样画出来、从生物身上飘过去，
-          // 却什么都结算不到（命中在服务端算），紧接着又会被快照的 dead 记录打碎。
-          // 实体集合以快照为唯一真相：服务端这一槽没有活着的实体 -> 先不生成。
+          // 新实体只在服务端确实有它时才生成：本地 reload 可能早一两帧跑完，
+          // 那几帧里服务端还没有这片花瓣，客户端生成出来也无法结算伤害。
           if (!this._netSlotHasLive(slotIndex)) continue;
-          // 花瓣实体重量 = 其稀有度对应的实体重量（与 Mob / Player 共用 rarityWeight 模型，
-          // 随稀有度递增：common=1 …… rare≈4 …… eternal≈249）。
-          // 注释原话就是"花瓣 = 对应稀有度重量"，但此前实体对象上根本没有这个字段，
-          // 导致所有花瓣在推挤/击退中一律视为"没有重量"——连 Eternal 蜜都被 rare 生物推着跑。
+          // 花瓣实体重量与 Mob / Player 共用 rarityWeight 模型（common=1 … eternal≈249）。
           body = { slotIndex, sub, gen, card, x: this.x, y: this.y, hp: maxHp, maxHp,
             weight: rarityWeight(card.rarity),
             // 护甲走同一张数据表（花瓣与生物同一套伤害口径：dmg - armor）
@@ -629,10 +619,9 @@ class Player {
         body.cnt = cnt;
         body.spot = (nSpot === 1) ? myBase
           : (card.type.formation ? myBase + (nSpot - 1) * 0.5 : myBase + sub);
-        // 【出生角度】= 装填完成、这一片"蹦出来"那一刻的轨道角。
-        // 喷射类（Missile）必须沿这个角度飞出：如果用 detach 那一刻的当前轨道角，
-        // 实体生成后自转已经转过一段距离 → 导弹会朝"之前的角度"斜着飞出去
-        // （用户口径："发射位置不是它加载好的时候蹦出来那个角度，而是之前的角度"）。
+        // 出生角度 = 装填完成、实体出现那一刻的轨道角。
+        // 喷射类（Missile）沿该角度飞出；若用脱轨瞬间的当前轨道角，
+        // 实体自转已经转过一段，发射方向会偏离生成位置。
         body.spawnAng = this.spin + body.spot * spotStep;
         // 出生朝向：【底边朝着花朵】= 公转角度 + 90°（素材默认"下方"指向花心），
         // 自转速率也在这里定死（见 _petalSelfRate），之后公转变化不再影响它。
@@ -709,6 +698,9 @@ class Player {
           // 绝不把半块蜡塞进墙里（这是"生成空间不足就重新加载"的落点）。
           if (body.cancelSpawn) {
             body.dead = true;
+            body.exitRot = body.selfRot || 0;
+            EntityFX.despawn(body);
+            this.petalExit.adopt(body);
             this._petalGen[slotIndex] = gen + 1;
             this.reload[slotIndex] = {
               card, age: 0,
@@ -1255,7 +1247,6 @@ class Player {
 }
 
 // 生物视觉直径 = 主角视觉直径 × 各稀有度倍率。
-// 主角绘制半径 = r×1.2 = 13.2×1.2 = 15.84 -> 视觉直径 31.68。
-// 校准（用户实测）：common = 0.65×旧值；且上一版 super 的尺寸其实是 mythic 应有的尺寸。
-// 即 mythic = 旧 ultra 倍率 = 1.9 × step_old^6，common→mythic 共 5 级均匀变化：
-// step = (mythic倍率 / common倍率)^(1/5) ≈ 1.4118，ultra/super/eternal/unique 顺势等比。
+// 主角绘制半径 = r×1.2 = 13.2×1.2 = 15.84 → 视觉直径 31.68。
+// common→mythic 按 5 级等比变化：step = (mythic 倍率 / common 倍率)^(1/5) ≈ 1.4118，
+// ultra / super / eternal / unique 顺势等比。

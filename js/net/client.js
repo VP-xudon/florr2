@@ -45,6 +45,9 @@ class LocalNet extends Net {
   connect(opts) {
     super.connect(opts);
     if (opts && opts.map) this._server.attach(opts.map, opts.playerTemplate);
+    this._snapAcc = 0;
+    this._simClock = 0;
+    this._lastSnapClock = 0;
     this._server.start();
   }
 
@@ -80,9 +83,12 @@ class LocalNet extends Net {
     if (!this._connected) return;
     this._server.step(dt);
     this._snapAcc = (this._snapAcc || 0) + dt;
+    this._simClock = (this._simClock || 0) + dt;
     if (this._snapAcc + 1e-9 >= SNAP_DT) {
-      const span = this._snapAcc;
-      this._snapAcc = Math.max(0, this._snapAcc - SNAP_DT); // 保留余量，长期平均频率等于 SNAP_HZ
+      // span = 与上一份快照的真实间隔（含累加器余量），供客户端插值使用
+      const span = this._simClock - (this._lastSnapClock || 0);
+      this._lastSnapClock = this._simClock;
+      this._snapAcc -= SNAP_DT;   // 保留余量（可为负），长期平均频率等于 SNAP_HZ
       this._deliver({ t: 'snap', snap: this._server.snapshot(span) });
     }
     // 服务端在 step 中产生的事件（聊天/伤害飘字/击杀）每步都投递，不受快照节流影响

@@ -72,19 +72,17 @@ const MobAI = {
     return def.step(ai, dt, mob, player) || { x: 0, y: 0 };
   },
 
-  // ---------------- 大招的调度已移入 MobFX ----------------
-  // 原来这里有一整套 _ultimateOf / _ultDelay / _ultimateStep，
-  // 加上"蜘蛛专属参数"散落在 mob.js / server.js / game.js 三层。
-  // 现在统一由 js/mob-fx.js 承担：新增物种的大招只要加一条 MobFX.register。
-  // 保留这两个薄封装只为兼容旧调用点（调试面板与旧代码仍在用 MobAI._util / MobAI.defs）。
+  // ---------------- 大招调度委托 MobFX ----------------
+  // 调度与物种参数统一在 js/mob-fx.js：新增物种的大招只需一条 MobFX.register。
+  // 下面两个薄封装供调试面板与 MobAI 内部读取。
   _ultimateOf(def, mob) {
     if (!def || !def.ultimate) return null;
     const probe = { type: { slug: mob && mob.type && mob.type.slug }, rarity: mob && mob.rarity };
     return MobFX.ultimateOf(probe);
   },
 
-  // 位移回馈：AI 靠它判断「这一趟走完了」。dt 一起传下去 ——
-  // 需要累计时长的 AI 不许再写死"一步 = 0.04 秒"（那是 25Hz 的旧假设）。
+  // 位移回馈：AI 靠它判断「这一趟走完了」。
+  // 需要累计时长时必须用传入的 dt，不能假设固定步长。
   notifyMoved(ai, d, mob, dt) {
     if (!ai || !mob) return;
     const def = mob.aiDef;
@@ -383,11 +381,10 @@ MobAI.register('hornet', {
   facing(ai, mob) { return mob.facing; },
 });
 
-// 召唤物（Soldier Ant）—— 由 Ant Egg 花瓣召唤出来的玩家从属。
-//   规则（用户口径）：
-//   · 离玩家超过 350px：以【1.1× 玩家速度】跟随玩家（不掉队、不乱跑）；
-//   · 距离 < 200px 或【发现了新的仇恨】（仇恨目标不是玩家）：停止跟随，转入通用 AI 作战。
-//   它和普通生物走【同一套】AI / 碰撞 / 渲染管线，只是多了一段"跟随"决策。
+// 召唤物（Soldier Ant）—— 由 Ant Egg 花瓣召唤的玩家从属。
+//   · 离玩家超过 350px：以 1.1× 玩家速度跟随；
+//   · 距离 < 200px 或仇恨目标不是玩家：停止跟随，转入通用 AI 作战。
+// 与普通生物共用同一套 AI / 碰撞 / 渲染管线，只多一段跟随决策。
 MobAI.register('soldier_ant', {
   init(mob) {
     // 【注意】通用 wander 注册项没有 init 方法 —— 直接调 MobAI.defs.wander.init(mob)
@@ -505,8 +502,8 @@ MobAI.register('spider', {
 // ============================================================================
 // 内置 AI 3：蜈蚣（centipede）—— 全程弧线，不存在任何角度突变
 //
-// 硬性规则（用户口径）：不许有「角度转向」—— 换向、追击、逃跑、撞墙，
-// 一律只能通过【连续变化的曲率】实现，连钝角/掉头也只能绕大弯。
+// 硬性规则：不存在「角度转向」—— 换向、追击、逃跑、撞墙
+// 一律通过连续变化的曲率实现，掉头也只能绕大弯。
 //
 // 做法：AI 从不直接改 heading，而是维护一个【角速度 curv】：
 //   1) 每帧先算「目标角速度」curvTarget：
@@ -528,8 +525,7 @@ MobAI.register('centipede', {
     // 最小转弯半径 = 1 倍单个体节直径：只给【追击 / 逃跑 / 避墙】这类必须回到窄口的转向用。
     // 曲率上限 = 速度 / 半径 —— 于是任何角度变化都是弧，不存在折角。
     mob.turnRadius = Math.max(16, mob.visualD || (mob.r || 12) * 2);
-    // 游荡路径 = 【大半径长弧】（用户口径）：上一版 common 的半径 = 55 × 18 = 990px，
-    // 这次整体取 0.6 倍 -> 55 × 18 × 0.6 = 594px（下限 900 × 0.6 = 540px）。
+    // 游荡路径 = 大半径长弧：半径 = 10.8 × turnRadius，下限 540px；
     // 稀有度越高体型越大（turnRadius ∝ visualD），弧半径随之等比变大。
     // 曲率 = 游荡速度 / 半径；半径越大，同样速度下轨迹越平缓。
     mob.arcRadius = Math.max(540, mob.turnRadius * 10.8);
@@ -617,8 +613,8 @@ MobAI.register('centipede', {
         ai.arcHold = ai.arcT + rand(6, 12);
       }
       if (!ai.arcHold || ai.arcT >= ai.arcHold) {
-        // 换弯间隔远大于旧值（2.5~5s）：半径 900px 时一次只弯 20~40°，
-        // 观感是"沿着一段很长的弧慢慢走"，而不是左右摆动的 S 形。
+        // 换弯间隔 8~16s：半径 900px 时一次只弯 20~40°，
+        // 轨迹是长弧而不是左右摆动的 S 形。
         ai.arcHold = ai.arcT + rand(8, 16);
         ai.arcSign = -ai.arcSign;
       }
