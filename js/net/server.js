@@ -752,7 +752,7 @@ class LocalServer {
             const jEnd = Math.min(cn, i + WINDOW + 1);
             for (let j = i + 2; j < jEnd; j++) {
               const mj = chain[j];
-              // 严格相切：不允许任何一对非相邻节重叠（旧值 0.98 允许 2% 重叠）
+              // 严格相切：非相邻节之间保留 0.2% 间隙，不允许重叠
               const minD = (ri + rad[j]) * 1.002;
               let dx = mj.x - mi.x, dy = mj.y - mi.y;
               const d2 = dx * dx + dy * dy;

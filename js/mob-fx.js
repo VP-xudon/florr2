@@ -310,11 +310,6 @@ const MobFX = {
     return applied;
   },
 
-  // 兼容旧签名（挂载态）
-  hitMissile(mob, damage) {
-    return this.hurtStinger(mob, mob && mob.hornet && mob.hornet.missile, damage);
-  },
-
   // 尾针在【世界坐标】里的位置与朝向（唯一来源：绘制 / 服务端 tick / F3 全用它）。
   // 做法：把素材里"贴图中心 -> 尾针中心"这个【向量】按精灵自身的旋转角旋转。
   //   · 精灵旋转角 = facing + artRot（与 drawMob 画本体时完全同一个角）

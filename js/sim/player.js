@@ -397,6 +397,7 @@ class Player {
         // 坐标同样拉回花朵中心：否则它会从"死亡处"（可能正贴着生物）原地冒出，
         // 看起来就像从生物身上突然出现、而不是从花瓣中心飞出去。
         b.dead = false;
+        b.hp = b.maxHp;
         this.petalExit.reclaim(b);
         b.x = this.x; b.y = this.y;
         b.vx = 0; b.vy = 0;

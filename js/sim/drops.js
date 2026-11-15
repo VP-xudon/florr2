@@ -84,7 +84,6 @@ class DropCard {
     this.fly = 0;            // 0 = 停留；0~1 = 正在飞向玩家（同时缩小）
     this.sx = 0; this.sy = 0;
     this.picked = false;     // 是否已被玩家捡走（到期自然消失 = false）
-    this.awarded = false;    // 是否已经入包（防止回收那一帧重复发放）
     // 掉落概率（0~1）：由 rollMobDrops 带上，用来决定持续粒子喷多久。
     this.chance = (chance == null) ? null : chance;
     this.sparkT = 0;         // 持续粒子的发射计时
