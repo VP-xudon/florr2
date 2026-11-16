@@ -385,6 +385,11 @@ class Player {
           b.nBlend = 0;
         }
         b.vx = ns.vx || 0; b.vy = ns.vy || 0;
+        // 飞行朝向跟随同步后的速度：vx/vy 已由服务端权威回填，
+        // 避免"飞行方向与运动方向不一致"导致的导弹歪斜 / 空中转向。
+        if (b.flightRot != null && (b.vx || b.vy)) {
+          b.flightRot = Math.atan2(b.vy, b.vx) - MISSILE_TIP_ANGLE;
+        }
       }
       // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
       if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
@@ -795,12 +800,8 @@ class Player {
       // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
       // 不再跟随轨道、也不参与生物吸附（它就"放在地上"）。
       if (b.stationary) {
-        // Peas 喷射中：保持【匀速直飞】，不做阻尼衰减、也不采信服务端位置插值
-        //（服务端不跑这套飞行，采信插值会被拉回原地 = "一按空格就消失"）。
-        // 飞行期间实体照常存在，因此碰撞/受伤/结算伤害都走正常链路，2s 后强制移除。
         const flight = PetalFX.flightOf(b);
         if (flight) {
-          if (flight.spinRate) b.flightSpin = (b.flightSpin || 0) + flight.spinRate * dtc;
           // 注意：b.life 已在上面的"滞留实体"循环（_syncPetals 开头）每帧 +dt，
           // 这里再加一次会让存活时长减半 —— 绝不重复累加。
           if (b.life >= (flight.life || PEAS_FLIGHT_T)) {
@@ -810,6 +811,10 @@ class Player {
             this._killPetalBody(b);
             continue;
           }
+          // 飞行花瓣（Missile / Peas / Web）：按服务端下发的 vx/vy 匀速直飞，
+          // 客户端与服务端速度口径一致，位置自然对齐，不再覆盖插值（避免 25Hz 快照
+          // 导致的逐帧位置跳变 / 闪现）。无服务端数据时回退到本地惯性预测。
+          if (flight.spinRate) b.flightSpin = (b.flightSpin || 0) + flight.spinRate * dtc;
           // inertia：与 Pollen 同款"阻尼滑行 -> 停住"（Web 落地前就是这样滑一小段），
           // 而不是 Peas 那种"匀速直飞"。
           if (flight.inertia) {

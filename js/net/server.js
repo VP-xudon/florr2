@@ -1301,7 +1301,10 @@ class LocalServer {
         const rr = PETAL_R + radius;
         if (dx * dx + dy * dy > rr * rr) continue;
         const stats = petalStatsFor(b.card.type, b.card.rarity);
+        if (b.hp == null) { b.hp = b.maxHp = (stats.hp || 30); }
         const incoming = this._dmg(PetalFX.damageOf(b, owner, p, stats.dmg), projectile.armor || 0);
+        const toPetal = this._dmg(projectile.dmg || 0, b.armor);
+        if (toPetal > 0) { b.hp -= toPetal; EntityFX.hurt(b); }
         if (incoming > 0) {
           const applied = Math.min(incoming, projectile.hp);
           projectile.hp -= applied;
@@ -1314,6 +1317,8 @@ class LocalServer {
             break;
           }
         }
+        b.hp -= b.maxHp * PETAL_ATTACK_DUR;
+        if (b.hp <= 0) { this._destroyPetal(b); continue; }
       }
       if (projectile.dead || projectile.exiting) continue;
       const dx = p.x - projectile.x, dy = p.y - projectile.y;
