@@ -90,15 +90,20 @@ class Mob {
     // 所以这里给一个贴图级默认（身体节），绝不回落到 mob12。
     if (!this.artSvg && type.segmented) this.artSvg = '12_b';
     if (!this.artSvg && typeof MobFX !== 'undefined') this.artSvg = MobFX.artSvgOf(this);
-    // 贴图朝向补偿：优先按【实际用的贴图】查（蜈蚣头 12_h / 身 12_b 可分别调整），
-    // 取不到再按物种 id（12）查。
-    this.artRot = MOB_ART_ROT[String(this.artSvg || this.svg)] || MOB_ART_ROT[svgKey] || 0;
+    // 贴图朝向补偿：按【实际用的贴图】取（sim/mob-shape.js 的 mobArtRot，
+    // 未登记例外的贴图一律走通用默认 +135°）。
+    this.artRot = mobArtRot(this.artSvg || this.svg);
     this.seed = (Math.random() * 0x7fffffff) | 0;
     this.dots = (svgKey === '3') ? this._makeDots() : null;   // 瓢虫：程序化随机斑点
     this.hostility = (rs && rs.hostility) || type.hostility || 'neutral';   // 仇恨按稀有度（瓢虫 common/unusual 被动、rare+ 中立）
     // 阵营：'enemy' = 普通生物（默认）；'player' = 玩家阵营的召唤物（Ant Egg 的内容物）。
     // AI 的目标按阵营选取，见 _pickTarget —— 不再一律盯着玩家。
     this.faction = 'enemy';
+    // 跟随型（召唤物）：数据表声明了 follow 才有，行为和普通生物完全一样，
+    // 只是多一个"离领队太远就回去"的属性（实现在 ai.js 的通用 wander 里）。
+    this.follow = type.follow || null;
+    this.followEnt = null;      // 领队实体（由服务端在生成时挂上）
+    this.following = false;     // 迟滞状态：是否正在返回
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
     this.lastHitByPlayer = new Map();   // 每只生物分别记录各玩家最近一次实际非毒单击伤害
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
@@ -199,6 +204,9 @@ class Mob {
   // "尾巴"按【当前】形态判断（后面没有活着的节），所以断了半截之后新露出的尾节同样适用。
   noteThreat(src, amount) {
     if (!src || this.hostility === 'passive') return;
+    // 同阵营不记仇：召唤物绝不恨自己的主人，同一方的召唤物之间也互不算账。
+    // （阵营就是实体上的一个属性，这里只是通用规则，没有任何物种特判。）
+    if ((src.faction || 'enemy') === (this.faction || 'enemy')) return;
     if (this.segIdx != null && (!this._next || this._next.dead)) return;
     this._addThreat(src, amount);
     if (this.segIdx != null) {
@@ -444,7 +452,7 @@ class Mob {
       const artSvg = MobFX.artSvgOf(this);
       if (artSvg && artSvg !== this.artSvg) {
         this.artSvg = artSvg;
-        this.artRot = MOB_ART_ROT[String(artSvg)] || this.artRot || 0;
+        this.artRot = mobArtRot(artSvg);
         this.shape = this.hull = null;
       }
     }
@@ -637,6 +645,8 @@ class Mob {
       } else {
         drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null);
       }
+      // 物种自绘的叠加层（引擎只问 MobFX，不认识具体物种）：兵蚁的翅膀/小牙摆动走这里。
+      if (typeof MobFX !== 'undefined') MobFX.drawOver(ctx, this);
       // 瓢虫随机斑点：与本体同变换（旋转/缩放/透明度），受击由整体红色滤镜统一表现。
       // clip 在红色鞘翅内圈（0.48×drawSize），保证圆点永远不越界到圈外；
       // 画完后把独立的描边圈图层盖回最上层 -> 圆点压在描边之下。
@@ -665,33 +675,13 @@ class Mob {
           ctx.restore();
         }
       }
-      // 受伤红色滤镜（0.3s）：红色剪影覆盖本体，随剩余时间渐隐。
-      // 瓢虫的描边圈是独立图层，单独补一层红色剪影，保证整个外观都被盖住。
+      // 受伤红闪（0.3s）：画的就是【碰撞箱形状】（多边形轮廓，没有轮廓才退回半径圆），
+      // 和判定/技能/调试箱同一份数据，所以永远与看到的碰撞箱对齐、永不偏球。
       if (this.hurtT > 0 && !this.dead) {
         ctx.save();
         ctx.rotate(rot);
-        const ra = EntityFX.hurtAlpha(this);
-        // 步态生物（蜘蛛）用【无腿身体】的红剪影：腿的红色由矢量描边自己承担
-        const rc = SpriteStore.artRedCanvas(keyBody, this.drawSize);
-        if (rc) {
-          // 红闪必须和本体用【同一个旋转轴心位移】，三条绘制路径同源。
-          const pv = SpriteStore.mobPivot(keyBody);
-          ctx.globalAlpha *= ra;
-          ctx.drawImage(rc,
-            -this.drawSize / 2 - pv.x * this.drawSize,
-            -this.drawSize / 2 - pv.y * this.drawSize,
-            this.drawSize, this.drawSize);
-        }
-        if (this.dots && this.dots.length) {
-          const rr = SpriteStore.redCanvas(LADYBUG_RING_KEY, 512);
-          if (rr) {
-            const R = LADYBUG_RING_RECT;
-            ctx.globalAlpha *= ra;
-            ctx.drawImage(rr,
-              (R[0] - 0.5) * this.drawSize, (R[1] - 0.5) * this.drawSize,
-              R[2] * this.drawSize, R[3] * this.drawSize);
-          }
-        }
+        EntityFX.drawHurtShape(ctx, this, 0, 0,
+          (this.shape && this.shape.pts) || null, this.drawSize, this.r);
         ctx.restore();
       }
       ctx.restore();

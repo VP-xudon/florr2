@@ -21,33 +21,21 @@ const MOB_DIAM = (function () {
 // 体型倍率已迁到数据表（data.js 的 MOB_TRAITS.sizeScale），Mob 构造时读 type.sizeScale。
 // 本文件只负责"给定尺寸后如何算轮廓"，不再持有物种名单。
 
-// 贴图朝向补偿：部分生物 SVG 的「头」不指向 +x（瓢虫的头在图内指向左上 -135°）。
+// 贴图朝向补偿：项目使用的生物素材统一按 florr.io 口径绘制，头朝【左上 45°】（= -135°）。
 // 绘制与碰撞统一在 facing 上加这个偏角，使头始终朝向实际移动方向。
-const MOB_ART_ROT = {
-  '3': Math.PI * 3 / 4,       // 瓢虫：头中心在图内朝 -135°，补偿 +135°
-  '4': Math.PI * 3 / 4,       // 蜜蜂：尾针在右下角(76.8,76.8)，头同样朝左上，补偿相同
-  '11': Math.PI * 3 / 4,      // Hornet：头部朝向与蜜蜂一致
-  '11_empty': Math.PI * 3 / 4,   // 去掉尾针后的本体（同一张图，同一补偿）
-  '11_body': Math.PI * 3 / 4,
-  // 蜈蚣（含头节 12_h / 身体节 12_b，两张同朝向）：
-  // 侧面那两个黑点是【脚】，分列左右两侧 -> 前方垂直于它们的连线，也就是贴图的"上方"。
-  // 旋转 +90° 把贴图的上方(0,-1) 转到 +x，使前方与 facing 对齐。
-  // 若实际是【倒着走】（头朝后），把这里改成 -Math.PI / 2 即可，只改这一个数。
-  // 蜈蚣贴图（12_h 头 / 12_b 身）的图形朝【左上 45°】（= -135°），与瓢虫一致，
-  // 所以补偿 +135° 把"前方"转到 +x。
-  '12': Math.PI * 3 / 4,
-  '12_h': Math.PI * 3 / 4,
-  '12_b': Math.PI * 3 / 4,
-  // 蜘蛛：头在图内朝【左上 45°】（= -135°，与瓢虫/蜜蜂/蜈蚣一致），补偿 +135°
-  '21': Math.PI * 3 / 4,
-  // Bumble Bee：整套生物素材统一口径，头同样朝【左上 45°】，补偿 +135°
-  '27': Math.PI * 3 / 4,
-  // Soldier Ant（Ant Egg 的内容物）：同整套生物素材口径，头朝左上 45°，补偿 +135°。
-  // 没有这一条时 artRot=0，画出来的头永远偏在素材原始方向上 —— 表现就是"没有头朝前"。
-  '7': Math.PI * 3 / 4,
-  // Bumble Bee 尾部产出的 Pollen（球状，无头，保持 0）—— 显式登记避免漏补
-  'pollen': 0,
+// 【通用规则，不逐个物种登记】：所有生物贴图默认补偿 +135°；
+// 只有素材本身没有方向（或方向不同）的贴图才进例外表。
+const MOB_ART_ROT_DEFAULT = Math.PI * 3 / 4;
+const MOB_ART_ROT_EXCEPT = {
+  pollen: 0,   // Bumble Bee 尾部产出的 Pollen（球状，无头）
 };
+// 按【实际使用的贴图 key】取朝向补偿（蜈蚣头 12_h / 身 12_b、蜂 11_empty 等）。
+// 未登记例外的贴图一律走默认值，新增物种不需要再补表。
+function mobArtRot(key) {
+  if (key == null) return MOB_ART_ROT_DEFAULT;
+  const v = MOB_ART_ROT_EXCEPT[String(key)];
+  return (v != null) ? v : MOB_ART_ROT_DEFAULT;
+}
 // 瓢虫描边圈独立图层（assets/entities/3_ring.svg，main.js 预加载）：
 // 渲染专用的生物素材统一放在 assets/entities/，assets/mobs/ 只存原始贴图。
 // 绘制顺序 = 本体(无圈) -> 随机圆点 -> 描边圈，圆点永远压在圈的下面。

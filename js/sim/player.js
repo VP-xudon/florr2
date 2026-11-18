@@ -75,7 +75,7 @@ class Player {
     //   reach   ：Third Eye → reach 模式的花瓣外伸距离
     //   sight   ：Antennae  → 视野放大比例，相机缩放 = 1/(1+sight)
     // 花瓣的 type.spd 只描述花瓣自身飞行速度，不参与玩家移速。
-    let rotBonus = 0, reachBonus = 0, sightBonus = 0;
+    let rotBonus = 0, reachBonus = 0, sightBonus = 0, healBonus = 0;
     const seenType = Object.create(null);
     this.slotActive = [];        // 每格是否生效（不可堆叠花瓣的重复件为 false）
     this.accessories = [];       // 装备型饰品：不进入轨道，直接画在人物身上
@@ -94,6 +94,7 @@ class Player {
         rotBonus += b.rotSpeed || 0;
         reachBonus += b.reach || 0;
         sightBonus += b.sight || 0;
+        healBonus += b.healBonus || 0;      // Healing Bonus（Basil）：同类可叠加，求和
       }
       if (p.type.accessory) this.accessories.push({ card: p, slot: i });
     }
@@ -106,6 +107,8 @@ class Player {
     this.reachBonus = reachBonus;
     // 视野放大（Antennae）：0 = 正常视野。相机缩放 = 1/(1+sight)（看得更远）。
     this.sightBonus = sightBonus;
+    // 回血增幅：给 PetalFX.ctx.heal 用（最后结算，只乘一次）
+    this.healBonus = healBonus;
   }
 
   // 受击结算：返回本次是否真正扣血（护甲已在调用方扣减），
@@ -331,24 +334,30 @@ class Player {
   // 保证同帧就能看到掉血/碎裂。
   // 主键 = (槽位, 子序号, 世代号)：一张卡可能对应多个独立实体（Light 的每个光点），
   // 滞留型花瓣（Pollen/Honey）还会同时存在多批（地上的 + 轨道上的）。
-  // 【兜底】世代号是客户端/服务端各自维护的计数器（脱轨那一刻 +1），两者差一个 tick 就会永久错位；
-  // 错位后按 key 永远匹配不到 -> hp/dead 全都不下发 -> 表现成"花瓣永远不受伤、也不会碎"。
-  // 所以按 key 找不到时，退化成 (槽位, 子序号) 唯一匹配，并把世代号对齐到服务端。
-  _netPetalFor(b) {
+  // 【兜底】世代号是客户端/服务端各自维护的计数器（脱轨那一刻 +1），滑动窗口里可能差一拍：
+  // 按 key 匹配不到时，退化成 (槽位, 子序号) 的唯一记录。
+  // 关键约束：兜底【不许改写实体自己的 gen】。同一张卡的两代实体同时在场（旧导弹还在飞、
+  // 新导弹刚出膛）时，把新实体"对齐"到旧记录的世代号会让两者共用一个键 ——
+  // 之后一条记录同时喂给两个实体（速度/位置/存活被同一份覆盖），表现就是
+  // "两发导弹叠成一发飞、只剩一个能看见、方向还乱"。
+  // 所以兜底只认【本帧还没被其它实体按精确键认领】的那一条记录（claimed 由调用方逐帧清空）。
+  _netPetalFor(b, claimed) {
     const np = this.netPetals;
     if (!np) return null;
     const sub = b.sub || 0, gen = b.gen || 0;
     const key = petalNetKey(b.slotIndex, sub, gen);
-    let hit = np.get(key);
-    if (hit) return hit;
-    // 世代号两端可能相差一拍：同槽同子号只有唯一记录时退化匹配。
-    let one = null, n = 0;
-    for (const [, x] of np) {
+    const exact = np.get(key);
+    if (exact) { if (claimed) claimed.add(key); return exact; }
+    // 退化成"同槽同子号的唯一未认领记录"：多于一条就不猜（宁可不更新）。
+    let one = null, oneKey = null, n = 0;
+    for (const [k, x] of np) {
       if (!x || x.slot !== b.slotIndex || (x.sub || 0) !== sub) continue;
-      n++; one = x;
-      if (n > 1) return null;      // 同槽同子号有多代 -> 不敢猜，宁可不更新
+      if (claimed && claimed.has(k)) continue;
+      n++; one = x; oneKey = k;
+      if (n > 1) break;
     }
-    if (one && one.gen != null) b.gen = one.gen;   // 对齐世代号，下一帧就能命中
+    if (n !== 1) return null;
+    if (claimed) claimed.add(oneKey);
     return one;
   }
 
@@ -370,8 +379,11 @@ class Player {
 
   _applyNetPetalStates() {
     if (!this.netPetals) return;
+    // 一条快照记录只能喂给一个实体：记下本帧已被认领的键（见 _netPetalFor）。
+    const claimed = this._netClaimed || (this._netClaimed = new Set());
+    claimed.clear();
     for (const b of this.petals) {
-      const ns = this._netPetalFor(b);
+      const ns = this._netPetalFor(b, claimed);
       if (!ns) continue;
       b.hp = ns.hp; b.maxHp = ns.maxHp;
       // 花瓣位置与速度一律取服务端权威值，客户端只负责渲染与插值。
@@ -385,11 +397,7 @@ class Player {
           b.nBlend = 0;
         }
         b.vx = ns.vx || 0; b.vy = ns.vy || 0;
-        // 飞行朝向跟随同步后的速度：vx/vy 已由服务端权威回填，
-        // 避免"飞行方向与运动方向不一致"导致的导弹歪斜 / 空中转向。
-        if (b.flightRot != null && (b.vx || b.vy)) {
-          b.flightRot = Math.atan2(b.vy, b.vx) - MISSILE_TIP_ANGLE;
-        }
+        // 飞行朝向不在这里写：实体推进里每帧由速度统一重算（唯一一处）。
       }
       // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
       if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
@@ -487,6 +495,8 @@ class Player {
     if (!mobs || !mobs.length) return;
     // 没有碰撞箱的实体（Web 落地后的那张网）：只是"一块场地"，不参与任何分离
     if (b.noCollide) return;
+    // 穿透型花瓣（Glass）：没有碰撞箱，直接穿过生物
+    if (b.card && b.card.type && b.card.type.noPush) return;
     for (const m of mobs) {
       if (!m || m.dead) continue;
       // 先用【轮廓外接圆】做一次廉价排除：nearMobs 是按"吸附范围"筛的，比真实接触范围大一圈，
@@ -596,7 +606,8 @@ class Player {
       // 例外：【阵型型】（Stinger / Peas）不均分 —— 每个子实体就是给出的"单个体"数值
       // （如 Peas 单球 5 血；卡面按【合并口径】显示合计 20，见 PETAL_STAT_DISPLAY），
       // 否则会被除以 N 变成 1.25，完全失真。
-      const cardHp = st.hp || 30;
+      // 没有血量的花瓣（Glass）：实体也没有 hp（打不碎），不能走 "hp 缺失就补 30" 的回退
+      const cardHp = st.hp > 0 ? st.hp : (card.type.noHealth ? 0 : 30);
       const maxHp = (cnt > 1 && !card.type.formation) ? cardHp / cnt : cardHp;
       const gen = this._petalGen[slotIndex] | 0;
       for (let sub = 0; sub < cnt; sub++) {
@@ -625,10 +636,6 @@ class Player {
         body.cnt = cnt;
         body.spot = (nSpot === 1) ? myBase
           : (card.type.formation ? myBase + (nSpot - 1) * 0.5 : myBase + sub);
-        // 出生角度 = 装填完成、实体出现那一刻的轨道角。
-        // 喷射类（Missile）沿该角度飞出；若用脱轨瞬间的当前轨道角，
-        // 实体自转已经转过一段，发射方向会偏离生成位置。
-        body.spawnAng = this.spin + body.spot * spotStep;
         // 出生朝向：【底边朝着花朵】= 公转角度 + 90°（素材默认"下方"指向花心），
         // 自转速率也在这里定死（见 _petalSelfRate），之后公转变化不再影响它。
         if (body.selfRot == null) {
@@ -823,6 +830,12 @@ class Player {
             if (Math.abs(b.vx) < 1 && Math.abs(b.vy) < 1) { b.vx = 0; b.vy = 0; }
           }
           if (b.vx || b.vy) this._resolvePetal(b, (b.vx || 0) * dtc, (b.vy || 0) * dtc);
+          // 飞行朝向：声明了素材尖端角的花瓣（Missile）朝向【每帧由速度唯一决定】——
+          // 不等快照、也不会因为被弹开/偏转而留下旧朝向（那就是"看起来在平移"）。
+          if (b.flightRot != null && (b.vx || b.vy)) {
+            const tip = (typeof PetalFX !== 'undefined') ? PetalFX.artTip(b.card && b.card.type) : null;
+            if (tip != null) b.flightRot = Math.atan2(b.vy, b.vx) - tip;
+          }
           continue;
         }
         // 落位型实体（Wax）：自己就"长"在原地，不采信服务端位置插值
@@ -889,7 +902,10 @@ class Player {
       const ang = this.spin + (b.spot || 0) * spotStep;
       let tx = this.x + Math.cos(ang) * reach;
       let ty = this.y + Math.sin(ang) * reach;
-      if (b.card.type.orientOutward) b.selfRot = ang - MISSILE_TIP_ANGLE;
+      // 尖端朝外（Missile 公转时）：尖端角同样只问 PetalFX，不在这里引特定素材的常量。
+      if (b.card.type.orientOutward) {
+        b.selfRot = ang - ((typeof PetalFX !== 'undefined' ? PetalFX.artTip(b.card.type) : null) || 0);
+      }
       // 引擎钩子：花瓣可以微调自己的"应到位置"（Faster 的活泼飘动走这里）
       if (typeof PetalFX !== 'undefined' && PetalFX.orbitOffset) {
         if (!this._wob) this._wob = { x: 0, y: 0 };
@@ -1045,12 +1061,16 @@ class Player {
   _drawPetalEntity(ctx, b, exitMode) {
     if (!b) return;
     const svg = b.svg || (b.card && b.card.type ? b.card.type.svg : null) || null;
-    const size = b.artSize || PETAL_ENT_SIZE;
+    // 绘制直径：与卡面同一套比例（素材窗口 / Basic 参考窗口）。
+    // 窗口尺寸由素材实测得出（素材未就绪前拿不到），所以下面在【拿到画布之后】再取值。
+    const entSize = () => ((b.artSize != null) ? b.artSize
+      : ((typeof CardRenderer !== 'undefined' && CardRenderer.entityArtSize)
+        ? CardRenderer.entityArtSize(svg, PETAL_ENT_SIZE) : PETAL_ENT_SIZE));
     if (b.anchor) {
       // 落位型实体（Wax）：直径 = 2×radius、不旋转、按自己的外形闪红
       EntityFX.draw(ctx, b, (c) => {
         const img = svg ? (CardRenderer.artImage(svg) || CardRenderer.artCanvas(svg, 256)) : null;
-        if (img) drawPetalArt(c, img, size, 0, 0, 0, 1, null);
+        if (img) drawPetalArt(c, img, entSize(), 0, 0, 0, 1, null);
         EntityFX.drawHurtPoly(c, b, 0, 0, b.shapePoly, (b.cr || PETAL_R));
       });
       return;
@@ -1069,14 +1089,29 @@ class Player {
     const so = b.card && b.card.type ? b.card.type.spinOrigin : null;
     EntityFX.draw(ctx, b, (c) => {
       const cv = svg ? CardRenderer.artCanvas(svg, 128) : null;
+      // 拿到画布 = 素材已就绪 => 实体窗口也已实测出来，尺寸可以取准。
+      const size = entSize();
       // 子体尺寸同样乘 k（与卡面一致，k 一处修改两边同时生效）
       if (cv) {
         drawPetalArt(c, cv, size * (b.formK != null ? b.formK : 1), 0, 0, rot, 1, null,
           so ? so.x : 0, so ? so.y : 0);
       }
-      // 花瓣受伤红色滤镜（0.3s，全体实体通用时长；强度/时长来自引擎）
-      EntityFX.drawHurt(c, b, 0, 0, size / 2);
+      // 花瓣受伤红闪：与生物同一个入口，画【碰撞箱形状】——
+      // 落位实体（Wax）有碰撞多边形，就填多边形；普通花瓣的碰撞箱本来就是圆（cr），就填圆。
+      EntityFX.drawHurtShape(c, b, 0, 0, b.shapePoly || null,
+        b.cr || 0, b.cr || size / 2);
     });
+  }
+
+  // 图层高于生物的花瓣（Glass）：Player.draw 里跳过它们，由 game.render 在生物与
+  // 主角都画完之后调用这里补一遍 —— 于是它们永远压在所有生物之上（与生物一样高）。
+  drawOverMobs(ctx) {
+    if (this.dead) return;
+    for (const b of this.petals) {
+      if (b.dead || b.fxActive) continue;
+      const t = b.card && b.card.type;
+      if (t && t.overMobs) this._drawPetalEntity(ctx, b, false);
+    }
   }
 
   draw(ctx) {
@@ -1089,6 +1124,8 @@ class Player {
     // 花瓣实体：入场/退场统一由 EntityFX 施加（特效驱动的延后到主角之后再画）
     for (const b of this.petals) {
       if (b.fxActive || b.dead) continue;
+      // 图层在生物之上的花瓣（Glass）留给 drawOverMobs，不在这一层画
+      if (b.card && b.card.type && b.card.type.overMobs) continue;
       this._drawPetalEntity(ctx, b, false);
     }
     // 被卸下/移除/碎裂的花瓣：留原地播放通用退场（放大 + 渐隐），播完由 petalExit 回收。
@@ -1167,7 +1204,8 @@ class Player {
     this._drawAccessories(ctx, R);
 
     // 受伤红色滤镜：时长与曲线来自实体引擎，只有"花朵本体比花瓣淡一点"这一处自带强度。
-    EntityFX.drawHurt(ctx, this, this.x, this.y, R, PLAYER_HURT_A);
+    // 花朵本体的碰撞箱就是一个圆（R），所以红闪也是这个圆
+    EntityFX.drawHurtShape(ctx, this, this.x, this.y, null, 0, R, PLAYER_HURT_A);
     // 无敌光晕：淡白色、平滑闪烁（每秒 INVULN_PULSE_HZ 下），进入与退出都有淡入淡出包络。
     // 与受伤红闪/白闪互不干扰：三者 alpha 叠加，视觉上仍是"很淡地一闪一闪"。
     if (this.invulnA > 0.002) {

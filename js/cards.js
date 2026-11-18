@@ -78,6 +78,16 @@ const CardRenderer = (function () {
   const PETAL_ENT_REF = [32.858, 32.858];      // Basic 内容包围盒（离线实测常量）
 
   const _bb = {};    // svgId -> [x, y, w, h] | null（离屏 getBBox 实测内容包围盒）
+  // 实体绘制直径：素材窗口相对 Basic 参考窗口的比例 × 基准直径。
+  // 世界与卡面用的是【同一套以 Basic 为基准的比例】（卡面窗口 79.38 / 实体窗口 32.86），
+  // 所以卡面上占多大比例，世界里就占多大；不再一律塞进同一个方框（否则素材大的一律缩水）。
+  function entityArtSize(svgId, base) {
+    const w = _entWin[svgId];
+    if (!w) return base;
+    const ref = Math.max(PETAL_ENT_REF[0], PETAL_ENT_REF[1]) || 1;
+    const k = Math.max(w[2], w[3]) / ref;
+    return base * (k > 0 ? k : 1);
+  }
   // 实测 SVG 内容包围盒（含 <g transform> 的整体范围）。
   function measureBox(svgId, svgText) {
     if (_bb[svgId] !== undefined) return _bb[svgId];
@@ -124,7 +134,7 @@ const CardRenderer = (function () {
   //   1 -> 单个居中
   //   2 -> 平行并排，中间留缝，不越出卡面
   //   3 -> 三角形
-  //   4 -> 正方形（Ant Egg），间距与 2/3 一致，不越出卡面
+  //   4 -> 正方形（4 点环，Ant Egg）—— 与 5/6 同一个 lightRing 生成器，只是环上 4 个方向
   //   5 -> 五边形紧贴，中心留空
   //   6 -> 更紧贴、轻微交叠，逐个叠压（风车感）
   function lightRing(n, r, k, start) {
@@ -144,6 +154,11 @@ const CardRenderer = (function () {
       { x: -0.537, y: 0.31, k: 0.85 },
       { x: 0.537, y: 0.31, k: 0.85 }
     ],
+    // 4（Ant Egg）：与 5/6 同一个环生成器。
+    // 两个系数都取【原四蛋素材的实测值】，不另作缩放：
+    //   · 蛋心距整体中心 14.28、单蛋直径 40 -> r = 14.28/40 = 0.357（= 原素材里 4 个蛋的绝对位置）；
+    //   · k = 1 -> 单蛋尺寸 = 素材单蛋尺寸（与“改排列之前”卡面画的那个蛋一样大）。
+    4: lightRing(4, 14.28 / 40, 1, -Math.PI / 2),
     // Mythic 及以上的多光点卡面【更紧凑】：半径从 0.68D 收到 0.60D / 0.58D，
     // 光点之间靠得更近（Mythic 5 个 ≈0.71D 间距、更高稀有度 6 个 ≈0.58D 间距），
     // 单体大小不变，所以只是"挤得更紧"，不会显得变小。
@@ -637,6 +652,8 @@ const CardRenderer = (function () {
         // 多体花瓣（Light）：按稀有度画 1~5 个相同小圆，布局见 LIGHT_LAYOUTS
         const lay = multiLayout(st.svg, st.rarity);
         if (lay) {
+          // 单体像素直径 = 素材里单体的实际尺寸；布局系数（x/y/k）按同一单位声明，
+          // 所以「画多大」完全由素材 + 布局表决定，引擎不再额外缩放。
           const D = lightDRatio(st.svg, false) * dw;    // 单个 Light 的像素直径
           drawMulti(ctx, im, dw, dh, D, ox + dw / 2, oy + dh / 2, 0, 1, null, lay, st.svg);
         } else {
@@ -860,6 +877,7 @@ const CardRenderer = (function () {
     // 素材窗口（[x,y,w,h]，素材自身 viewBox 坐标）：给"按素材坐标对位"的绘制方用
     artWindow: (id) => _artWin[id] || null,
     entityWindow: (id) => _entWin[id] || null,
+    entityArtSize,
     // 内容包围盒（[x,y,w,h]，素材自身 viewBox 坐标，离屏 getBBox 实测）：
     // 需要"图形真正的中心/尺寸"时用它 —— 窗口是统一化的，跟图形本身不一样大。
     contentBox: (id) => _bb[id] || null,

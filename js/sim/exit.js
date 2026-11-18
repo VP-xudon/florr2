@@ -191,6 +191,16 @@ const EntityFX = {
     ctx.fill();
     ctx.restore();
   },
+  // 【红闪唯一入口】一律画【碰撞箱形状】：有碰撞多边形就填多边形（scale = 该形状的尺寸），
+  // 碰撞箱本身就是圆的实体（花瓣 / 花朵本体）就填半径圆。
+  // 调用方只传自己的碰撞数据，不再自己挑"圆 / 素材红剪影 / 专属半径"。
+  drawHurtShape(ctx, ent, x, y, poly, scale, r, maxA) {
+    if (poly && poly.length >= 3 && scale > 0) {
+      this.drawHurtPoly(ctx, ent, x, y, poly, scale, maxA);
+      return;
+    }
+    if (r > 0) this.drawHurt(ctx, ent, x, y, r, maxA);
+  },
 };
 
 // ---------- 受控实体表（唯一容器）----------

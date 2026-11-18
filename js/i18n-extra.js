@@ -59,6 +59,11 @@
     'UI/Petal/AttackRangeLabel': 'Attack Range:',
     'UI/Petal/SightLabel': 'Vision:',
     'UI/Petal/MaxDamageLabel': 'Max Damage:',
+    // ---- 花瓣属性：环境幸运值 / 伤害间隔（数值色同 Max Mob Rarity）----
+    'UI/Petal/LuckLabel': 'Luck:',
+    'UI/Petal/IntervalLabel': 'Interval:',
+    // 回血增幅（Basil）：标签色与 Heal 属性同一支（治疗粉）
+    'UI/Petal/HealingBonusLabel': 'Healing Bonus:',
     'UI/Mob/MissileHealth': 'Missile Health:',
     'UI/Mob/MissileDamage': 'Missile Damage:',
     // ---- 花瓣属性：场地型（Web）----
@@ -134,6 +139,11 @@
     'UI/Petal/AttackRangeLabel': '攻击距离：',
     'UI/Petal/SightLabel': '视野：',
     'UI/Petal/MaxDamageLabel': '最大伤害：',
+    // ---- 花瓣属性：环境幸运值 / 伤害间隔（数值色同 Max Mob Rarity）----
+    'UI/Petal/LuckLabel': '幸运：',
+    'UI/Petal/IntervalLabel': '间隔：',
+    // 回血增幅（Basil）：标签色与 Heal 属性同一支（治疗粉）
+    'UI/Petal/HealingBonusLabel': '回血加成：',
     'UI/Mob/MissileHealth': '导弹生命值：',
     'UI/Mob/MissileDamage': '导弹伤害：',
     // ---- 花瓣属性：场地型（Web）----

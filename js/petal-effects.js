@@ -12,7 +12,8 @@
 //   PetalFX.register(key, {
 //     traits?: {...}                  可选：覆盖数据表里的能力字段（见 trait()）
 //     detect(ctx)          -> bool    每帧检测（未激活时调用）；返回 true 触发
-//     start(ctx)                      触发时初始化（状态挂在 ctx.petal.fx.state）
+//     start(ctx)                      触发时初始化（状态挂在 ctx.petal.fxState）
+//                                     ——【不能叫 fx】：那是 EntityFX 的视觉缓存字段
 //     update(ctx, dt)      -> bool    激活后每帧；返回 true = 效果结束（花瓣解管）
 //     draw?(ctx2d, ctx)               可选：额外绘制（在花瓣本体之后调用）
 //     detach(ctx)          -> plan    可选：脱轨计划，见下方 detach()
@@ -81,13 +82,17 @@ const PetalFX = {
     // 没有注册项时退回数据表 —— 两处都以"该稀有度的实际数值"为准，绝不相加，避免翻倍。
     if (def && def.bonus) {
       const o = def.bonus(type, rarity) || {};
-      return { rotSpeed: o.rotSpeed || 0, reach: o.reach || 0, sight: o.sight || 0 };
+      return {
+        rotSpeed: o.rotSpeed || 0, reach: o.reach || 0, sight: o.sight || 0,
+        healBonus: o.healBonus || 0    // 回血增幅（Basil）：同一个求和入口，Player.recompute 只做加法
+      };
     }
     const st = (typeof petalStatsFor === 'function') ? petalStatsFor(type, rarity) : null;
     return {
       rotSpeed: (st && st.rotSpeed) || 0,
       reach: (st && st.attackRange) || 0,
-      sight: (st && st.sight) || 0
+      sight: (st && st.sight) || 0,
+      healBonus: (st && st.healBonus) || 0
     };
   },
 
@@ -176,7 +181,7 @@ const PetalFX = {
       if (!def.detect) return;
       const c = this._ctx(body, player, dt);
       if (!def.detect(c)) return;
-      body.fx = { key: def.key || (type && type.slug), state: {} };
+      body.fxState = {};
       body.fxActive = true;
       body.fxNoCombat = true;
       if (def.start) def.start(c);
@@ -193,6 +198,13 @@ const PetalFX = {
   canDetach(body) {
     const type = body && body.card && body.card.type;
     return (this.trait(type, 'detachAfter') || 0) > 0;
+  },
+
+  // 素材尖端角（有方向的花瓣，如 Missile）：绘制与飞行朝向的【唯一来源】。
+  // 返回 null = 未声明（不锁定朝向，按自转画）。
+  artTip(type) {
+    const def = this.defOf(type);
+    return (def && def.artTip != null) ? def.artTip : null;
   },
 
   // 脱轨计划：返回 null = 不脱轨，否则 { vx, vy, holdReload }。
@@ -214,8 +226,16 @@ const PetalFX = {
       // 基准必须是 PLAYER_BASE_SPEED（不含 SPEED_SCALE 与 /speed 倍率），
       // 否则豌豆一出膛就飞出屏幕（表现为"炸开一瞬间就没了"）。
       const dirs = launch.count || 4;
-      const dir = (body.sub || 0) * (TAU / dirs) + (body.selfRot || 0);
+      // 方向：默认按 sub 均分一圈 + 自身朝向（Peas 的四向飞溅）；
+      // launchRadial = 沿【脱轨瞬间的轨道角】径向飞出（Missile：只有一个实体且尖端朝外，
+      // 均分公式对 count=1 只会得到 selfRot，与它的朝向差一个素材尖端角）。
+      const dir = (this.trait(type, 'launchRadial') && orbitAngle != null)
+        ? orbitAngle
+        : (body.sub || 0) * (TAU / dirs) + (body.selfRot || 0);
       const sp = (launch.speedK || 1.3) * PLAYER_BASE_SPEED;
+      // 注册项声明了素材尖端角（artTip）的花瓣：飞行期朝向锁定为飞行方向（不旋转）；
+      // 没声明的（Peas 的圆球）继续按 selfRot 自转，观感不变。
+      if (def && def.artTip != null) body.flightRot = dir - def.artTip;
       return { vx: Math.cos(dir) * sp, vy: Math.sin(dir) * sp, holdReload: false };
     }
     // 滞留型（Pollen / Honey）：保留脱手瞬间的惯性，其余能量在脱手时损耗
@@ -346,9 +366,12 @@ const PetalFX = {
       // 花瓣往外弹一点就被拉回主角中心（观感更优美）。
       popped: () => body.age >= this.ORBIT_T * 0.34,
       // 回血：返回【实际回血量】（血量有缺口不足时小于 n；满血返回 0）。
+      // 【Healing Bonus（Basil）在这里最后结算】：所有回血来源（Leaf 持续 / Rose 一次性 /
+      // 以后的任何新来源）都只能走这一个出口，于是"多个回血先加起来、再统一放大"天然成立。
       heal: (n) => {
+        const k = 1 + (player.healBonus || 0);
         const before = player.hp;
-        player.hp = Math.min(player.maxHp, player.hp + (n || 0));
+        player.hp = Math.min(player.maxHp, player.hp + (n || 0) * k);
         return player.hp - before;
       },
       // 弹飘字：走 textSink（game.spawnText），样式与攻击反馈完全一致（DamageText）。
@@ -393,10 +416,10 @@ PetalFX.register('rose', {
   },
   start(ctx) {
     // 物理施力式起飞：初速 0，update 里持续朝主角加速，飞行途中自然跟随主角本体移动
-    ctx.petal.fx.state = { t: 0, vx: 0, vy: 0 };
+    ctx.petal.fxState = { t: 0, vx: 0, vy: 0 };
   },
   update(ctx, dt) {
-    const s = ctx.petal.fx.state;
+    const s = ctx.petal.fxState;
     s.t += dt;
     const p = ctx.player;
     const px = ctx.petal.x, py = ctx.petal.y;
@@ -468,26 +491,10 @@ PetalFX.register('orange', {
 
 // 行为：
 //   · 不在 reach 模式：正常公转，尖端朝外（orientOutward），轨道紧贴本体、不吃 reach；
-//   · 进入 reach：立刻从当前角度沿尖端方向直线飞出，速度不变，飞行中不旋转，
-//     2 秒后消失（launch.life）。
-PetalFX.register('missile', {
-  detach(ctx) {
-    const body = ctx.petal, player = ctx.player;
-    // 方向 = 实体出现那一刻的轨道角（body.spawnAng）：
-    // 用脱轨瞬间的当前轨道角会因自转而偏离。
-    // 老实体没有 spawnAng 时才退回引擎传的轨道角 / 坐标夹角。
-    const ang = (body.spawnAng != null) ? body.spawnAng
-      : ((ctx.orbitAngle != null) ? ctx.orbitAngle
-        : Math.atan2(body.y - player.y, body.x - player.x));
-    const speed = (ctx.type.launch.speedK || 1.3) * PLAYER_BASE_SPEED;
-    body.flightRot = ang - MISSILE_TIP_ANGLE;   // 绘制：尖端对准飞行方向
-    body.flightSpin = 0;                        // 飞行中不旋转
-    return { vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, holdReload: false };
-  },
-  flight(body) {
-    return body.card.type.launch;               // { life: 2.0, 无 spinRate } => 飞满 2s 消失
-  }
-});
+//   · 进入 reach：加载完成即脱轨，沿【脱轨瞬间的轨道角】直线飞出，飞满 2s 消失（launch.life）。
+// 发射链路与 Peas 完全共用引擎默认实现（launch 能力字段驱动初速、flightOf 读同一份参数）；
+// 差别只有两处声明：数据表的 launchRadial（方向取轨道角）与这里的 artTip（尖端角）。
+PetalFX.register('missile', { artTip: MISSILE_TIP_ANGLE });
 
 // —— 内置特效 5：蜜（Honey）——
 // ① 实体碰撞：这条【不写在这里】。所有花瓣都是实体（分离 + 双向伤害由战斗循环统一处理），

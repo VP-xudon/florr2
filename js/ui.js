@@ -1088,6 +1088,11 @@ const UI = {
           attackRange: st.attackRange || 0,
           // 视野放大（Antennae）：0 = 没有这一项，整行不显示
           sight: st.sight || 0,
+          // 环境幸运加成（Clover）/ 两次伤害的间隔（Glass）：0 = 没有这一项
+          luck: st.luck || 0,
+          interval: st.interval || 0,
+          // 回血增幅（Basil）：0 = 没有这一项，整行不显示
+          healBonus: st.healBonus || 0,
           // 场地型（Web）：网半径 + 存在时长
           radius: st.radius || 0,
           duration: st.duration || 0,

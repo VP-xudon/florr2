@@ -364,6 +364,14 @@ const MobFX = {
     if (def && def.draw) def.draw(ctx, mob, mob._drawScale || 1, mob._drawAlpha == null ? 1 : mob._drawAlpha);
   },
 
+  // 物种自绘的【叠加层】：在实体本体画完之后调用（局部坐标，已含引擎的入场缩放/透明度）。
+  // 与 draw 的区别：draw 在【身体之下】（Hornet 尾针挂在那儿），drawOver 在【身体之上】——
+  // 兵蚁的翅膀/小牙要盖在身体上又要独立摆动，只能走这一层。引擎依旧不认识具体物种。
+  drawOver(ctx, mob) {
+    const def = this.defOf(mob);
+    if (def && def.drawOver) def.drawOver.call(def, ctx, mob);
+  },
+
   drawMissile(ctx, missile, size, alpha) {
     if (!missile || (missile.dead && !missile.exiting)) return;
     MobFX.drawMissileAt(ctx, missile, missile.x, missile.y,
@@ -388,11 +396,14 @@ const MobFX = {
     if (!art) return;
     // 尖端始终对准朝向（挂载/飞行同一条口径）；位置由素材实测的挂点决定。
     drawPetalArt(ctx, art, size * scale, x, y, facing - MISSILE_TIP_ANGLE, 1, a);
-    // 红闪：与所有实体共用 EntityFX.drawHurt（同一时长、同一强度）
+    // 红闪：与所有实体同一个入口，画【碰撞箱形状】——
+    // 尾针有硬编码碰撞箱（CRB 11_missile），所以填的就是它自己的轮廓，不再是一个圆。
     if (EntityFX.hurtAlpha(missile) > 0) {
       ctx.save();
       ctx.globalAlpha = a;
-      EntityFX.drawHurt(ctx, missile, x, y, size * 0.32 * scale);
+      EntityFX.drawHurtShape(ctx, missile, x, y,
+        (missile.shape && missile.shape.pts) || null,
+        (missile.collSize || 0) * scale, size * 0.32 * scale);
       ctx.restore();
     }
   },
@@ -710,3 +721,32 @@ MobFX.register('hornet', {
     return { x: 0, y: 0 };
   },
 });
+
+// ============================================================================
+// 物种声明：蚂蚁家族（Soldier / Worker / Baby Ant）
+//   三者共用 `AntArt` 的那一套【外观分层】：身体 = 两层静图，翅膀与小牙在中层单独摆动
+//   （每秒 1.5 个来回、三物种同一挥幅）。只有素材与轮廓键不同，所以这里只是一个循环。
+//   碰撞箱由 Mob._ensureShape 的 bodyKey（mob<id>_body = 只有身体）负责。
+//   自然生成 / 召唤物是【同一个物种、同一套东西】：召唤物由 _spawnSummon 挂 followEnt，
+//   野生的没有 followEnt → 跟随逻辑自动不生效；阵营交给 registry 的 type 决定
+//   （Soldier = Hostile 追人，Worker = Neutral、Baby = Passive 不主动追）。
+// ============================================================================
+for (const antSlug of ['soldier_ant', 'worker_ant', 'baby_ant']) {
+  MobFX.register(antSlug, {
+    // 底层身体（翅膀之下）；素材没就绪时返回 null -> 退回整张贴图（静止的小牙，先说能看）
+    // 【顺带在这里启动解析】：artSvgOf 每只生物构造时调一次，是唯一不依赖 AI/绘制时机的入口，
+    // 碰撞箱要等 mob<id>_body 这张图就绪后才会建立（见 Mob._ensureShape）。
+    artSvgOf(mob) {
+      const r = (typeof AntArt !== 'undefined') ? AntArt.of(mob) : null;
+      if (r && !r.mid) AntArt.ensure(r.slug);
+      return (r && r.mid) ? r.baseKey.replace(/^mob/, '') : null;
+    },
+    drawOver(ctx, mob) {
+      if (typeof AntArt !== 'undefined') AntArt.drawOver(ctx, mob);
+    },
+    init(mob) {
+      // 尽早开始解析素材：碰撞箱要等 mob<id>_body 这张图就绪后才建立（见 _ensureShape）
+      if (typeof AntArt !== 'undefined') AntArt.ensure(mob && mob.type && mob.type.slug);
+    },
+  });
+}

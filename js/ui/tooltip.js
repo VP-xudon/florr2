@@ -58,11 +58,12 @@ Object.assign(UI, {
           // 生物悬浮框 = 和卡牌同一套口径：【有的属性才显示，没有就不显示】。
           // 不再死板地固定画 Health / Damage（血量 0 的生物就不该有 Health 行），
           // 也不再漏掉中毒（蜘蛛有 Poison 却不显示）。
-          if (t.hp > 0) rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp });
-          if (t.dmg > 0) rows.push({ label: statLabel('Mob/Attribute/Damage', 'Damage:'), value: t.dmg });
-          if (t.armor > 0) rows.push({ label: statLabel('Mob/Attribute/Armor', 'Armor:'), value: t.armor });
-          if (t.missileHp > 0) rows.push({ label: statLabel('UI/Mob/MissileHealth', 'Missile Health:'), value: t.missileHp });
-          if (t.missileDmg > 0) rows.push({ label: statLabel('UI/Mob/MissileDamage', 'Missile Damage:'), value: t.missileDmg });
+          // 标签颜色一律按【属性】取（见 data.js 的 STAT_LABEL_COLORS），与行序无关。
+          if (t.hp > 0) rows.push({ label: statLabel('Mob/Attribute/Health', 'Health:'), value: t.hp, labelColor: STAT_LABEL_COLORS.health });
+          if (t.dmg > 0) rows.push({ label: statLabel('Mob/Attribute/Damage', 'Damage:'), value: t.dmg, labelColor: STAT_LABEL_COLORS.damage });
+          if (t.armor > 0) rows.push({ label: statLabel('Mob/Attribute/Armor', 'Armor:'), value: t.armor, labelColor: STAT_LABEL_COLORS.armor });
+          if (t.missileHp > 0) rows.push({ label: statLabel('UI/Mob/MissileHealth', 'Missile Health:'), value: t.missileHp, labelColor: STAT_LABEL_COLORS.health });
+          if (t.missileDmg > 0) rows.push({ label: statLabel('UI/Mob/MissileDamage', 'Missile Damage:'), value: t.missileDmg, labelColor: STAT_LABEL_COLORS.damage });
           // 中毒（Poison）：官方模板是 "Poison: {0:tooltip} ({1:tooltip}/s)" ——
           // 标签与数值一起拆出来，单位（/s 还是 /秒）跟着语言走。
           if (t.poison > 0) {
@@ -71,12 +72,20 @@ Object.assign(UI, {
             rows.push({ label: ps.label, value: ps.value, labelColor: MOB_POISON_COLOR });
           }
         } else {
-          if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp });
-          if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg });
+          if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp, labelColor: STAT_LABEL_COLORS.health });
+          if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg, labelColor: STAT_LABEL_COLORS.damage });
           if (t.maxDamage > 0) {
-            rows.push({ label: statLabel('UI/Petal/MaxDamageLabel', 'Max Damage:'), value: t.maxDamage, labelColor: '#ff6b6b' });
+            rows.push({ label: statLabel('UI/Petal/MaxDamageLabel', 'Max Damage:'), value: t.maxDamage, labelColor: STAT_LABEL_COLORS.damage });
           }
-          if (t.heal > 0) rows.push({ label: statLabel('Petal/Attribute/Heal', 'Heal:'), value: t.heal + (t.healPerSec ? '/s' : '') });
+          if (t.heal > 0) rows.push({ label: statLabel('Petal/Attribute/Heal', 'Heal:'), value: t.heal + (t.healPerSec ? '/s' : ''), labelColor: STAT_LABEL_COLORS.heal });
+          // Healing Bonus（Basil）：回血增幅百分比；标签色【与 Heal 属性完全相同】
+          if (t.healBonus > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/HealingBonusLabel', 'Healing Bonus:'),
+              value: '+' + Math.round(t.healBonus * 100) + '%',
+              labelColor: STAT_LABEL_COLORS.heal
+            });
+          }
           if (t.maxMobRarityName) {
             rows.push({
               // 官方 Petal/Attribute/MaxMobRarity 是"带参数"的模板
@@ -84,14 +93,14 @@ Object.assign(UI, {
               // 所以用本项目自己的纯文本键。
               label: statLabel('UI/Petal/MaxMobRarityLabel', 'Max Mob Rarity:'),
               value: t.maxMobRarityName,
-              labelColor: (typeof MAX_MOB_RARITY_COLOR !== 'undefined') ? MAX_MOB_RARITY_COLOR : '#d2eb34',
+              labelColor: STAT_LABEL_COLORS.bonus,
               valueColor: t.maxMobRarityColor || '#ffffff'      // 稀有度名用它自己的颜色
             });
           }
           // 装备加成（标签色与 Max Mob Rarity 同一支 #d2eb34）：
           //   Rotation Speed = Faster 给主角叠加的最大转速
           //   Attack Range   = Third Eye 在 reach 模式下额外伸出的距离
-          const bonusColor = (typeof MAX_MOB_RARITY_COLOR !== 'undefined') ? MAX_MOB_RARITY_COLOR : '#d2eb34';
+          const bonusColor = STAT_LABEL_COLORS.bonus;
           if (t.rotSpeed > 0) {
             rows.push({
               label: statLabel('UI/Petal/RotSpeedLabel', 'Rotation Speed:'),
@@ -111,6 +120,22 @@ Object.assign(UI, {
             rows.push({
               label: statLabel('UI/Petal/SightLabel', 'Vision:'),
               value: '+' + fmtNum(Math.round(t.sight * 1000) / 10) + '%',
+              labelColor: bonusColor
+            });
+          }
+          // 环境幸运值加成（Clover）：【标签】颜色与 Max Mob Rarity 同一支，数值白色
+          if (t.luck > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/LuckLabel', 'Luck:'),
+              value: '+' + fmtNum(Math.round(t.luck * 10) / 10),
+              labelColor: bonusColor
+            });
+          }
+          // 伤害间隔（Glass）：与右上角的装填（reload）是两个不同的概念
+          if (t.interval > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/IntervalLabel', 'Interval:'),
+              value: fmtNum(t.interval) + 's',
               labelColor: bonusColor
             });
           }
@@ -135,7 +160,7 @@ Object.assign(UI, {
             rows.push({
               label: statLabel('UI/Petal/DurationLabel', 'Duration:'),
               value: fmtNum(t.duration) + 's',
-              labelColor: (typeof RARITIES !== 'undefined' && RARITIES.rare) ? RARITIES.rare.color : '#4D52E3'
+              labelColor: STAT_LABEL_COLORS.duration
             });
           }
         }
@@ -412,14 +437,9 @@ Object.assign(UI, {
         for (let i = 0; i < L.lines.length; i++) {
           text(L.lines[i], bx, y + (L.descTop + i * L.LH) * S, L.FS_DESC, L.W_ALL, '#e9f2ec');
         }
-        // Health / Damage / Heal：统一排在左下角，标签彩色 + 数值白色（字号与介绍一致）
-        // 治疗用专用粉色，不与伤害(红)/生命(绿)共用颜色（与玫瑰回血飘字同色）
-        const STAT_COLORS = ['#7fe08a', '#ff6b6b', HEAL_TEXT_COLOR];
-        // 生物：Health / Damage / Armor（Armor 用中性灰蓝，避免与治疗的粉色混淆）
-        const MOB_STAT_COLORS = ['#7fe08a', '#ff6b6b', '#b8c6d1', '#7fe08a', '#ff6b6b'];
-        const rowColors = t.mob ? MOB_STAT_COLORS : STAT_COLORS;
-        // 每行：标签（默认按行序取色，可被 row.labelColor 覆盖）+ 数值（默认白色，
-        // 可被 row.valueColor 覆盖，例如 Max Mob Rarity 用被吸引稀有度自己的颜色）。
+        // 数值行：标签彩色 + 数值白色（字号与介绍一致）。
+        // 标签颜色只来自【属性本身】（data.js 的 STAT_LABEL_COLORS，每行在构建时写入 labelColor）——
+        // 绝不按行序取色：卡上缺一项或新增一项属性时，其它属性的颜色不会串位。
         // 标签宽度用【与 text() 完全相同的字体】量，数值跟在后面不会压住标签。
         const gapPx = L.STAT_GAP * S;
         for (let i = 0; i < L.rows.length; i++) {
@@ -428,7 +448,7 @@ Object.assign(UI, {
           ctx.font = `${L.W_ALL} ${size}px ${CardRenderer.FONT}`;
           const lw = ctx.measureText(row.label).width;
           const ty = y + L.statY[i] * S;
-          text(row.label, bx, ty, L.FS_STAT, L.W_ALL, row.labelColor || rowColors[i] || '#ffffff');
+          text(row.label, bx, ty, L.FS_STAT, L.W_ALL, row.labelColor || '#ffffff');
           text(typeof row.value === 'number' ? fmtNum(row.value) : String(row.value),
             bx + lw + gapPx, ty, L.FS_STAT, L.W_ALL, row.valueColor || '#ffffff');
         }

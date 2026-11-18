@@ -337,6 +337,36 @@ class LocalServer {
     return first;
   }
 
+  // 玩家当前的幸运加成：所有【活着】的 Clover 花瓣实体各给一份（可叠加）。
+  // 只在生成生物时读一次，不进每帧循环。
+  _playerLuck() {
+    const p = this.player;
+    if (!p || !p.petals) return 0;
+    let sum = 0;
+    for (const b of p.petals) {
+      if (!b || b.dead || !b.card) continue;
+      const st = petalStatsFor(b.card.type, b.card.rarity);
+      if (st.luck) sum += st.luck;
+    }
+    return sum;
+  }
+
+  // 某点的环境幸运值 = 基准 LUCK_BASE，玩家 CLOVER_LUCK_R 内叠加 Clover 加成，上限 LUCK_MAX。
+  _ambientLuck(x, y) {
+    const p = this.player;
+    let luck = LUCK_BASE;
+    if (p && !p.dead) {
+      const dx = x - p.x, dy = y - p.y;
+      if (dx * dx + dy * dy <= CLOVER_LUCK_R * CLOVER_LUCK_R) luck += this._playerLuck();
+    }
+    return Math.min(luck, LUCK_MAX);
+  }
+
+  // 自然生成的稀有度：难度掷骰 -> 按环境幸运值升/降级 -> 封顶 super（Eternal 永不自然生成）
+  _rollSpawnRarity(x, y, diff) {
+    return applyLuckToRarity(rollMobRarityByDifficulty(diff), this._ambientLuck(x, y));
+  }
+
   // 在某个区里生成一只（内部用）
   _spawnInZone(zone) {
     const pick = this._pickSpawnType(zone);
@@ -347,7 +377,7 @@ class LocalServer {
       if (zone) zone.nextTry = (this.t || 0) + 5;
       return false;
     }
-    const rarity = rollMobRarityByDifficulty(zone ? zone.difficulty : 0);
+    const rarity = this._rollSpawnRarity(pos[0], pos[1], zone ? zone.difficulty : 0);
     // 多节生物（蜈蚣）：一次生成【一整条】，而不是一只
     if (isSegmentMob(pick.type)) {
       this._spawnChain(pick.type, pos[0], pos[1], rarity, zone);
@@ -509,7 +539,7 @@ class LocalServer {
     if (this.map.solidAtPoint && this.map.solidAtPoint(x, y)) return false;
     const pick = this._pickSpawnType(null);
     if (!pick || !pick.type) return false;
-    const m = new Mob(pick.type, x, y, 1, rollMobRarityByDifficulty(0));
+    const m = new Mob(pick.type, x, y, 1, this._rollSpawnRarity(x, y, 0));
     m.x = x; m.y = y;
     m.spawnZone = null;
     m.netId = this.nextEntityId();
@@ -1037,6 +1067,7 @@ class LocalServer {
             if (a._next === b || b._next === a) continue;
             // 原地放置的实体（Bumble Bee 的 Pollen）：不被推着滑走
             if (a.noPush || b.noPush) continue;
+            // 统一引擎：这里只做位置分离（物理）。接触伤害在 _combatTick 结算。
             physicsPush(a, b);
           }
         }
@@ -1079,37 +1110,9 @@ class LocalServer {
       for (const w of waxes) w.static = true;
     }
 
-    // 4c) 玩家阵营实体（Ant Egg 的召唤物）：
-    //   · 与敌对生物、玩家之间是【硬碰撞】—— 判定走同一个 _pairHit
-    //     （轮廓/多边形/圆自动分派，与所有实体同一接口），
-    //     修正时【对方整体让位】：重叠量一帧清零，不存在"按质量慢慢挤进去"。
-    //   · 与敌对生物还有【接触伤害】，公式与"花瓣 vs 生物"完全同一套：
-    //     伤害方 dmg − 受击方 armor，钳 0、全额扣；双向成对出现。
-    if (p && !p.dead) {
-      for (const s of awake) {
-        if (!s || s.dead || s.faction !== 'player') continue;
-        // —— vs 玩家：硬碰撞（同阵营，无伤害）——
-        if (p && !p.dead) {
-          const hit = _pairHit(s, p);            // 法线统一 s -> p
-          if (hit && hit.depth > 0) { p.x += hit.nx * hit.depth; p.y += hit.ny * hit.depth; }
-        }
-        // —— vs 敌对生物：硬碰撞 + 双向接触伤害 ——
-        for (let i = 0; i < awake.length; i++) {
-          const m = awake[i];
-          if (!m || m === s || m.dead || (m.faction || 'enemy') === 'player') continue;
-          const hit = _pairHit(s, m);            // 法线统一 s -> m
-          if (hit && hit.depth > 0) { m.x += hit.nx * hit.depth; m.y += hit.ny * hit.depth; }
-          if (m.faction === 'player') continue;
-          const toEnemy = this._dmg(s.dmg || 0, m.armor || 0);
-          const toSummon = this._dmg(m.dmg || 0, s.armor || 0);
-          if (toEnemy > 0) this._hitMob(m, toEnemy);
-          if (toSummon > 0) {
-            s.hp -= toSummon; EntityFX.hurt(s);
-            if (s.hp <= 0) { s.dead = true; EntityFX.despawn(s); }   // 死亡 -> 蛋解除挂起（1.5 段）
-          }
-        }
-      }
-    }
+    // 玩家阵营的召唤物没有任何单独的一段：它就是普通生物，位置分离完全由上面两个
+    // 循环负责（玩家 ↔ 它用 physicsPushMob、它与生物用网格里的 physicsPush），
+    // 接触伤害则在 _combatTick 里与花瓣/花朵本体同一处按阵营结算。
   }
 
   // 5) 战斗结算：固定 25 tick/s（SNAP_DT）
@@ -1290,6 +1293,8 @@ class LocalServer {
     const TICK_DT = SNAP_DT;
     for (const b of p.petals) {
       if (b.kbT > 0) b.kbT = Math.max(0, b.kbT - TICK_DT);
+      // Interval 冷却（Glass）：与 kbT 一样是每 tick 递减的实体计时
+      if (b.intervalT > 0) b.intervalT = Math.max(0, b.intervalT - TICK_DT);
     }
     for (const projectile of this.hornetProjectiles.values()) {
       if (projectile.dead || projectile.exiting) continue;
@@ -1344,6 +1349,15 @@ class LocalServer {
     // 休眠生物距玩家 > MOB_ACTIVE_R(2200)，而花瓣射程远小于它，不可能接触 ——
     // 跳过它们等于省掉全图 4500+ 只 × 花瓣数 × 25Hz 的轮廓判定。
     const awake = this._awake || this.ents;
+    // 玩家阵营的召唤物（Ant Egg 的内容物）：它们就是普通 Mob，只是阵营不同。
+    // 位置分离已经在 sysPush 里交给 physicsPush 了，这里只收拢一份名单，
+    // 供下面的敌对生物循环按【阵营】结算接触伤害。
+    const summons = this._summonList || (this._summonList = []);
+    summons.length = 0;
+    for (let i = 0; i < awake.length; i++) {
+      const m = awake[i];
+      if (!m.dead && m.faction === 'player') summons.push(m);
+    }
     // 尾针是"可被花瓣伤害的实体"，和生物一样走【同一套结算链路】：
     //   · 碰撞判定用实体自己的 shape（11_missile.crb）
     //   · 伤害 = 花瓣 dmg - 目标 armor（this._dmg）
@@ -1352,6 +1366,23 @@ class LocalServer {
     const stingerCrb = (typeof CRB !== 'undefined') ? CRB.get('11_missile') : null;
     for (const m of awake) {
       if (m.dead) continue;
+      // —— 召唤物 vs 这只敌对生物 ——
+      // 与花瓣/花朵本体同一个战斗 tick、同一个 _dmg/_hitMob：
+      // 阵营相同不结算，阵营不同就双向掉血。
+      if (summons.length && (m.faction || 'enemy') !== 'player') {
+        for (let si = 0; si < summons.length; si++) {
+          const s = summons[si];
+          if (s.dead || s === m) continue;
+          // 接触判定只有这一个入口（与花瓣命中、玩家↔生物全部同源）。
+          // 不要在调用方另写半径/皮厚——那就是第二套碰撞判定。
+          if (!_pairHit(s, m)) continue;
+          const toEnemy = this._dmg(s.dmg || 0, m.armor || 0);
+          const toSummon = this._dmg(m.dmg || 0, s.armor || 0);
+          if (toEnemy > 0) this._hitMob(m, toEnemy, s);
+          if (toSummon > 0 && !s.dead) this._hitMob(s, toSummon, m);
+          if (m.dead) break;
+        }
+      }
       const st = m.hornet;
       const stingers = [];
       if (st && st.missile) stingers.push(st.missile);
@@ -1424,7 +1455,9 @@ class LocalServer {
         const hit = entityHitMob(m, b);          // Wax 用自己的六边形，其余用圆
         if (!hit) continue;
         const st = petalStatsFor(b.card.type, b.card.rarity);
-        if (b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
+        const pt = b.card.type || {};
+        // 没有血量的花瓣（Glass）：不初始化 hp，也不挨打/磨损（它本来就打不碎）
+        if (!pt.noHealth && b.hp == null) { b.hp = b.maxHp = (st.hp || 30); }
         //（Leaf 的持续回血不在这里 —— 见下方独立循环，它不该依赖"是否命中生物"）
         // ---- 花瓣 vs 生物（nx/ny = 接触法线，由生物表面指向花瓣）----
         // 这里只算公共量（质量 / 反质量份额 / 接近速度），传能规则由 PetalFX.onHit 决定。
@@ -1453,27 +1486,41 @@ class LocalServer {
         // 这里只动生物（生物只有服务端能动）。两边加起来 = 完整的一对多体碰撞。
         // 带 shape 的花瓣（Wax）的碰撞统一由 physicsTick 的物理段处理，
         // 这里只分离普通花瓣（战斗系统的接触分离）—— 一个实体只进一套体系。
-        if (!b.shape) this._separateMobFromPetal(m, b, hit);
+        // 没有碰撞箱的花瓣（Glass）：穿透生物，不做位置分离
+        if (!pt.noPush && !b.shape) this._separateMobFromPetal(m, b, hit);
         // ---- ② 接触传能（撞上去那一下的击退 / 揉搓），所有花瓣同一套 ----
-        PetalFX.onHit(b, p, {
-          dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
-          wP, wM, shareP, shareM, kbBoost
-        });
+        // 不传递击退的花瓣（Glass）：跳过传能
+        if (!pt.noKnockback) {
+          PetalFX.onHit(b, p, {
+            dt: TICK_DT, mob: m, hit, approach, relN, jmass, jshare,
+            wP, wM, shareP, shareM, kbBoost
+          });
+        }
         // ---- ③ 伤害：每 tick 结算一次，一次就是完整面板值 ----
         // 两侧永远成对出现，只有"这一侧没有攻击力"（数值为 0）才是 0，不存在单向掉血。
         // 双向走【同一个公式】：伤害方 dmg - 受击方 armor，钳到 0，全额扣，不做任何削峰。
         // 所以"伤害 ≥ 耐久"就是当 tick 直接碎（common 瓢虫 10 vs common basic 10、
         // rare 瓢虫 90 vs 任何低稀有度花瓣，都是一下没），不会出现"贴着磨一会才碎"。
+        // Interval 冷却（Glass）：本次接触不结算伤害，等冷却结束才允许下一次。
+        // 与 reload 是两件事：reload 管"这张卡什么时候重新长出一片"，
+        // Interval 管"同一片实体两次伤害之间至少隔多久"。
+        const interval = st.interval || 0;
+        if (interval > 0 && (b.intervalT || 0) > 0) { if (m.dead) break; continue; }
         const attack = PetalFX.damageOf(b, m, p, st.dmg);
         const toMob = this._dmg(attack, m.armor);
-        const toPetal = this._dmg(m.dmg, b.armor);
-        if (toPetal > 0) {
-          b.hp -= toPetal; EntityFX.hurt(b);
+        if (!pt.noHealth) {
+          const toPetal = this._dmg(m.dmg, b.armor);
+          if (toPetal > 0) {
+            b.hp -= toPetal; EntityFX.hurt(b);
+          }
         }
         if (toMob > 0) this._hitMob(m, toMob);
-        // 攻击磨损：按最大耐久比例、每 tick 磨损（PETAL_ATTACK_DUR 本来就是按 25Hz 定的）
-        b.hp -= b.maxHp * PETAL_ATTACK_DUR;
-        if (b.hp <= 0) this._destroyPetal(b);
+        if (interval > 0) b.intervalT = interval;    // 结算完立刻进入 Interval 冷却
+        if (!pt.noHealth) {
+          // 攻击磨损：按最大耐久比例、每 tick 磨损（PETAL_ATTACK_DUR 本来就是按 25Hz 定的）
+          b.hp -= b.maxHp * PETAL_ATTACK_DUR;
+          if (b.hp <= 0) this._destroyPetal(b);
+        }
         if (m.dead) break;
       }
       if (m.dead || p.dead) continue;
@@ -1579,6 +1626,8 @@ class LocalServer {
   //     推了会被立刻覆盖，只会产生"被推开又拉回"的高频抖动。
   _separateMobFromPetal(m, b, hit) {
     if (!m || !hit || hit.depth <= PETAL_CONTACT_SKIN) return;
+    // 没有碰撞箱的花瓣（Glass）：生物不被它推开（花瓣一侧同样跳过，见 Player._separatePetalFromMobs）
+    if (b.card && b.card.type && b.card.type.noPush) return;
     if (m._chainLocked) return;
     const invP = 1 / (b.weight || 1);
     const invM = 1 / (m.weight || 1);
@@ -1590,12 +1639,17 @@ class LocalServer {
     if (push > 0) { m.x -= hit.nx * push; m.y -= hit.ny * push; }
   }
 
-  _hitMob(m, toMob) {
+  // src = 伤害来源（缺省 = 玩家）。仇恨是按"谁打的"记账的：花瓣/花朵本体的伤害就是玩家，
+  // 但召唤物打敌人时来源是那只召唤物、敌人打召唤物时来源是那只敌人 ——
+  // 一律记在玩家头上会让召唤物把自己的主人当成最恨的目标（真正的"莫名丢仇恨"）。
+  _hitMob(m, toMob, src) {
     if (toMob <= 0) return false;
-    const r = m.hurt(toMob, this.player);
+    const from = src || this.player;
+    const r = m.hurt(toMob, from);
     if (r.applied > 0) {
-      if (Number.isFinite(toMob) && this.player && m.lastHitByPlayer) {
-        m.lastHitByPlayer.set(this.player, r.applied);
+      // 伤害榜 / 掉落归属只统计玩家本人造成的伤害
+      if (Number.isFinite(toMob) && from && from === this.player && m.lastHitByPlayer) {
+        m.lastHitByPlayer.set(from, r.applied);
       }
       m.pendDmg = (m.pendDmg || 0) + r.applied;
       if (!(m.dmgTextT > 0)) {
@@ -1729,6 +1783,12 @@ class LocalServer {
     // 血条永久显示 + 血条下方的 "Summon" 标签（Unusual 颜色、左对齐）
     mob.permanentHpBar = true;
     mob.hpBarTag = 'Summon';
+    // 跟随数据（属性，不是专属 AI）：follow 阀值来自 MOB_TRAITS，行为在通用 wander 里。
+    mob.followEnt = this.player;
+    // 【碰撞与其它生物同一口径】：普通生物在第一次 update 里建轮廓（Mob._ensureShape），
+    // 召唤物是在 sysCombat 中途生成的，否则要等下一步 sysMobs 才建 —— 那一帧里它只有
+    // "外接圆"半径、F3 也没有碰撞箱，看起来就是"召唤物没有碰撞"。
+    mob._ensureShape();
     this._addEnt(mob);
     return mob;
   }

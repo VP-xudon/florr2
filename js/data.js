@@ -42,7 +42,7 @@ const MOB_POISON_COLOR = '#c58cff';
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
   'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile', 'wax',
-  'rice', 'corn', 'wing', 'ant_egg'
+  'rice', 'corn', 'wing', 'ant_egg', 'clover', 'glass', 'basil'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -244,6 +244,45 @@ const PETAL_RARITY_OVERRIDES = {
     eternal:   { dmg: 131220, hp: 65610 },
     unique:    { dmg: 131220, hp: 65610 }
   },
+  // Clover（幸运草）：伤害/血量逐级 ×3；luck = 装上后给【玩家附近环境幸运值】加的数值
+  // （环境幸运值规则见 LUCK_BASE / luckRarityShift，基准 -0.6 = 60% 降一级）。
+  clover: {
+    common:    { dmg: 10,     hp: 10,     luck: 0.1 },
+    unusual:   { dmg: 30,     hp: 30,     luck: 0.2 },
+    rare:      { dmg: 90,     hp: 90,     luck: 0.3 },
+    epic:      { dmg: 270,    hp: 270,    luck: 0.4 },
+    legendary: { dmg: 810,    hp: 810,    luck: 0.5 },
+    mythic:    { dmg: 2430,   hp: 2430,   luck: 0.6 },
+    ultra:     { dmg: 7290,   hp: 7290,   luck: 0.7 },
+    super:     { dmg: 21870,  hp: 21870,  luck: 0.8 },
+    eternal:   { dmg: 65610,  hp: 65610,  luck: 0.9 },
+    unique:    { dmg: 65610,  hp: 65610,  luck: 0.9 }
+  },
+  // Glass（玻璃）：伤害逐级 ×3；【没有血量】（不会被接触打碎，所以 hp 恒为 0）；
+  // interval = 两次伤害之间必须间隔的秒数 —— 与 reload（装填）是两回事。
+  glass: {
+    common:    { dmg: 22,      hp: 0, interval: 1 },
+    unusual:   { dmg: 66,      hp: 0, interval: 1 },
+    rare:      { dmg: 198,     hp: 0, interval: 1 },
+    epic:      { dmg: 594,     hp: 0, interval: 1 },
+    legendary: { dmg: 1782,    hp: 0, interval: 1 },
+    mythic:    { dmg: 5346,    hp: 0, interval: 1 },
+    ultra:     { dmg: 16038,   hp: 0, interval: 1 },
+    super:     { dmg: 48114,   hp: 0, interval: 1 },
+    eternal:   { dmg: 144342,  hp: 0, interval: 1 },
+    unique:    { dmg: 144342,  hp: 0, interval: 1 }
+  },
+  // Basil（罗勒）：增疗花瓣 —— 没有伤害、没有血量，【只有】 Healing Bonus（回血增幅）。
+  // 数值是百分比：Mythic 45% → Unique 60%；低档官方没给数值 = 不产出这几档的卡。
+  // 结算口径：在 PetalFX 的 ctx.heal 里【最后统一放大】—— 所有回血来源（Leaf 持续 /
+  // Rose 一次性）先按自己的数值加起来，再乘 (1 + HealingBonus)，绝不各自提前乘。
+  basil: {
+    mythic:    { dmg: 0, hp: 0, healBonus: 0.45 },
+    ultra:     { dmg: 0, hp: 0, healBonus: 0.50 },
+    super:     { dmg: 0, hp: 0, healBonus: 0.55 },
+    eternal:   { dmg: 0, hp: 0, healBonus: 0.60 },
+    unique:    { dmg: 0, hp: 0, healBonus: 0.60 }
+  },
   // Ant Egg：Health 恒为 1（不随稀有度成长，官方表就是每档 1）；
   // 不造成伤害（它自己不打人，靠内容物 Soldier Ant）。
   ant_egg: {
@@ -356,12 +395,27 @@ const HONEY_MAX_MOB_RARITY = {
 };
 const MAX_MOB_RARITY_COLOR = '#d2eb34';
 
+// ---- 属性【标签文字】颜色（唯一来源）----
+// 每种属性固定一个颜色，与“这一行排在第几位”完全无关。
+// （曾用“按行序取色”的数组：只要某张卡缺一项、或新增一项属性，后面所有属性的颜色就会串位。）
+// 数值列一律白色；只有需要强调数值的地方才用 row.valueColor 覆盖（如 Max Mob Rarity 的稀有度名）。
+const STAT_LABEL_COLORS = {
+  health: '#7fe08a',           // 生命绿
+  damage: '#ff6b6b',           // 伤害红
+  heal: HEAL_TEXT_COLOR,       // 治疗粉（与玫瑰回血飘字同色，绝不与伤害红/生命绿混用）
+  armor: '#b8c6d1',            // 护甲灰蓝
+  poison: MOB_POISON_COLOR,    // 中毒紫罗兰
+  bonus: MAX_MOB_RARITY_COLOR, // 装备类属性：Max Mob Rarity / 转速 / 攻击距离 / 视野 / 幸运 / 间隔 / 半径 / 内容物
+  duration: (RARITIES.rare && RARITIES.rare.color) || '#4D52E3'
+};
+
 // ---- 花瓣能力声明 ----
 // 行为层（运动 / 装填 / 战斗 / UI）只读这些字段，不再按 slug 写分支。
 // 新增一种花瓣：registry 登记 + 加进 ENABLED_PETAL_SLUGS，需要特殊能力时在这里声明。
 // 字段含义：
 //   detachAfter            脱轨延时（>0 = 滞留型：脱离轨道后留在原地）
 //   launch                 脱轨瞬间喷射 { count 方向数, speedK 速度倍率, life 存活秒数 }
+//   launchRadial           launch 的方向取【脱轨瞬间的轨道角】而不是按 sub 均分（单实体 + 尖端朝外）
 //   sticky                 【会不会被生物"吸"过去黏在表面揉搓】。只影响吸附/落点，不影响碰撞——
 //                          所有花瓣都是实体、都和生物结算碰撞（分离 + 双向伤害），
 //                          该字段不决定"能不能穿过去"。
@@ -384,12 +438,14 @@ const PETAL_TRAITS = {
     reload: 1.5, detachAfter: 0.05, launch: { count: 4, speedK: 1.3, life: 2.0 },
     sticky: false, fixedReach: 'detect'
   },
-  // Missile（导弹）：常态绕玩家公转、【尖端朝外】；reach 模式立刻从当前角度尖端朝前飞出，
-  // 飞行中不旋转，2s 后消失。orbitK = 贴花系数（比普通花瓣更靠近本体）。
+  // Missile（导弹）：常态绕玩家公转、【尖端朝外】；reach 模式加载完成即沿当前轨道角
+  // 尖端朝前飞出，飞行中不旋转，2s 后消失。orbitK = 贴花系数（比普通花瓣更靠近本体）。
   // 不受 reach 影响（noReach），与 Rose 同一类。
+  // 发射走与 Peas 完全相同的那条链路（launch 能力字段 + 引擎默认 detach），
+  // launchRadial 只声明"方向取轨道角"。
   missile: {
     reload: 1.5, launchMode: 'reach',
-    launch: { count: 1, speedK: 1.3, life: 2.0 },
+    launch: { count: 1, speedK: 1.3, life: 2.0 }, launchRadial: true,
     orientOutward: true, noReach: true, orbitK: 0.55, sticky: false
   },
   // 蜜会被生物吸住并贴在表面（吸血式"拉仇恨"的载体），其它花瓣保持轨道运动。
@@ -421,6 +477,27 @@ const PETAL_TRAITS = {
   wax: {
     reload: 30, reloadText: '30.0s', sticky: false, noDamage: true,
     autoDetach: true, holdReloadUntilDeath: true
+  },
+  // Clover（幸运草）：普通攻击花瓣（伤害/血量/幸运都在 PETAL_RARITY_OVERRIDES）。
+  // 幸运效果不是"给自己加属性"，而是把玩家附近 CLOVER_LUCK_R 内的环境幸运值抬高 ——
+  // 由服务端在生成生物时读取（见 LocalServer._ambientLuck），这里只声明它能给多少。
+  // 【同种不可堆叠】（与 Third Eye / Antennae 同口径）：一个玩家只有最左边那格生效。
+  // 注意这是"卡不可叠"，不是"效果不可叠"：不同玩家各带一张时，各自那份幸运照常加算
+  // （_ambientLuck 是逐玩家求和，见 server.js）。
+  clover: { reload: 2.5, reloadText: '2.5s', sticky: false, stackable: false },
+  // Basil（罗勒）：增疗花瓣 —— 没有伤害、没有血量、也没有碰撞箱；
+  // 它不参与战斗结算（noDamage + noHealth + noPush），只挂着给玩家的回血加成（healBonus）。
+  // 图层同 Glass（overMobs）：没有碰撞的花瓣画在生物之上，否则会被生物整个盖住。
+  basil: {
+    reload: 2.5, reloadText: '2.5s', sticky: false, noDamage: true,
+    noPush: true, noKnockback: true, noHealth: true, overMobs: true
+  },
+  // Glass（玻璃）：没有碰撞箱（不分离、不被推）、不传递击退、也没有血量；
+  // 与生物接触时【单向】结算一次伤害（生物那份打不过来：它没有 health），
+  // 然后进入 interval 秒的冷却期，期内不再结算 —— 注意 interval ≠ reload。
+  glass: {
+    reload: 2.5, reloadText: '2.5s', sticky: false,
+    noPush: true, noKnockback: true, noHealth: true, overMobs: true
   },
   // Ant Egg：60s 装填；不做伤害；一卡 4 个蛋实体（见 PETAL_SUB_COUNT）。
   // 单个蛋实体死亡 -> 原地召唤一只【玩家阵营】的同等级 Soldier Ant（0.25 尺寸/数值）；
@@ -502,6 +579,9 @@ function buildPetalTypes() {
       // ---- 能力字段：全部来自 PETAL_TRAITS，行为层只读字段、不判断 slug ----
       detachAfter: tr.detachAfter || 0,            // 滞留型：脱轨延时（>0 生效）
       launch: tr.launch || null,                    // 喷射参数（Peas）
+      // 喷射方向取【脱轨瞬间的轨道角】（Missile）：漏了这一行，方向会退化成"按 sub 均分 + 自转"，
+      // 起手就比轨道朝向歪一个素材尖端角（看起来就是"发射瞬间轉一个向"）。
+      launchRadial: !!tr.launchRadial,
       launchMode: tr.launchMode || null,
       launchDelay: tr.launchDelay || 0,
       orientOutward: !!tr.orientOutward,
@@ -509,6 +589,12 @@ function buildPetalTypes() {
       attractMobs: !!tr.attractMobs,                // 吸引周围生物仇恨（Honey）
       holdReloadUntilDeath: !!tr.holdReloadUntilDeath,
       noDamage: !!tr.noDamage,
+      // 穿透型（Glass）：没有碰撞箱、不传击退、没有血量（永远打不碎）
+      noPush: !!tr.noPush,
+      noKnockback: !!tr.noKnockback,
+      noHealth: !!tr.noHealth,
+      // 图层高于生物（Glass）：Player.draw 跳过，由 game.render 在生物之后补画
+      overMobs: !!tr.overMobs,
       // 场地型（Web）：{ duration } —— 落地那张网的存在时长（半径按稀有度，在 rarityStats 里）
       web: tr.web || null,
       // 自动落地（Wax）：加载好立刻脱轨，不需要 reach/detect
@@ -583,6 +669,10 @@ function petalStatsFor(type, rarity) {
     // 装备加成类属性（0 = 没有这一项）：转速加成 / reach 加成 / 视野放大
     rotSpeed: o.rotSpeed || 0, attackRange: o.attackRange || 0,
     sight: o.sight || 0,
+    // 环境幸运值加成（Clover）/ 两次伤害之间的间隔秒数（Glass）：0 = 没有这一项
+    luck: o.luck || 0, interval: o.interval || 0,
+    // 回血增幅（Basil）：0 = 没有这一项（0.45 = 回血 +45%）
+    healBonus: o.healBonus || 0,
     // 场地型花瓣（Web）：落地网的半径 + 存在时长（0 = 没有这一项）
     radius: o.radius || 0, duration: o.duration || dur
   });
@@ -599,6 +689,9 @@ function petalStatsFor(type, rarity) {
       rotSpeed: (s.rotSpeed || 0) * (mult.rotSpeed || 1),
       attackRange: (s.attackRange || 0) * (mult.attackRange || 1),
       sight: (s.sight || 0) * (mult.sight || 1),
+      luck: (s.luck || 0) * (mult.luck || 1),
+      interval: s.interval || 0,
+      healBonus: s.healBonus || 0,
       radius: (s.radius || 0) * (mult.radius || 1),
       duration: s.duration || dur
     };
@@ -643,6 +736,34 @@ const MOB_RARITY_OVERRIDES = {
     super:     { hp: 437400000,  dmg: 21870, armor: 583, exp: 13608888 },
     eternal:   { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 },
     unique:    { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 }
+  },
+  // Baby Ant 幼蚁（id 5）：官方表整表写实（Passive，被打了才反击）。
+  5: {
+    common:    { hp: 25,        dmg: 10,    armor: 1,   exp: 1 },
+    unusual:   { hp: 93.8,      dmg: 30,    armor: 2,   exp: 2 },
+    rare:      { hp: 337.5,     dmg: 90,    armor: 7,   exp: 9 },
+    epic:      { hp: 1350,      dmg: 270,   armor: 22,  exp: 67 },
+    legendary: { hp: 8100,      dmg: 810,   armor: 65,  exp: 615 },
+    mythic:    { hp: 78975,     dmg: 2430,  armor: 194, exp: 8164 },
+    ultra:     { hp: 3645000,   dmg: 7290,  armor: 583, exp: 345862 },
+    super:     { hp: 109350000, dmg: 21870, armor: 583, exp: 19893553 },
+    eternal:   { hp: 656100000, dmg: 65610, armor: 583, exp: 19893553 },
+    unique:    { hp: 656100000, dmg: 65610, armor: 583, exp: 19893553 }
+  },
+  // Worker Ant 工蚁（id 6）：官方表整表写实（Neutral，与中立瓢虫同一档阵营）：
+  //   hp 60 → 1.57464e9，dmg 10 → 65610，armor 1/2/7/22/65/194/583(超以上固定)，
+  //   exp 1/1/4/31/279/4105/147030/9345409(超以上固定)。
+  6: {
+    common:    { hp: 60,        dmg: 10,    armor: 1,   exp: 1 },
+    unusual:   { hp: 225,       dmg: 30,    armor: 2,   exp: 1 },
+    rare:      { hp: 810,       dmg: 90,    armor: 7,   exp: 4 },
+    epic:      { hp: 3240,      dmg: 270,   armor: 22,  exp: 31 },
+    legendary: { hp: 19440,     dmg: 810,   armor: 65,  exp: 279 },
+    mythic:    { hp: 189540,    dmg: 2430,  armor: 194, exp: 4105 },
+    ultra:     { hp: 8748000,   dmg: 7290,  armor: 583, exp: 147030 },
+    super:     { hp: 262440000, dmg: 21870, armor: 583, exp: 9345409 },
+    eternal:   { hp: 1574640000, dmg: 65610, armor: 583, exp: 9345409 },
+    unique:    { hp: 1574640000, dmg: 65610, armor: 583, exp: 9345409 }
   },
   // Spider 蜘蛛（id 21）：hp/dmg/armor/exp 全部按官方最新口径整表覆盖；
   //   poison     = 命中玩家后施加的【中毒总量】（总量固定，按 poisonRate 均摊扣完）
@@ -706,7 +827,7 @@ const MOB_RARITY_OVERRIDES = {
 // ---- 生物行为/体型声明 ----
 // 行为代码（Mob 构造、AI、生成器）只读这些字段，不再按 slug 写分支。
 //   segmented     一次生成整条（多节生物），由 LocalServer._spawnChain 展开
-//   sizeScale     视觉等比倍数（碰撞半径不受影响：collSize = diam / sizeScale）
+//   sizeScale     等比体型倍数（绘制与碰撞同一尺寸：diam = 基础直径 × sizeScale，collSize = diam）
 //   sPath         走 S 型（持续左右摆头）
 //   chaseMult     追击速度 = 该倍率 × 玩家默认最高速度
 //   wanderFactor  游荡速度相对同类基准的倍率
@@ -733,7 +854,18 @@ const MOB_TRAITS = {
   // 体型用默认值；speed 必须显式给（registry 没写），否则会被判成障碍物而原地不动。
   // 'player' = 构建类型时解析成"玩家的基础移速"（data.js 执行时常量还没加载，不能直接引用）。
   // 召唤物在此基础上再乘 0.25（见 LocalServer._spawnSummon 的 sizeScale）。
-  soldier_ant: { speed: 'player' },
+  // follow = 跟随型属性（召唤物）：离领队超过 start 就往回走，走到 stop 之内停下。
+  // 两个阈值是【迟滞】，单阈值会在边界上来回抽搐；行为实现在 ai.js 的通用 wander 里，
+  // 任何生物都能配，不是召唤物专属代码。
+  soldier_ant: { speed: 'player', follow: { start: 420, stop: 240 } },
+  // 工蚁：与人蚁同一套移速口径（用户要求"速度属性和 Soldier Ant 相同"）；
+  // 阵营走 registry（Neutral）= 中立，被打了才反击 —— 不要在这里加仇恨/追击字段。
+  worker_ant: { speed: 'player' },
+  // 幼蚁：Passive（不会主动生成仇恨），移速走 registry 默认值。
+  // 体型校正：主体球（唯一体节）的直径要对齐同级 Worker 的【第一体节（较大的那个球）】。
+  // 素材内球径（各自 viewBox 归一化宽度）：Baby 0.8678 / Worker 大球 0.7346，
+  // 所以统一缩放取 0.7346 / 0.8678 ≈ 0.8465（绘制与碰撞同一尺寸，见 Mob 构造）。
+  baby_ant: { sizeScale: 0.8465 },
   centipede: { segmented: true, sizeScale: 1.4 },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
@@ -816,9 +948,10 @@ function buildMobTypes() {
       ai: m.ai || null,                  // 官方 AI 开关（aggro/chase/flee/retaliate…）
       // ---- 行为/体型字段：全部来自 MOB_TRAITS，行为层只读字段、不判断 slug ----
       segmented: !!mt.segmented,          // 多节生物：一次生成整条
-      sizeScale: mt.sizeScale || 1,       // 视觉等比倍数（不影响碰撞半径）
+      sizeScale: mt.sizeScale || 1,       // 等比体型倍数（绘制与碰撞同尺寸）
       sPath: !!mt.sPath,                  // S 型游荡
       sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
+      follow: mt.follow || null,          // 跟随型（召唤物）：{ start, stop } 两个迟滞阀值
       gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
       immuneStatus: mt.immuneStatus || null,   // 状态免疫（{ web: true } = 不受蛛网减速）
       chaseMult: (mt.chaseMult != null) ? mt.chaseMult : null,   // null = 通用追击倍率
@@ -887,8 +1020,12 @@ const MOB_DROP_TABLE = {
 const MOB_DROP_ITEMS = {
   ladybug: ['light', 'rose', 'mana_orb'],      // Ladybug / 瓢虫
   bee: ['stinger', 'pollen', 'honey'],         // Bee / 蜜蜂（按此顺序展示与掷骰）
-  // Soldier Ant：不装掉落物（官方表未启用；召唤物本身也不产生掉落，见 kill 事件的 noDrop）
-  soldier_ant: [],
+  // Soldier Ant / 兵蚁：Clover + Glass（两张【各自独立】的掉率表，见 MOB_DROP_TABLE_ITEM）
+  soldier_ant: ['clover', 'glass'],
+  // Worker Ant / 工蚁：Leaf + Magic Leaf（隐藏魔法变种）+ Corn；三张表都在 MOB_DROP_TABLE_MOB
+  worker_ant: ['leaf', 'magic_leaf', 'corn'],
+  // Baby Ant / 幼蚁：Light（走官方通用表）+ Leaf + Magic Leaf + Rice
+  baby_ant: ['light', 'leaf', 'magic_leaf', 'rice'],
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
   spider: ['faster', 'web', 'third_eye', 'magic_eye'],
@@ -901,6 +1038,32 @@ const MOB_DROP_ITEMS = {
 //   · stinger 没有专属表 -> 沿用 MOB_DROP_TABLE（正好就是官方 Stinger 表）
 //   · pollen / honey 用下面这两张；某档稀有度没写 = 这只生物在这一档不掉这件
 const MOB_DROP_TABLE_ITEM = {
+  // Clover / Glass：兵蚁（Soldier Ant）专属两张表（官方 Wiki 的 Clover / Glass 两个页签）。
+  // 行 = 生物稀有度，列 = 掉落花瓣的稀有度；表格里空着的格子 = 这一档不掉。
+  clover: {
+    common:    [['common', 0.598], ['unusual', 0.164]],
+    unusual:   [['common', 0.485], ['unusual', 0.512]],
+    rare:      [['common', 0.001], ['unusual', 0.834], ['rare', 0.165]],
+    epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+    legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+    mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+    ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+    super:     [['mythic', 0.357], ['ultra', 0.643]],
+    eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+    unique:    [['mythic', 0.357], ['ultra', 0.643]]
+  },
+  glass: {
+    common:    [['common', 0.638], ['unusual', 0.194]],
+    unusual:   [['common', 0.420], ['unusual', 0.579]],
+    rare:      [['common', 0.0002], ['unusual', 0.805], ['rare', 0.195]],
+    epic:      [['unusual', 0.039], ['rare', 0.815], ['epic', 0.146]],
+    legendary: [['rare', 0.043], ['epic', 0.897], ['legendary', 0.060]],
+    mythic:    [['epic', 0.045], ['legendary', 0.946], ['mythic', 0.009]],
+    ultra:     [['legendary', 0.248], ['mythic', 0.748], ['ultra', 0.005]],
+    super:     [['mythic', 0.290], ['ultra', 0.710]],
+    eternal:   [['mythic', 0.290], ['ultra', 0.710]],
+    unique:    [['mythic', 0.290], ['ultra', 0.710]]
+  },
   // Missile / Magic Missile / Orange：三张相同的 Hornet 专属表，最低档为 Unusual，无 Common 档。
   missile: {
     common:    [['unusual', 0.164]],
@@ -1103,8 +1266,70 @@ const MOB_DROP_TABLE_ITEM = {
   }
 };
 
-// 某件掉落物在某生物稀有度下的稀有度分布；null = 这件不掉
-function dropDistFor(slug, rarity) {
+// 【按生物】的掉落分布：同一件花瓣在不同生物身上可以完全不同表。
+//   · 工蚁/幼蚁的 Leaf 表与通用表不同（最低档是 Unusual，且不是通用分布）；
+//     Leaf 同时是蜈蚣的掉落，所以【不能】把 Leaf 写成全局专属表 —— 那会把蜈蚣一起改掉；
+//   · Magic Leaf（隐藏魔法变种）与 Leaf 同表，工蚁/幼蚁各一份。
+// 键：mob slug -> item slug -> 分布（结构与 MOB_DROP_TABLE_ITEM 完全一致）
+const MOB_DROP_TABLE_MOB = {
+  // 工蚁 / 幼蚁共用的 Leaf 表（官方 Wiki 两页数据完全一致）
+  ...(() => {
+    const leaf = {
+      common:    [['unusual', 0.101]],
+      unusual:   [['unusual', 0.348]],
+      rare:      [['unusual', 0.883], ['rare', 0.103]],
+      epic:      [['unusual', 0.197], ['rare', 0.727], ['epic', 0.076]],
+      legendary: [['rare', 0.207], ['epic', 0.763], ['legendary', 0.031]],
+      mythic:    [['epic', 0.212], ['legendary', 0.783], ['mythic', 0.005]],
+      ultra:     [['legendary', 0.498], ['mythic', 0.500], ['ultra', 0.002]],
+      super:     [['mythic', 0.539], ['ultra', 0.461]],
+      eternal:   [['mythic', 0.539], ['ultra', 0.461]],
+      unique:    [['mythic', 0.539], ['ultra', 0.461]]
+    };
+    return {
+      worker_ant: {
+        leaf,
+        magic_leaf: leaf,                    // 魔法变种与本体同表（只入库、不掉落）
+        // Corn：Common 档掉 Common+Unusual（Leaf 表里没有 Common 档）
+        corn: {
+          common:    [['common', 0.455], ['unusual', 0.101]],
+          unusual:   [['common', 0.613], ['unusual', 0.348]],
+          rare:      [['common', 0.014], ['unusual', 0.883], ['rare', 0.103]],
+          epic:      [['unusual', 0.197], ['rare', 0.727], ['epic', 0.076]],
+          legendary: [['rare', 0.207], ['epic', 0.763], ['legendary', 0.031]],
+          mythic:    [['epic', 0.212], ['legendary', 0.783], ['mythic', 0.005]],
+          ultra:     [['legendary', 0.498], ['mythic', 0.500], ['ultra', 0.002]],
+          super:     [['mythic', 0.539], ['ultra', 0.461]],
+          eternal:   [['mythic', 0.539], ['ultra', 0.461]],
+          unique:    [['mythic', 0.539], ['ultra', 0.461]]
+        }
+      },
+      baby_ant: {
+        leaf,
+        magic_leaf: leaf,
+        // Rice：与 Leaf 形状相似但数值不同（含 0.00004% 那档）
+        rice: {
+          common:    [['common', 0.662], ['unusual', 0.306]],
+          unusual:   [['common', 0.232], ['unusual', 0.768]],
+          rare:      [['common', 0.0000004], ['unusual', 0.697], ['rare', 0.303]],
+          epic:      [['unusual', 0.004], ['rare', 0.764], ['epic', 0.231]],
+          legendary: [['rare', 0.005], ['epic', 0.897], ['legendary', 0.098]],
+          mythic:    [['epic', 0.006], ['legendary', 0.979], ['mythic', 0.015]],
+          ultra:     [['legendary', 0.098], ['mythic', 0.895], ['ultra', 0.008]],
+          super:     [['mythic', 0.127], ['ultra', 0.873]],
+          eternal:   [['mythic', 0.127], ['ultra', 0.873]],
+          unique:    [['mythic', 0.127], ['ultra', 0.873]]
+        }
+      }
+    };
+  })()
+};
+
+// 某件掉落物在某生物稀有度下的稀有度分布；null = 这件不掉。
+// 优先级：【该生物对该件花的专属表】 > 【该件花的全局专属表】 > 官方通用表。
+function dropDistFor(slug, rarity, mobSlug) {
+  const perMob = mobSlug ? MOB_DROP_TABLE_MOB[mobSlug] : null;
+  if (perMob && perMob[slug]) return perMob[slug][rarity] || null;
   const own = MOB_DROP_TABLE_ITEM[slug];
   if (own) return own[rarity] || null;      // 有专属表：没写这一档就是不掉
   return MOB_DROP_TABLE[rarity] || null;    // 没有专属表：走官方通用表
@@ -1124,7 +1349,10 @@ const MOB_DROP_MAGICIAN = {
   ladybug:   { rose: 'mana_orb' },
   centipede: { leaf: 'magic_leaf', peas: 'blueberries' },
   spider:    { third_eye: 'magic_eye' },     // 蜘蛛：Third Eye -> Magic Eye（未实装变种）
-  hornet:    { missile: 'magic_missile' }
+  hornet:    { missile: 'magic_missile' },
+  // 工蚁 / 幼蚁：Leaf -> Magic Leaf（两张表完全相同，与官方 Wiki 的 Magic Leaf 页签一致）
+  worker_ant: { leaf: 'magic_leaf' },
+  baby_ant:   { leaf: 'magic_leaf' }
 };
 
 // 掉落表查询入口：对外仍接受「数字 id / slug / type 对象」，内部统一转 slug。
@@ -1202,11 +1430,12 @@ function mobDropRows(mobId, rarity, magician) {
   const list = mobDropList(mobId);
   if (!list || !list.length) return [];
   const magicMap = mobMagicianMap(mobId, magician);
+  const mobSlug = mobSlugOf(mobId);              // 按生物区分的掉落表要用它
   const out = [];
   for (const slugRaw of list) {
     const slug = (magicMap && magicMap[slugRaw]) ? magicMap[slugRaw] : slugRaw;  // 魔法变种替换
     if (DROP_HIDDEN_SLUGS.has(slug)) continue;   // Mana Orb 等：只入库，不在悬浮框显示
-    const dist = dropDistFor(slug, rarity);      // 每件掉落物各自的稀有度分布
+    const dist = dropDistFor(slug, rarity, mobSlug);   // 每件掉落物各自的稀有度分布
     if (!dist || !dist.length) continue;         // 这一档不掉这件：整行不显示
     // 素材取不到也要出行（卡面缺失时只是没有贴图，概率照常显示）
     const art = petalArtOf(slug) || { slug, svg: null, name: slug };
@@ -1248,11 +1477,12 @@ function rollMobDrops(mobId, rarity, magician) {
   if (!list || !list.length) return [];
   // 魔法变种替换表（仅特定生物）：击杀者带 magician 属性时启用第二套掉落物表
   const magicMap = mobMagicianMap(mobId, magician);
+  const mobSlug = mobSlugOf(mobId);              // 按生物区分的掉落表要用它
   const out = [];
   for (const slugRaw of list) {
     const slug = (magicMap && magicMap[slugRaw]) ? magicMap[slugRaw] : slugRaw;  // 先替换，再判断是否隐藏
     if (DROP_HIDDEN_SLUGS.has(slug)) continue;     // 只入库、不实际掉落
-    const dist = dropDistFor(slug, rarity);        // 每件掉落物各自的稀有度分布
+    const dist = dropDistFor(slug, rarity, mobSlug);    // 每件掉落物各自的稀有度分布
     if (!dist || !dist.length) continue;           // 这一档不掉这件
     const chances = dropChances(dist);             // 与掷骰同口径的有效概率
     let r = Math.random();
@@ -1335,6 +1565,36 @@ function rollMobRarityByDifficulty(diff) {
   return RARITY_ORDER[Math.min(idx, RARITY_ORDER.length - 1)];
 }
 
+// ---------------- 生物衰减值 / 环境幸运值（Clover） ----------------
+// 规则（用户口径）：每个【自然生成】的生物出生时，按所在位置的环境幸运值 L 调整稀有度。
+//   L = -0.6（默认）-> 60% 概率降一级（这就是"生物衰减 60%"的数值体现）；
+//   L = 1.3 -> 必定升一级，另有 30% 概率再升一级；L = 3.5 -> 必定升三级，另有 50% 升四级。
+// 统一公式：shift = sign(L) × (floor(|L|) + (rand < frac(|L|) ? 1 : 0))。
+// 上限给 4.0（超过按 4.0 取）；自然生成永远不可能到 Eternal（封顶 super）。
+const LUCK_BASE = -0.6;
+const LUCK_MAX = 4.0;
+const LUCK_MAX_RARITY = 'super';
+// Clover 抬高环境幸运值的半径（px，圆心 = 玩家）
+const CLOVER_LUCK_R = 1000;
+
+function luckRarityShift(luck) {
+  const L = Math.min(isFinite(luck) ? luck : 0, LUCK_MAX);
+  const a = Math.abs(L);
+  const whole = Math.floor(a);
+  const frac = a - whole;
+  const dir = L < 0 ? -1 : 1;
+  return dir * (whole + (Math.random() < frac ? 1 : 0));
+}
+
+// 把一次掷骰结果按环境幸运值调整；结果钳在 [common, LUCK_MAX_RARITY]。
+function applyLuckToRarity(rarity, luck) {
+  const i0 = RARITY_ORDER.indexOf(rarity);
+  if (i0 < 0) return rarity;
+  const cap = RARITY_ORDER.indexOf(LUCK_MAX_RARITY);
+  const i = Math.max(0, Math.min(cap, i0 + luckRarityShift(luck)));
+  return RARITY_ORDER[i];
+}
+
 // 解析生成区的 mobs 权重串："rock:0.25;\nant_soldier:1;\ngarden:1;"
 //   · "名字:权重" -> 权重（省略按 1）
 //   · 纯组名 -> 展开 MOB_GROUPS
@@ -1343,7 +1603,16 @@ function rollMobRarityByDifficulty(diff) {
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant']);
+
+// 地图（官方导出的 .tmj）里的名字 → 物种 slug。
+// 兵蚁在 TMJ 里的旧写法是 ant_soldier（"兵蚁"词序），而官方英文名是 Soldier Ant（slug = soldier_ant），
+// 两者指的是同一只生物。没有这张表，生成表里的 ant_soldier 会被当成"未实装物种"静默跳过。
+const MOB_SPAWN_ALIASES = {
+  ant_soldier: 'soldier_ant',
+  ant_worker: 'worker_ant',
+  ant_baby: 'baby_ant'
+};
 
 function parseSpawnMobs(str) {
   const out = [];
@@ -1357,7 +1626,8 @@ function parseSpawnMobs(str) {
     const line = rawLine.trim();
     if (!line) continue;
     const ci = line.indexOf(':');
-    const slug = (ci >= 0 ? line.slice(0, ci) : line).trim().toLowerCase().replace(/ /g, '_');
+    const raw = (ci >= 0 ? line.slice(0, ci) : line).trim().toLowerCase().replace(/ /g, '_');
+    const slug = MOB_SPAWN_ALIASES[raw] || raw;
     const w = ci >= 0 ? (parseFloat(line.slice(ci + 1)) || 1) : 1;
     if (MOB_GROUPS[slug]) {
       for (const g of MOB_GROUPS[slug]) push(g[0], w * (g[1] || 1));

@@ -227,6 +227,38 @@ const MobAI = {
       return { x: ai.dirX * mob.chaseSpeed, y: ai.dirY * mob.chaseSpeed };
     },
 
+    // 跟随（召唤物）：离领队太远就往回走。
+    //   · 两个阀值做【迟滞】（start / stop）—— 单阀值会在边界上每帧来回切，看起来就是抽搯；
+    //   · 转向同样受 turnRate 限制（与追击同一条曲线），不会突然折线；
+    //   · 只读 mob.followEnt / mob.follow 两个【属性】，任何生物都能配，不是召唤物专属分支。
+    follow(mob, ai, dt) {
+      const cfg = mob.follow;
+      const lead = mob.followEnt;
+      if (!cfg || !lead || lead.dead) return null;
+      const stop = cfg.stop || 220, start = cfg.start || 400;
+      const dx = lead.x - mob.x, dy = lead.y - mob.y;
+      const d = Math.hypot(dx, dy) || 1;
+      // 迟滞：没在返回状态时，必须超过 start 才起步；已经在返回时，走到 stop 以内才算完
+      if (!mob.following) {
+        if (d < start) return null;
+        mob.following = true;
+      }
+      if (d < stop) { mob.following = false; ai.remain = 0; return null; }
+      const wantA = MobAI._util.steer(mob, ai, Math.atan2(dy, dx), dt);
+      const tr = mob.turnRate || 0;
+      if (tr > 0) {
+        if (ai.heading == null) ai.heading = wantA;
+        ai.heading = MobAI._util.turnToward(ai.heading, wantA, tr * dt);
+        ai.dirX = Math.cos(ai.heading); ai.dirY = Math.sin(ai.heading);
+      } else {
+        ai.dirX = dx / d; ai.dirY = dy / d;
+      }
+      // 快到 stop 半径时自动减速：停在应有的距离上，不会一头撞上去再被弹开
+      const k = clamp((d - stop) / 140, 0, 1);
+      const sp = (mob.chaseSpeed || mob.speed || 0) * (0.45 + 0.55 * k);
+      return { x: ai.dirX * sp, y: ai.dirY * sp };
+    },
+
     // 通用随机游走：行走一段距离 -> 停下来 -> 等一会儿 -> 换个新方向 -> 再走 …
     // 一趟之内方向恒定；turnRate > 0 时以有限角速度逼近目标角（走圆弧而非折线）。
     wanderStep(ai, dt, mob) {
@@ -319,6 +351,8 @@ MobAI.register('wander', {
     if (chase) return chase;
     const flee = U.flee(mob, ai, dt);
     if (flee) return flee;
+    const follow = U.follow(mob, ai, dt);     // 跟随型（数据表声明了 follow 才有）
+    if (follow) return follow;
     return U.wanderStep(ai, dt, mob);
   },
   notifyMoved(ai, d) {
@@ -381,39 +415,23 @@ MobAI.register('hornet', {
   facing(ai, mob) { return mob.facing; },
 });
 
-// 召唤物（Soldier Ant）—— 由 Ant Egg 花瓣召唤的玩家从属。
-//   · 离玩家超过 350px：以 1.1× 玩家速度跟随；
-//   · 距离 < 200px 或仇恨目标不是玩家：停止跟随，转入通用 AI 作战。
-// 与普通生物共用同一套 AI / 碰撞 / 渲染管线，只多一段跟随决策。
+// 召唤物 / 敌对 Soldier Ant —— AI 与蜘蛛【完全相同】：通用游走（追击 -> 逃离 -> 跟随 ->
+// 随机游走），速度口径来自数据表（MOB_TRAITS.soldier_ant.speed = 'player'），外观来自贴图。
+// 这里刻意【没有】自己的状态机：以前那段"距离 > 350 就直冲玩家、否则走通用 AI"的分支
+// 就是抽搯与丢仇恨的来源（单阀值边界每帧来回切、方向突变不受 turnRate 约束、
+// 而且 newThreat 读的是 topThreat() 的返回值本身而不是 .ent，永远为假）。
 MobAI.register('soldier_ant', {
   init(mob) {
-    // 【注意】通用 wander 注册项没有 init 方法 —— 直接调 MobAI.defs.wander.init(mob)
-    // 会抛 TypeError，而 Mob 构造函数末尾的 MobAI.attach() 会调用它：
-    // 一次召唤（Ant Egg 死亡）就能让服务端 tick 崩掉、整局卡死。
-    const w = MobAI.defs.wander;
-    if (w && typeof w.init === 'function') w.init(mob);
-    mob.speed = mob.wanderSpeed;
+    // 一趟跑得比通用（120~280）远一点：追人时不会刚出几步就停下换向
+    mob.wanderRange = [120 * 1.5, 280 * 1.5];
   },
   create() {
     const ai = MobAI.defs.wander.create();
-    ai.kind = 'summon';
+    ai.kind = 'soldier_ant';
     return ai;
   },
-  step(ai, dt, mob, player) {
-    if (player && !player.dead) {
-      const dx = player.x - mob.x, dy = player.y - mob.y;
-      const d = Math.hypot(dx, dy) || 1;
-      const threat = mob.topThreat ? mob.topThreat() : null;
-      const newThreat = !!(threat && threat.ent && threat.ent !== player);
-      if (d > 350 && !newThreat) {
-        const sp = 1.1 * PLAYER_BASE_SPEED;
-        ai.dirX = dx / d; ai.dirY = dy / d;
-        return { x: dx / d * sp, y: dy / d * sp };
-      }
-    }
-    return MobAI.defs.wander.step(ai, dt, mob, player);
-  },
-  notifyMoved(ai, d) { MobAI.defs.wander.notifyMoved(ai, d); },
+  step(ai, dt, mob, player) { return MobAI.defs.wander.step(ai, dt, mob, player); },
+  notifyMoved(ai, d, mob, dt) { MobAI.defs.wander.notifyMoved(ai, d, mob, dt); },
   facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
 });
 

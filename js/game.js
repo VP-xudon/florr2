@@ -485,7 +485,7 @@ class Game {
       v.vx = e.vx || 0; v.vy = e.vy || 0;   // 只用于推挤的动能项（视图实体不积分位置）
       if (e.artSvg && v.artSvg !== e.artSvg) {
         v.artSvg = e.artSvg;
-        v.artRot = MOB_ART_ROT[e.artSvg] || v.artRot || 0;
+        v.artRot = mobArtRot(e.artSvg);
         v.shape = v.hull = null;             // 贴图变化后按新主体重新提取碰撞轮廓
       }
       if (e.pollenShot) v.pollenShot = true;
@@ -1220,6 +1220,8 @@ class Game {
     // 这样高等级卡的粒子永远在花瓣图层之下，不会盖住花瓣本体。
     for (const pt of this.auraFx) pt.draw(ctx);
     if (me && !me.dead) { try { me.draw(ctx); } catch (e) { console.error('[draw entity]', e); } }
+    // 图层高于生物的花瓣（Glass）：等生物与主角都画完再补一遍
+    if (me && !me.dead) { try { me.drawOverMobs(ctx); } catch (e) { console.error('[draw over-mob petals]', e); } }
 
     for (const pt of this.particles) pt.draw(ctx);
     for (const d of this.dmgTexts) d.draw(ctx);
