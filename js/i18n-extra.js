@@ -86,7 +86,11 @@
     // 专属台词：登记了台词的生物不再用默认模板（整句替换，颜色仍按稀有度）
     'Chat/Sys/Spawn/ladybug': 'A red-and-black figure rises above the horizon.',
     'Chat/Sys/Spawn/bee': 'A deep buzzing drifts in from somewhere far away.',
-    'Chat/Sys/Spawn/centipede': 'Is that a giant train in the distance?'
+    'Chat/Sys/Spawn/centipede': 'Is that a giant train in the distance?',
+
+    // ---- 新实装物种：蚁后（官方词条键是 ant_queen，slug 是 queen_ant）----
+    'Mobs/queen_ant/Name': 'Queen Ant',
+    'Mobs/queen_ant/Description': 'You must have done something really bad if she is chasing you.'
   };
 
   const ZH = {
@@ -163,7 +167,10 @@
     'Chat/Sys/Spawn/Default': '一只{1}{2}已在某处生成！',
     'Chat/Sys/Spawn/ladybug': '一个红黑相间的身影浮现于地平线之上。',
     'Chat/Sys/Spawn/bee': '巨大的嗡嗡声从远处隐约传来。',
-    'Chat/Sys/Spawn/centipede': '远方是一列巨型火车吗？'
+    'Chat/Sys/Spawn/centipede': '远方是一列巨型火车吗？',
+
+    'Mobs/queen_ant/Name': '蚁后',
+    'Mobs/queen_ant/Description': '如果你被她追着跑，那你一定干了什么坏事。'
   };
 
   I18N.addPack('en_US', EN);

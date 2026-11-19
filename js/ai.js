@@ -180,8 +180,17 @@ const MobAI = {
     // 唯一例外：被蜜（Honey）吸引的目标，连被动型也会主动过去 —— 否则瓢虫
     // 这类生物永远不会理会地上的蜜，看起来就像「蜜没有吸引效果」。
     chase(mob, ai, dt) {
-      const tgt = mob.topThreat ? mob.topThreat() : null;
-      if (!tgt || (mob.hostility === 'passive' && !tgt.honey)) {
+      // 复仇型（Ant Egg 被击碎时召出的幼蚁）：唯一目标就是那个玩家，无视距离、
+      // 仇恨永不转移；玩家死亡后清空复仇目标，它回到本物种的常态（Passive → 游荡）。
+      // 走墙仍是引擎的路线规划（steer），所以"无视距离"不等于穿墙。
+      let tgt = null;
+      let ignoreRange = false;
+      if (mob.avenger) {
+        if (mob.avenger.dead) mob.avenger = null;
+        else { tgt = mob.avenger; ignoreRange = true; }
+      }
+      if (!tgt) tgt = mob.topThreat ? mob.topThreat() : null;
+      if (!tgt || (!ignoreRange && mob.hostility === 'passive' && !tgt.honey)) {
         ai.hadTgt = false;
         return null;
       }
@@ -431,6 +440,40 @@ MobAI.register('soldier_ant', {
     return ai;
   },
   step(ai, dt, mob, player) { return MobAI.defs.wander.step(ai, dt, mob, player); },
+  notifyMoved(ai, d, mob, dt) { MobAI.defs.wander.notifyMoved(ai, d, mob, dt); },
+  facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
+});
+
+// Queen Ant 蚁后：AI 与兵蚁基本一致（同一套通用游走：追击 -> 逃离 -> 跟随 -> 随机游走），
+// 额外只在【执行 AI 的同时】做一个判定：Rare+ 且自己产下的蚁卵 + 孵出的兵蚁存活数 < 7，
+// 就停下并在尾部请求生成一枚低一级的蚁卵（至少间隔 cfg.eggCd 秒）。
+// 真正的生成/孵化由服务端消费 queenEggReq 完成（权威侧），AI 只写请求。
+MobAI.register('queen_ant', {
+  init(mob) { MobAI.defs.soldier_ant.init(mob); },
+  create() {
+    const ai = MobAI.defs.wander.create();
+    ai.kind = 'queen_ant';
+    return ai;
+  },
+  step(ai, dt, mob, player) {
+    const cfg = mob.queen;
+    if (cfg) {
+      mob.eggCd = Math.max(0, (mob.eggCd || 0) - dt);
+      const ri = RARITY_ORDER.indexOf(mob.rarity);
+      const minRi = RARITY_ORDER.indexOf(cfg.minRarity || 'rare');
+      if (ri >= minRi) {
+        let alive = 0;
+        for (const e of mob.brood || []) if (e && !e.dead) alive++;
+        if (mob.eggCd <= 0 && alive < (cfg.max || 7)) {
+          mob.eggCd = cfg.eggCd || 1.5;
+          // 低自己一级；common 不会走到这里（minRarity = rare）
+          mob.queenEggReq = { rarity: RARITY_ORDER[Math.max(0, ri - 1)] };
+          return { x: 0, y: 0 };          // 停下产卵，下一帧继续追击
+        }
+      }
+    }
+    return MobAI.defs.wander.step(ai, dt, mob, player);
+  },
   notifyMoved(ai, d, mob, dt) { MobAI.defs.wander.notifyMoved(ai, d, mob, dt); },
   facing(ai) { return Math.atan2(ai.dirY, ai.dirX); },
 });

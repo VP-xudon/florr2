@@ -1067,6 +1067,8 @@ class LocalServer {
             if (a._next === b || b._next === a) continue;
             // 原地放置的实体（Bumble Bee 的 Pollen）：不被推着滑走
             if (a.noPush || b.noPush) continue;
+            // 数据声明的可穿透配对（蚁穴）：蚂蚁家族在洞上没有碰撞
+            if (this._passThrough(a, b)) continue;
             // 统一引擎：这里只做位置分离（物理）。接触伤害在 _combatTick 结算。
             physicsPush(a, b);
           }
@@ -1140,7 +1142,7 @@ class LocalServer {
   // 8) 生物特性（Bumble Bee 每 0.6s 在尾部生一颗同等级 Pollen）。
   // 放在【最后】：前面任何一步早退（玩家死亡等）都不该让它停产；
   // 而且生成位置要用本步定稿后的坐标。
-  sysMobTraits(dt) { this._bumbleTick(dt); }
+  sysMobTraits(dt) { this._bumbleTick(dt); this._queenAntTick(dt); this._antHoleTick(dt); }
 
   // 场地实体产出用的"原语"：MobFX 认识要什么（蛛网 / 倍率），服务器只管怎么造。
   // 建一次复用（每帧 new 对象是纯浪费）。
@@ -1210,6 +1212,206 @@ class LocalServer {
       shot.life = 0;
       this.ents.push(shot);
     }
+  }
+
+  // Queen Ant 蚁后：消费 AI 写的产卵请求，并在 1 秒后把无敌蚁卵替换成同级兵蚁。
+  // 蚁卵/兵蚁都归入 queen.brood，存活个数就是"自己生成的子代"计数。
+  _queenAntTick(dt) {
+    const src = this._awake || this.ents;
+    for (const m of src) {
+      if (!m || m.dead) continue;
+      // 临时蚁卵：倒计时结束 -> 强制移除 + 原地生成同级兵蚁（个数不变）
+      if (m.eggHatchT > 0) {
+        m.eggHatchT -= dt;
+        if (m.eggHatchT <= 0) this._hatchQueenEgg(m);
+        continue;
+      }
+      if (!m.queenEggReq) continue;
+      const req = m.queenEggReq;
+      m.queenEggReq = null;
+      this._spawnQueenEgg(m, req.rarity);
+    }
+  }
+
+  // 在蚁后尾部生成一枚无敌蚁卵（走通用 Mob / EntityFX 接口，入场动画一致）。
+  _spawnQueenEgg(queen, rarity) {
+    const type = MOB_TYPES.find((t) => t && t.slug === 'ant_egg');
+    if (!type) return null;
+    const a = (queen.facing || 0) + Math.PI;
+    const off = (queen.r || 20) * 0.95;
+    let x = queen.x + Math.cos(a) * off;
+    let y = queen.y + Math.sin(a) * off;
+    if (this.map && this.map.solidAtPoint && this.map.solidAtPoint(x, y)) { x = queen.x; y = queen.y; }
+    const m = new Mob(type, x, y, queen.level || 1, rarity);
+    m.netId = this.nextEntityId();
+    m.invincible = true;
+    m.queenEgg = true;
+    m.eggOwner = queen;
+    m.eggHatchT = (queen.queen && queen.queen.hatch) || 1.0;
+    m.hostility = 'passive';              // 不追人；1 秒后就会被移除
+    m._ensureShape();                     // 与普通生物同一口径：首帧就有碰撞箱
+    this._addEnt(m);
+    (queen.brood || (queen.brood = [])).push(m);
+    return m;
+  }
+
+  // 蚁卵孵化：移除蚁卵 -> 原地放一只同级兵蚁（都走通用实体/生成链路）。
+  _hatchQueenEgg(egg) {
+    if (!egg || egg.dead) return null;
+    const type = MOB_TYPES.find((t) => t && t.slug === 'soldier_ant');
+    const owner = egg.eggOwner;
+    egg.eggHatchT = 0;
+    egg.dead = true;
+    EntityFX.despawn(egg);
+    if (!type) return null;
+    const m = new Mob(type, egg.x, egg.y, egg.level || 1, egg.rarity);
+    m.netId = this.nextEntityId();
+    m._ensureShape();
+    this._addEnt(m);
+    if (owner) (owner.brood || (owner.brood = [])).push(m);
+    return m;
+  }
+
+  // Ant Egg 被击碎：50% 原地生成一只【同级】幼蚁，死追击碎它的玩家。
+  // 复仇目标只是一个属性（mob.avenger），追击行为在 ai.js 的通用 chase 里。
+  _spawnEggAvenger(egg) {
+    const p = this.player;
+    if (!p || p.dead) return null;
+    if (Math.random() >= 0.5) return null;
+    const type = MOB_TYPES.find((t) => t && t.slug === 'baby_ant');
+    if (!type) return null;
+    const m = new Mob(type, egg.x, egg.y, egg.level || 1, egg.rarity);
+    m.netId = this.nextEntityId();
+    m.avenger = p;                        // 无视距离死追；玩家死亡后自动变回正常被动
+    m._ensureShape();
+    this._addEnt(m);
+    return m;
+  }
+
+  // Ant Hole 蚁穴：第一次跑到时（任何生成路径）按数据表把开局 6 只铺上。
+  _antHoleTick(dt) {
+    const src = this._awake || this.ents;
+    for (const m of src) {
+      if (!m || m.dead || !m.type || m.type.slug !== 'ant_hole') continue;
+      if (!m.holeInit) this._initAntHole(m);
+    }
+  }
+
+  _initAntHole(hole) {
+    const cfg = hole.hole || {};
+    hole.holeInit = true;
+    // 池子 = 整局 40 只的构成（蚁后单列）：抽到就扣，抽干即停。
+    hole.holePool = Object.assign({}, (cfg.pool || {}));
+    delete hole.holePool.queen_ant;
+    hole.holeQueenPending = true;
+    hole.holeBatches = 0;
+    hole.holeNextDrop = cfg.step || 0.07;    // 下一次补员的血量阈值：1 - step×k
+    hole.holeAngry = false;
+    for (const pair of (cfg.init || [])) this._antHoleSpawn(hole, pair[0], pair[1], false);
+  }
+
+  // 从池子里取 n 只（计数同步扣减）；onHole=true 时出现在蚁穴上（蚂蚁与蚁穴没有碰撞）。
+  _antHoleSpawn(hole, slug, n, onHole) {
+    const pool = hole.holePool || {};
+    const cnt = Math.min(n, pool[slug] || 0);
+    if (cnt <= 0) return 0;
+    const type = MOB_TYPES.find((t) => t && t.slug === slug);
+    if (!type) return 0;
+    pool[slug] -= cnt;
+    const baseR = hole.r || 20;
+    for (let i = 0; i < cnt; i++) {
+      const a = rand(0, TAU);
+      const rr = onHole
+        ? baseR * Math.sqrt(rand(0, 1))
+        : baseR + (type.size || 20) * 0.6 + 6;
+      const m = new Mob(type, hole.x + Math.cos(a) * rr, hole.y + Math.sin(a) * rr,
+        hole.level || 1, hole.rarity);
+      m.netId = this.nextEntityId();
+      m.holeOwner = hole;
+      // 蚁穴已经挨过打：新爬出来的工蚁同样具有攻击性（与兵蚁一致）
+      if (slug === 'worker_ant' && hole.holeAngry) m.hostility = 'hostile';
+      m._ensureShape();
+      this._addEnt(m);
+    }
+    return cnt;
+  }
+
+  // 蚁穴挨打：所有属于它的工蚁立刻转敌对；每掉 step 比例生命补 3 只，
+  // 蚁后在生命低于 queenAt 时随某一批额外出现（整局一次）。
+  _antHoleHurt(hole) {
+    if (!hole.holeInit) this._initAntHole(hole);
+    if (!hole.holeAngry) {
+      hole.holeAngry = true;
+      for (const m of this.ents) {
+        if (!m || m.dead || m.holeOwner !== hole) continue;
+        if (!m.type || m.type.slug !== 'worker_ant') continue;
+        m.hostility = 'hostile';
+        m.wanderRange = [120 * 1.5, 280 * 1.5];   // 与兵蚁同一游走幅度
+      }
+    }
+    const maxHp = hole.maxHp || 0;
+    if (maxHp <= 0) return;
+    const frac = hole.hp / maxHp;
+    const pool = hole.holePool;
+    while (hole.holeNextDrop <= 1 && frac < 1 - hole.holeNextDrop
+      && (pool.baby_ant + pool.worker_ant + pool.soldier_ant) > 0) {
+      hole.holeNextDrop += hole.hole.step || 0.07;
+      this._antHoleBatch(hole, frac);
+    }
+  }
+
+  // 一批 3 只：按剩余池子权重抽（前期幼蚁/工蚁更容易先出，兵蚁后置），
+  // 最终构成仍由池子决定，只是顺序不同。
+  _antHoleBatch(hole, frac) {
+    for (let i = 0; i < 3; i++) {
+      const slug = this._antHolePick(hole);
+      if (!slug) break;
+      this._antHoleSpawn(hole, slug, 1, true);
+    }
+    const cfg = hole.hole || {};
+    if (hole.holeQueenPending && frac < (cfg.queenAt || 0.4)) {
+      hole.holeQueenPending = false;
+      const type = MOB_TYPES.find((t) => t && t.slug === 'queen_ant');
+      if (type) {
+        const m = new Mob(type, hole.x, hole.y, hole.level || 1, hole.rarity);
+        m.netId = this.nextEntityId();
+        m.holeOwner = hole;
+        m._ensureShape();
+        this._addEnt(m);
+      }
+    }
+    hole.holeBatches = (hole.holeBatches || 0) + 1;
+  }
+
+  // 剩余池子计数 × 前期加权：k=0（开局）时幼蚁/工蚁权重 ×3、兵蚁 ×0.4；
+  // k=1（末尾）回到计数本身。
+  _antHolePick(hole) {
+    const pool = hole.holePool;
+    const k = Math.min(1, (hole.holeBatches || 0) / 11);
+    const early = 1 - k;
+    const w = [
+      ['baby_ant', (pool.baby_ant || 0) * (1 + 2 * early)],
+      ['worker_ant', (pool.worker_ant || 0) * (1 + 2 * early)],
+      ['soldier_ant', (pool.soldier_ant || 0) * (1 - 0.6 * early)]
+    ];
+    let total = 0;
+    for (const e of w) total += e[1];
+    if (total <= 0) return null;
+    let r = rand(0, total);
+    for (const e of w) {
+      if (e[1] <= 0) continue;
+      r -= e[1];
+      if (r <= 0) return e[0];
+    }
+    return w[2][1] > 0 ? 'soldier_ant' : null;
+  }
+
+  // 数据声明的"可穿透"关系（蚁穴）：两边谁的 passWith 含对方物种就跳过推挤。
+  _passThrough(a, b) {
+    const pa = a.passWith, pb = b.passWith;
+    if (!pa && !pb) return false;
+    const sa = a.type && a.type.slug, sb = b.type && b.type.slug;
+    return !!((pa && sa && pa.indexOf(sb) >= 0) || (pb && sb && pb.indexOf(sa) >= 0));
   }
 
   // 场地型实体的判定：与放置者敌对的生物进入半径 -> 获得对应状态效果。
@@ -1647,6 +1849,8 @@ class LocalServer {
     const from = src || this.player;
     const r = m.hurt(toMob, from);
     if (r.applied > 0) {
+      // 蚁穴挨打：工蚁转敌对 + 按血量批次补员（40 只的总量与占比由池子保证）
+      if (m.type && m.type.slug === 'ant_hole') this._antHoleHurt(m);
       // 伤害榜 / 掉落归属只统计玩家本人造成的伤害
       if (Number.isFinite(toMob) && from && from === this.player && m.lastHitByPlayer) {
         m.lastHitByPlayer.set(from, r.applied);
@@ -1664,6 +1868,8 @@ class LocalServer {
       this._flushDmg(m);
       // Super 及以上：全服系统公告（伤害榜榜首 + 稀有度配色）
       this._announceBossKill(m);
+      // Ant Egg（生物）被击碎：50% 原地召出复仇幼蚁（蚁后产的无敌卵不算）
+      if (m.type && m.type.slug === 'ant_egg' && !m.queenEgg) this._spawnEggAvenger(m);
       this._events.push({
         kind: 'kill', id: m.netId, mobId: (m.type.id != null ? m.type.id : m.name),
         level: m.level, rarity: m.rarity,

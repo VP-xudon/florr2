@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <!-- BUILD 标记：改核心逻辑时同步 +1，标签页上能直接看出浏览器加载的是哪一版 -->
-  <title>Florr.io 还原 — Garden [b52]</title>
+  <title>Florr.io 还原 — Garden [b54]</title>
   <!-- Ubuntu 字体：canvas 与 DOM 统一使用；离线时自动回退系统字体 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -30,7 +30,7 @@
   <script src="js/lang.js?v=14"></script>
   <script src="assets/mob-shapes.js?v=13"></script>
   <script src="assets/registry.js?v=15"></script>
-  <script src="js/data.js?v=98"></script>
+  <script src="js/data.js?v=100"></script>
   <script src="assets/petal-metrics.js?v=5"></script>
   <script src="js/cards.js?v=89"></script>
   <script src="js/ui.js?v=113"></script>
@@ -38,10 +38,10 @@
   <script src="js/ui/drag.js?v=4"></script>
   <script src="js/ui/minimap.js?v=3"></script>
   <script src="js/map.js?v=29"></script>
-  <script src="js/ai.js?v=42"></script>
+  <script src="js/ai.js?v=43"></script>
   <script src="js/petal-effects.js?v=51"></script>
   <!-- 实体层已按"纯模拟 / 渲染"分层：sim/* 无 DOM 依赖，可在 Node 中 require -->
-  <script src="js/sim/constants.js?v=32"></script>
+  <script src="js/sim/constants.js?v=33"></script>
   <!-- 实体生命周期引擎（EntityFX + 受控实体表）：必须早于任何创建/绘制实体的模块 -->
   <script src="js/sim/exit.js?v=13"></script>
   <!-- 生物通用特性引擎（MobFX）：物种只在这里声明一次（目前是蜘蛛大招），
@@ -55,16 +55,16 @@
   <script src="js/sim/crb.js?v=2"></script>
   <script src="js/sim/mob-shape.js?v=13"></script>
   <script src="js/sim/player.js?v=64"></script>
-  <script src="js/sim/mob.js?v=44"></script>
+  <script src="js/sim/mob.js?v=46"></script>
   <script src="js/sim/drops.js?v=6"></script>
   <script src="js/render/fx.js?v=3"></script>
   <!-- 网络层：协议 / 权威服务端 / 客户端传输 三层分离 -->
   <script src="js/net/protocol.js?v=9"></script>
-  <script src="js/net/server.js?v=76"></script>
+  <script src="js/net/server.js?v=78"></script>
   <script src="js/net/client.js?v=8"></script>
   <script src="js/chat.js?v=23"></script>
   <!-- 项目自建文案（F3 调试屏幕 / 触控按钮），不改抓取生成的官方语言包 -->
-  <script src="js/i18n-extra.js?v=11"></script>
+  <script src="js/i18n-extra.js?v=12"></script>
   <!-- 移动端触控：自缩放摇杆 + A(reach)/B(detect) -->
   <script src="js/ui/touch.js?v=4"></script>
   <!-- F3 调试屏幕：取代原 /pending crash、/show-coord 指令 -->

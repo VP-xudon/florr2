@@ -155,6 +155,9 @@ const KNOCKBACK_SHARE = {
 //   位移对时间的积分正好收敛到目标总位移（∫v0·e^(-kt)dt = v0/k）。
 // 观感上是"被撞得滑出去一小段再停住"，而不是"位置突然跳一下"。
 const KNOCKBACK_DECAY = 12;
+// 脱战距离：目标离自己超过【仇恨半径（sightR）× 该倍数】就取消追击，改选下一个有效目标或游荡。
+// 仇恨表本身不清空 —— 目标回到范围内会自动继续追。
+const MOB_DEAGGRO_K = 2;
 // ---- 多节生物（刚性链）对击退的响应 ----
 // 被粘合的体节位置由链解算给出，冲量如果只写进 kbX/kbY 就会被下一帧覆盖 ——
 // 这正是"打蜈蚣中段几乎没反应"的原因。所以冲量分为两路：
@@ -167,6 +170,8 @@ const CHAIN_PUSH_RECOVER = 6;       // 局部偏移的弹性回位速率（1/s�
 
 // 施加反弹冲量：ux/uy 为单位方向，total 为希望的总位移（世界像素）
 function applyKnockback(ent, ux, uy, total) {
+  // 障碍型 / 无穷重量的实体不吃击退（数据表 MOB_TRAITS 声明 immovable）。
+  if (!ent || ent.immovable || ent.noKnockback) return;
   const v = total * KNOCKBACK_DECAY;
   ent.kbX = (ent.kbX || 0) + ux * v;
   ent.kbY = (ent.kbY || 0) + uy * v;

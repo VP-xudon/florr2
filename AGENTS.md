@@ -261,6 +261,30 @@ EntityFX.hurt(ent, dur);
   碰撞箱 = **一个**体节（`'5_body'`）—— 生成脚本对体节数量不做假设，有几条身体 path 就取几条。
   体型按【主体球】对齐同级 Worker 的较大体节：`MOB_TRAITS.baby_ant.sizeScale = 0.8465`
   （素材归一化球径 Baby 0.8678 / Worker 大球 0.7346）。
+- 脱战只有一条规则：`Mob.canChase(ent)` = 距离 ≤ `sightR × MOB_DEAGGRO_K`（=2）且视线不被墙挡；
+  `topThreat()` 用它逐条筛仇恨表。超范围的目标【只在本帧失效】，仇恨记录永不抹除 ——
+  超范围时自动改选范围内下一个有效目标，没有有效目标就返回 null 让 AI 游走；
+  目标回到范围内会自动恢复追击。视线采样统一在 `Mob._losBlocked`（0.15s 缓存），
+  `canSee`（1×）/`canChase`（2×）/`wallBlocked` 共用同一份结果。
+- Ant Egg 蚁卵（生物，id 40，与同名花瓣是两个东西）：障碍型 + `immovable`（重量 Infinity、
+  不吃击退/推挤，`speed: 0` 据此判 `obstacle`），固定在原地；掉落花瓣 Ant Egg（官方通用表）。
+  被击碎时 50% 原地生成【同级】Baby Ant（`mob.avenger`）：通用 `chase` 优先选中它并
+  **忽略距离**（仍受墙阻挡），仇恨永不转移；玩家死亡后清空 `avenger`，变回正常被动。
+  复仇幼蚁的追击速度 = Soldier Ant（同为 `speed:'player'`）。
+- Queen Ant 蚁后（id 8）：AI 与 Soldier Ant 相同（`MobAI.register('queen_ant')` 复用 wander），
+  差别只有属性 `queen = { minRarity:'rare', max:7, eggCd:1.5, hatch:1.0 }`：Rare+ 在执行 AI 的
+  同时统计自己 `brood` 里的存活数，< 7 就停下写一次 `queenEggReq`（间隔 ≥1.5s）。
+  生成/孵化全在服务端：`_queenAntTick` → `_spawnQueenEgg`（低一级、无敌、走通用实体接口）
+  → 1s 后 `_hatchQueenEgg`（`despawn` 蚁卵原地放同级 Soldier Ant，存活数不变）。
+- Ant Hole 蚁穴（id 9）：障碍型（`speed:0` + `immovable`）固定不动；数值走
+  `MOB_RARITY_OVERRIDES[9]`。产卵参数全在 `MOB_TRAITS.ant_hole.hole`：
+  `init` 开局铺 6 只（3 幼蚁 / 2 工蚁 / 1 兵蚁），`pool` 是整局 40 只的构成
+  （5 幼蚁 / 8 工蚁 / 26 兵蚁 / 1 蚁后）—— 抽干即停，所以总量与占比恒定；
+  每掉 `step`（7%）生命由 `_antHoleHurt` 补一批 3 只，抽取权重前期偏向幼蚁/工蚁
+  （兵蚁后置），蚁后在生命 < `queenAt`（40%）时随某一批额外出现一次。
+  受击时属于它的工蚁全部 `hostility='hostile'`（AI 与兵蚁一致）。
+  `MOB_TRAITS.ant_hole.passWith` = 蚂蚁家族：`sysPush` 的 `_passThrough` 跳过这类配对的推挤，
+  蚂蚁可以随意踩在蚁穴上。掉落物暂不实装。
 - 掉落表有三级优先级（`dropDistFor(slug, rarity, mobSlug)`）：
   【该生物对该件花的专属表（`MOB_DROP_TABLE_MOB`）】 > 【该件花的全局专属表（`MOB_DROP_TABLE_ITEM`）】 > 官方通用表。
   为什么要第二层：工蚁/幼蚁的 Leaf 表与通用表完全不同，而 Leaf 同样是蜈蚣的掉落 ——
@@ -325,8 +349,8 @@ EntityFX.hurt(ent, dur);
   reach 下加载完成即沿当前轨道角径向飞出（`launchRadial`），直线飞行 2s，参与实体碰撞。
 - Hornet：追击速度 0.95× 玩家，尾部 Missile 为 MobFX 子实体，独立受击，消失后 0.5s 重生。
 - 可自然生成生物（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, bumble_bee, centipede, spider, hornet,
-  soldier_ant, worker_ant, baby_ant`。地图 TMJ 里的旧名走 `MOB_SPAWN_ALIASES`
-  （`ant_soldier / ant_worker / ant_baby` → 对应物种）。
+  soldier_ant, worker_ant, baby_ant, ant_egg, queen_ant, ant_hole`。地图 TMJ 里的旧名走
+  `MOB_SPAWN_ALIASES`（`ant_soldier / ant_worker / ant_baby / ant_queen` → 对应物种）。
 - 中毒数值在 `MOB_RARITY_OVERRIDES[id].{poison,poisonRate}`，由 `_combatTick` 施加到 `StatusFX`，
   扣血在 `Player._tickPoison`；状态效果不进快照，客户端由 `hurt` 事件的 `poison` 字段自挂。
 - 隐藏掉落（`DROP_HIDDEN_SLUGS`）：`mana_orb / blueberries / magic_leaf / magic_eye`。

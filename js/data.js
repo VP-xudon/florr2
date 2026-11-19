@@ -753,6 +753,45 @@ const MOB_RARITY_OVERRIDES = {
   // Worker Ant 工蚁（id 6）：官方表整表写实（Neutral，与中立瓢虫同一档阵营）：
   //   hp 60 → 1.57464e9，dmg 10 → 65610，armor 1/2/7/22/65/194/583(超以上固定)，
   //   exp 1/1/4/31/279/4105/147030/9345409(超以上固定)。
+  // Ant Egg 蚁卵（id 40）：障碍型生物，固定在原地。注意它和花瓣 Ant Egg 是两个东西。
+  40: {
+    common:    { hp: 150,        dmg: 3,     armor: 1,   exp: 1 },
+    unusual:   { hp: 562.5,      dmg: 9,     armor: 2,   exp: 1 },
+    rare:      { hp: 2025,       dmg: 27,    armor: 7,   exp: 3 },
+    epic:      { hp: 8100,       dmg: 81,    armor: 22,  exp: 21 },
+    legendary: { hp: 48600,      dmg: 243,   armor: 65,  exp: 190 },
+    mythic:    { hp: 473850,     dmg: 729,   armor: 194, exp: 2614 },
+    ultra:     { hp: 21870000,   dmg: 2187,  armor: 583, exp: 106740 },
+    super:     { hp: 656100000,  dmg: 6561,  armor: 583, exp: 6475563 },
+    eternal:   { hp: 3936600000, dmg: 19683, armor: 583, exp: 6475563 },
+    unique:    { hp: 3936600000, dmg: 19683, armor: 583, exp: 6475563 }
+  },
+  // Queen Ant 蚁后（id 8）：AI 与兵蚁基本一致，额外会产卵（Rare+）。
+  8: {
+    common:    { hp: 250,        dmg: 10,    armor: 1,   exp: 1 },
+    unusual:   { hp: 937.5,      dmg: 30,    armor: 2,   exp: 1 },
+    rare:      { hp: 3375,       dmg: 90,    armor: 7,   exp: 4 },
+    epic:      { hp: 13500,      dmg: 270,   armor: 22,  exp: 31 },
+    legendary: { hp: 81000,      dmg: 810,   armor: 65,  exp: 287 },
+    mythic:    { hp: 789750,     dmg: 2430,  armor: 194, exp: 4425 },
+    ultra:     { hp: 36450000,   dmg: 7290,  armor: 583, exp: 285763 },
+    super:     { hp: 1093500000, dmg: 21870, armor: 583, exp: 15878612 },
+    eternal:   { hp: 6561000000, dmg: 65610, armor: 583, exp: 15878612 },
+    unique:    { hp: 6561000000, dmg: 65610, armor: 583, exp: 15878612 }
+  },
+  // Ant Hole 蚁穴（id 9）：障碍型生物（固定不动、无穷重量）。
+  9: {
+    common:    { hp: 750,          dmg: 15,    armor: 1,   exp: 1 },
+    unusual:   { hp: 2812.5,       dmg: 45,    armor: 2,   exp: 2 },
+    rare:      { hp: 10125,        dmg: 135,   armor: 7,   exp: 5 },
+    epic:      { hp: 40500,        dmg: 405,   armor: 22,  exp: 39 },
+    legendary: { hp: 243000,       dmg: 1215,  armor: 65,  exp: 356 },
+    mythic:    { hp: 2369250,      dmg: 3645,  armor: 194, exp: 4980 },
+    ultra:     { hp: 109350000,    dmg: 10935, armor: 583, exp: 197906 },
+    super:     { hp: 3280500000,   dmg: 32805, armor: 583, exp: 12142438 },
+    eternal:   { hp: 19683000000,  dmg: 98415, armor: 583, exp: 12142438 },
+    unique:    { hp: 19683000000,  dmg: 98415, armor: 583, exp: 12142438 }
+  },
   6: {
     common:    { hp: 60,        dmg: 10,    armor: 1,   exp: 1 },
     unusual:   { hp: 225,       dmg: 30,    armor: 2,   exp: 1 },
@@ -866,6 +905,32 @@ const MOB_TRAITS = {
   // 素材内球径（各自 viewBox 归一化宽度）：Baby 0.8678 / Worker 大球 0.7346，
   // 所以统一缩放取 0.7346 / 0.8678 ≈ 0.8465（绘制与碰撞同一尺寸，见 Mob 构造）。
   baby_ant: { sizeScale: 0.8465 },
+  // Ant Egg 蚁卵（生物）：障碍型 —— 速度 0（Mob 构造据此判定 obstacle）、
+  // 无穷重量（immovable）：不被推挤、不吃击退，位置固定。
+  ant_egg: { speed: 0, chaseMult: 0, immovable: true },
+  // Queen Ant 蚁后：移速与兵蚁同一口径；AI 在 ai.js 的 'queen_ant' 里，
+  // 产卵参数是【属性】而不是第二套 AI（服务端消费 queenEggReq）。
+  queen_ant: {
+    speed: 'player',
+    queen: { minRarity: 'rare', max: 7, eggCd: 1.5, hatch: 1.0 }
+  },
+  // Ant Hole 蚁穴：障碍型（速度 0 + 无穷重量），原地不动。
+  // passWith = 蚂蚁家族与它【没有碰撞】：从洞里爬出来的蚂蚁可以直接踩在洞上。
+  // hole = 产卵参数（服务端消费）：init 是开局铺的 6 只；之后每掉 step 比例生命补 3 只；
+  //   pool 是整局 40 只的构成（5 幼蚁 / 8 工蚁 / 26 兵蚁 / 1 蚁后），抽干即停 ——
+  //   总量与占比由池子保证，顺序靠权重随机（前期幼蚁/工蚁更容易先出现）。
+  //   蚁后在生命低于 queenAt 时随某一批额外出现。
+  ant_hole: {
+    speed: 0,
+    immovable: true,
+    passWith: ['baby_ant', 'worker_ant', 'soldier_ant', 'queen_ant', 'ant_egg'],
+    hole: {
+      step: 0.07,
+      queenAt: 0.4,
+      init: [['baby_ant', 3], ['worker_ant', 2], ['soldier_ant', 1]],
+      pool: { baby_ant: 5, worker_ant: 8, soldier_ant: 26, queen_ant: 1 }
+    }
+  },
   centipede: { segmented: true, sizeScale: 1.4 },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
@@ -951,6 +1016,10 @@ function buildMobTypes() {
       sizeScale: mt.sizeScale || 1,       // 等比体型倍数（绘制与碰撞同尺寸）
       sPath: !!mt.sPath,                  // S 型游荡
       sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
+      immovable: !!mt.immovable,          // 无穷重量：不被推挤/击退（障碍型）
+      queen: mt.queen || null,            // 产卵参数（蚁后）：{ minRarity, max, eggCd, hatch }
+      passWith: mt.passWith || null,      // 可穿透的物种 slug（蚁穴：蚂蚁家族可在其上行走）
+      hole: mt.hole || null,              // 蚁穴产卵参数：{ step, queenAt, init, pool }
       follow: mt.follow || null,          // 跟随型（召唤物）：{ start, stop } 两个迟滞阀值
       gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
       immuneStatus: mt.immuneStatus || null,   // 状态免疫（{ web: true } = 不受蛛网减速）
@@ -1026,6 +1095,10 @@ const MOB_DROP_ITEMS = {
   worker_ant: ['leaf', 'magic_leaf', 'corn'],
   // Baby Ant / 幼蚁：Light（走官方通用表）+ Leaf + Magic Leaf + Rice
   baby_ant: ['light', 'leaf', 'magic_leaf', 'rice'],
+  // Ant Egg 蚁卵（生物）：掉花瓣 Ant Egg（官方通用分布表）
+  ant_egg: ['ant_egg'],
+  // Queen Ant 蚁后：Basil + Ant Egg（两张专属表见 MOB_DROP_TABLE_MOB）
+  queen_ant: ['basil', 'ant_egg'],
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
   spider: ['faster', 'web', 'third_eye', 'magic_eye'],
@@ -1302,6 +1375,29 @@ const MOB_DROP_TABLE_MOB = {
           super:     [['mythic', 0.539], ['ultra', 0.461]],
           eternal:   [['mythic', 0.539], ['ultra', 0.461]],
           unique:    [['mythic', 0.539], ['ultra', 0.461]]
+        }
+      },
+      queen_ant: {
+        // Basil：官方 Wiki 的 Basil 页签（只有 Mythic / Ultra 两列）
+        basil: {
+          mythic:  [['mythic', 0.009]],
+          ultra:   [['mythic', 0.748], ['ultra', 0.005]],
+          super:   [['mythic', 0.29], ['ultra', 0.71]],
+          eternal: [['mythic', 0.29], ['ultra', 0.71]],
+          unique:  [['mythic', 0.29], ['ultra', 0.71]]
+        },
+        // Ant Egg：官方 Wiki 的 Ant Egg 页签
+        ant_egg: {
+          common:    [['common', 0.662], ['unusual', 0.306]],
+          unusual:   [['common', 0.232], ['unusual', 0.768]],
+          rare:      [['common', 0.0000004], ['unusual', 0.697], ['rare', 0.303]],
+          epic:      [['unusual', 0.004], ['rare', 0.764], ['epic', 0.231]],
+          legendary: [['rare', 0.005], ['epic', 0.897], ['legendary', 0.098]],
+          mythic:    [['epic', 0.006], ['legendary', 0.979], ['mythic', 0.015]],
+          ultra:     [['legendary', 0.098], ['mythic', 0.895], ['ultra', 0.008]],
+          super:     [['mythic', 0.127], ['ultra', 0.873]],
+          eternal:   [['mythic', 0.127], ['ultra', 0.873]],
+          unique:    [['mythic', 0.127], ['ultra', 0.873]]
         }
       },
       baby_ant: {
@@ -1603,7 +1699,7 @@ function applyLuckToRarity(rarity, luck) {
 // 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
 // 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant', 'ant_egg', 'queen_ant', 'ant_hole']);
 
 // 地图（官方导出的 .tmj）里的名字 → 物种 slug。
 // 兵蚁在 TMJ 里的旧写法是 ant_soldier（"兵蚁"词序），而官方英文名是 Soldier Ant（slug = soldier_ant），
@@ -1611,7 +1707,8 @@ const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede'
 const MOB_SPAWN_ALIASES = {
   ant_soldier: 'soldier_ant',
   ant_worker: 'worker_ant',
-  ant_baby: 'baby_ant'
+  ant_baby: 'baby_ant',
+  ant_queen: 'queen_ant'     // i18n 与旧写法都用 ant_queen（英文名 Queen Ant 的 slug 是 queen_ant）
 };
 
 function parseSpawnMobs(str) {

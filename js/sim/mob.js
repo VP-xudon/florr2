@@ -78,8 +78,16 @@ class Mob {
     this.fleeAX = 0; this.fleeAY = 0; // 逃离的原点（攻击者位置）
     // S 型路线的摆幅/频率由 bee AI 的 init 写入（稀有度越高越沉稳）。
     this.sPath = !!type.sPath;
+    // 障碍型【无穷重量】（数据表 MOB_TRAITS.ant_egg）：反质量 0 —— 不可被推挤/击退。
+    // 这不是"所有障碍型都这样"，而是该物种自己声明的属性，其它障碍型照旧。
+    this.immovable = !!type.immovable;
+    this.noKnockback = this.immovable;
+    // 数据声明的可穿透关系（蚁穴）：推挤时这类配对直接跳过，别的物种没有这个字段。
+    this.passWith = type.passWith || null;
+    // 无敌（Boss 召唤的临时蚁卵）：受击结算直接归零，走通用 hurt 入口，不会被打死。
+    this.invincible = !!type.invincible;
     // 重量：按横截面积(直径²)；障碍型 ×5（几乎推不动）
-    this.weight = rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
+    this.weight = this.immovable ? Infinity : rarityWeight(this.rarity) * (this.obstacle ? 5 : 1);
     this.color = type.color; this.boss = !!type.boss;
     this.facing = rand(0, TAU);         // 朝向（无呼吸/浮动动画，用户要求生物保持静止姿态）
     const svgKey = String(this.svg);    // type.svg 是数字 id，查表统一转字符串
@@ -104,7 +112,11 @@ class Mob {
     this.follow = type.follow || null;
     this.followEnt = null;      // 领队实体（由服务端在生成时挂上）
     this.following = false;     // 迟滞状态：是否正在返回
+    this.queen = type.queen || null;    // 蚁后产卵参数（AI 读它判断何时该停下产卵）
+    this.hole = type.hole || null;      // 蚁穴产卵参数（服务端消费）
     this.threat = [];                   // 仇恨表 [{ ent, dmg }]：死亡前永久累计，追击累计伤害最高的来源
+    this.brood = null;                  // 蚁后：自己产下的蚁卵/孵出的兵蚁（存活计数用）
+    this.avenger = null;                // 复仇型幼蚁：只会死追这个玩家（无视距离），玩家死亡后清空
     this.lastHitByPlayer = new Map();   // 每只生物分别记录各玩家最近一次实际非毒单击伤害
     this.honeyT = 0;                    // 被蜜影响的累计时长（秒）
     this.honeyImmune = false;           // 被蜜影响满 40s 后永久免疫所有蜜
@@ -148,6 +160,7 @@ class Mob {
   // 护甲已在调用方扣减；src = 伤害来源实体（花瓣造成的伤害由调用方统一记到玩家头上）。
   hurt(dmg, src) {
     if (this.dead || dmg <= 0) return { applied: 0, killed: false };
+    if (this.invincible) return { applied: 0, killed: false };
     const applied = Math.min(dmg, this.hp);
     this.hp -= applied;
     EntityFX.hurt(this);                // 红闪统一走实体引擎（时长/强度只有一个来源）
@@ -218,13 +231,15 @@ class Mob {
 
   // 当前最恨的实体：蜜（Honey）**强制排首位**（官方：蜜会强行抢走仇恨），
   // 其余按累计伤害最高且还活着；被蜜影响满 40s 后永久免疫所有蜜（honeyImmune）。
-  // 【只看看得见的】：仇恨记账永久保留，但看不见的目标这一帧不算数 ——
-  // 这就是"卡墙 / 卡拐角能甩掉仇恨"的实现点。
+  // 【只算在脱战范围内且没被墙挡住的】：仇恨记账永久保留，但这一帧不算数 ——
+  //   ① 距离 > 2 × 仇恨半径（MOB_DEAGGRO_K）-> 取消追击，改选下一个有效目标；
+  //   ② 没有有效目标 -> 返回 null，AI 自动回到游荡；
+  //   ③ 目标回到范围内（且视线不被墙挡）时会自动重新被选中 —— 仇恨表从未被抹除。
   topThreat() {
     let honey = null, best = null;
     for (const t of this.threat) {
       if (!t.ent || t.ent.dead) continue;
-      if (!this.canSee(t.ent)) continue;
+      if (!this.canChase(t.ent)) continue;
       if (t.ent.honey) {
         if (!this.honeyImmune && (!honey || t.dmg > honey.dmg)) honey = t;
         continue;
@@ -240,28 +255,40 @@ class Mob {
   // 视线采样（lineBlocked）较贵，同一目标 0.15s 内复用上一次结果。
   canSee(ent) {
     if (!ent || ent.dead) return false;
-    const map = this._map;
     const dx = ent.x - this.x, dy = ent.y - this.y;
     const sr = this.sightR || MOB_SIGHT_R;
     if (dx * dx + dy * dy > sr * sr) return false;
-    if (!map || !map.lineBlocked) return true;
+    return !this._losBlocked(ent);
+  }
+
+  // 追击判定 = 脱战范围（仇恨半径 × MOB_DEAGGRO_K）+ 视线不被墙挡。
+  // 与 canSee 的唯一区别是距离：看见目标用 sightR，保持追击可以用到 2 倍。
+  canChase(ent) {
+    if (!ent || ent.dead) return false;
+    const dx = ent.x - this.x, dy = ent.y - this.y;
+    const rr = (this.sightR || MOB_SIGHT_R) * MOB_DEAGGRO_K;
+    if (dx * dx + dy * dy > rr * rr) return false;
+    return !this._losBlocked(ent);
+  }
+
+  // 只看墙的视线结果（带 0.15s 缓存）；canSee / canChase / wallBlocked 共用一份采样。
+  _losBlocked(ent) {
+    const map = this._map;
+    if (!ent || !map || !map.lineBlocked) return false;
     const now = this.age || 0;
     const c = this._seeCache;
-    if (c && c.ent === ent && now - c.t < 0.15) return c.ok;
-    const ok = !map.lineBlocked(this.x, this.y, ent.x, ent.y,
+    if (c && c.ent === ent && now - c.t < 0.15) return c.blocked;
+    const blocked = !!map.lineBlocked(this.x, this.y, ent.x, ent.y,
       (this.r || 12) + 8, (ent.r || 12) + 8);
-    this._seeCache = { ent, t: now, ok };
-    return ok;
+    this._seeCache = { ent, t: now, blocked };
+    return blocked;
   }
 
   // 视线是否被【墙】挡住。与 canSee 分开：canSee 还带距离限制，
   // 而"偷袭"只认墙（被墙后打 = 措手不及；正面隔着再远也看得见）。
   // 两端按各自半径跳过采样：贴着墙站 ≠ 被墙挡住（否则一挨打就往反方向跑）。
   wallBlocked(ent) {
-    const map = this._map;
-    if (!ent || !map || !map.lineBlocked) return false;
-    return !!map.lineBlocked(this.x, this.y, ent.x, ent.y,
-      (this.r || 12) + 8, (ent.r || 12) + 8);
+    return this._losBlocked(ent);
   }
 
   // 瓢虫鞘翅斑点（运行时随机生成）：
