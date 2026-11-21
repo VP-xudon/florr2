@@ -431,7 +431,7 @@ const Chat = {
   },
   // /give <player> <petal_id> <rarity> [count] —— 把花瓣卡发进目标玩家的"背包"
   // （= 背包画廊数量，与拾取掉落同一落点：UI.addGalleryCount）。
-  // petal_id 支持数字 id 或 slug；rarity 为官方稀有度（common..unique）；count 缺省 1。
+  // petal_id 支持数字 id 或 slug；rarity 为官方稀有度（common..eternal）；count 缺省 1。
   _give(args) {
     if (!args[0] || !args[1] || !args[2]) { this._sys('Chat/Command/Give/Usage'); return; }
     const pl = this._matchPlayer(args[0]);

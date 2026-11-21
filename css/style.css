@@ -32,6 +32,8 @@ body {
 .dockbtn:active { filter: brightness(.82); transform: scale(.95); }
 /* 背包按钮：原 54px × 0.85 × 1.2 */
 #bagBtn { width: 55.2px; height: 55.2px; }
+/* 合成按钮：与背包按钮同尺寸，排在背包正下方（列从底部锚定 -> 背包整体上移一格） */
+#craftBtn { width: 55.2px; height: 55.2px; }
 /* 左上角按钮组：设置（最左）+ 生物图鉴（右移一格） */
 #topBtns {
   position: absolute; left: 16px; top: 12px;
@@ -228,6 +230,77 @@ body {
   transform-origin: left top;
 }
 #settings.window.hidden { transform: translateX(-18px); opacity: 0; }   /* 水平弹入 */
+
+/* ---- 合成窗口 ----
+   主色 = 合成按钮（btn-party.svg）的内板 #db9d5a，描边 = darken 0.18 = #b17f49。
+   尺寸/位置/动效与背包窗口一致；上半是 5 个材料槽 + 合成按钮，下半是背包卡按种类分行。 */
+#craft { width: 288px; background: #db9d5a; border-color: #b17f49; }
+#craft .win-body {
+  display: flex; flex-direction: column; overflow: hidden;
+  padding: 0 8px 8px; gap: 2px;
+}
+.craft-top { display: flex; align-items: stretch; gap: 4px; }
+.craft-stage { position: relative; flex: 1 1 auto; height: 178px; }
+/* 空材料槽：与生物图鉴空格同款（半透明灰）。聚拢/展示阶段整组隐藏（与截图一致） */
+.craft-slot {
+  position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+  border-radius: 3.2px; background: rgba(96, 96, 96, .38);
+}
+.craft-stage.crafting .craft-slot { display: none; }
+/* 待合成卡：初始停在各自槽位上，点合成后 0.24s 聚拢到中心（left/top 过渡），
+   抖动/分开都写在 transform 上 —— 与定位互不打架 */
+.craft-card {
+  position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+  transition: left .24s ease, top .24s ease; z-index: 2;
+}
+.craft-card .card { width: 100%; height: 100%; }
+.craft-side {
+  flex: 0 0 92px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 5px;
+}
+.craft-btn {
+  min-width: 72px; padding: 5px 8px; border-radius: 5px; cursor: pointer;
+  border: 2.4px solid #000; background: #8a8a8a; color: #fff;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 14px; font-weight: 800;
+  -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;
+  transition: filter .1s, transform .08s;
+}
+.craft-btn.ready:hover { filter: brightness(1.12); }
+.craft-btn:active { transform: scale(.95); }
+.craft-btn:disabled { cursor: default; }
+.craft-chance {
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 10.4px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 1.4px #000; paint-order: stroke fill;
+  text-align: center; white-space: nowrap;
+}
+.craft-note {
+  padding: 5px 8px 1px; text-align: center; line-height: 1.5;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 11px; font-weight: 800;
+  color: #fff; -webkit-text-stroke: 1.4px #000; paint-order: stroke fill;
+}
+/* 下半：一种 (花瓣×稀有度) 一行，行内 8 格（首格 = 卡面 + xN 角标，其余空槽） */
+.craft-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.craft-list::-webkit-scrollbar { width: 8px; }
+.craft-list::-webkit-scrollbar-track { background: transparent; }
+.craft-list::-webkit-scrollbar-thumb { background: rgba(226,232,236,.5); border-radius: 8px; }
+.craft-row { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.craft-cell {
+  position: relative; aspect-ratio: 1 / 1; border-radius: 3.2px;
+  background: rgba(96, 96, 96, .38);
+}
+.craft-cell.on { background: transparent; cursor: pointer; }
+.craft-cell.on:hover { filter: brightness(1.12); }
+.craft-cell.off { cursor: default; }
+.craft-cell.off .card { filter: grayscale(.85) brightness(.82); }   /* 凑不齐 5 张：置灰不可点 */
+.craft-cell .card { position: absolute; inset: 0; }
+/* 成品展示卡：成功后停在聚拢中心，点击收起（卡本身已自动进背包） */
+.craft-result {
+  position: absolute; left: 46%; top: 48%; width: 40px; height: 40px;
+  margin: -20px 0 0 -20px; z-index: 3; cursor: pointer;
+  animation: slot-pop .3s cubic-bezier(.3, 1.4, .5, 1) both;
+}
+.craft-result.hidden { display: none !important; }
+.craft-result .card { width: 100%; height: 100%; }
 
 /* 分栏标签：四等分的小按钮，选中项用白底深字 */
 .set-tabs { display: flex; gap: 4px; padding: 2px 12px 0; }

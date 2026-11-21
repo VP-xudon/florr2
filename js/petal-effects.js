@@ -84,15 +84,24 @@ const PetalFX = {
       const o = def.bonus(type, rarity) || {};
       return {
         rotSpeed: o.rotSpeed || 0, reach: o.reach || 0, sight: o.sight || 0,
-        healBonus: o.healBonus || 0    // 回血增幅（Basil）：同一个求和入口，Player.recompute 只做加法
+        healBonus: o.healBonus || 0,   // 回血增幅（Basil）：同一个求和入口，Player.recompute 只做加法
+        // Soil：装备即生效的额外半径 / 花朵生命上限 / 移速倍率（1 = 不变）
+        extraRadius: o.extraRadius || 0,
+        flowerHp: o.flowerHp || 0,
+        speedMul: (o.speedMul != null) ? o.speedMul : 1
       };
     }
     const st = (typeof petalStatsFor === 'function') ? petalStatsFor(type, rarity) : null;
+    const soil = (type && type.soil) || null;
     return {
       rotSpeed: (st && st.rotSpeed) || 0,
       reach: (st && st.attackRange) || 0,
       sight: (st && st.sight) || 0,
-      healBonus: (st && st.healBonus) || 0
+      healBonus: (st && st.healBonus) || 0,
+      // Soil（泥土）：额外半径与移速倍率来自能力声明，生命上限来自该稀有度数值表
+      extraRadius: (soil && soil.radius) || 0,
+      flowerHp: (st && st.flowerHp) || 0,
+      speedMul: (soil && soil.speedMul != null) ? soil.speedMul : 1
     };
   },
 
@@ -193,6 +202,15 @@ const PetalFX = {
   },
 
   // ---------------- 物理 / 行为钩子（给 Player 与 LocalServer 调用） ----------------
+
+  // 【统一实体接口】花瓣实体能否被其它实体攻击 / 参与伤害结算。
+  // noHealth = 没有血量 = 不参与任何实体结算（Basil / Glass / Shovel / 饰品）。
+  // 生物的体伤、Hornet 尾针、Pollen 弹等【所有外部伤害入口】只问这一个函数 ——
+  // 各调用点不许再自己拼 noDamage/noPush/noHealth 的组合，否则必定漏一处。
+  canBeHit(body) {
+    const t = body && body.card && body.card.type;
+    return !!(t && !t.noHealth);
+  },
 
   // 这张卡是否具备「脱离轨道」能力（数据字段 detachAfter > 0）
   canDetach(body) {
@@ -311,10 +329,13 @@ const PetalFX = {
     // ① 一次接触只传一次动能。接触强度取"花瓣撞过来"与"生物撞过来"两者中更大的那个，
     //    否则"站着不动让怪撞"永远传不出力。
     if (!(b.kbT > 0)) {
-      // 击退与速度解耦：统一按「正常转速下动能的 1.5 倍」给固定冲量，
-      // 差异只由稀有度与质量分配决定；vN 仅用于判断是否发生真实接触。
+      // 【统一击退口径】所有花瓣完全相同：按"legendary 花瓣以标准移速撞上来"给冲量。
+      //   · 花瓣一侧：质量 c.jmass 已是 Legendary 常量（见 server 组装 contact），速度不参与；
+      //   · 生物一侧：稀有度份额 c.jshare × 质量悬殊 c.kbBoost × 等级衰减 lvlK ——
+      //     所以"不管什么花瓣，生物等级越高被撞得越轻"。
       const impact = PETAL_KB_IMPACT;
-      applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost);
+      const lvlK = 1 / (1 + Math.max(0, ((m && m.level) || 1) - 1) * KB_LEVEL_FALLOFF);
+      applyKnockback(m, -nx, -ny, PETAL_KB_BASE * c.jshare * c.jmass * impact * c.kbBoost * lvlK);
       b.kbT = PETAL_KB_CD;
     }
     // ② 切向摩擦（揉搓）：把生物往"花瓣相对生物"的切向速度上带
@@ -390,8 +411,8 @@ const PetalFX = {
   _consume(body, player) {
     body.dead = true;
     const c = body.card;
-    const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
-    player.reload[body.slotIndex] = { card: c, age: 0, dur };
+    // 装填时长只有一份来源（含按稀有度，Shovel）
+    player.reload[body.slotIndex] = { card: c, age: 0, dur: petalReloadOf(c) };
   },
 };
 

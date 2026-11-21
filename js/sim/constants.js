@@ -66,14 +66,21 @@ const PEAS_FLIGHT_T = 2.0;            // Peas 喷射后的存活时长（s）：
 // 蜈蚣（多节生物）的移速不在这里定：由它自己的 AI 定义（js/ai.js 的 centipede.init）
 // 从基础 wanderSpeed 推出 0.65×，并记录 _centSpeedCap 供引擎做硬上限。
 // 新增物种的移速口径同理 —— 写在各自 AI 的 init 里，不再往这张常量表里堆特判。
+// 主角【标准】半径（不含 Soil 之类的额外半径）。
+// 花瓣的轨道距离 / 吸附范围一律以它为基准：装上改变本体半径的装备时，
+// 只有花朵本体变大，花瓣与人物的距离保持标准状况不变（用户口径）。
+const PLAYER_R_STD = 22 * 0.6;        // ≈13.2
 // 花瓣【自转】：独立于公转（绕主角的轨道运动），从实体加载好那一刻起持续、缓慢地转。
 // 绘制朝向 = 公转朝向(阵型基准) + 自转；普通花瓣则完全用自转（不再由轨道位置反推）。
-// 自转：口径为「公转 + 自转 = PETAL_SELF_TURN_T 秒一圈」。
-// 每片花瓣在生成那一刻按当时的公转角速度算出并固定 b.selfRate，
-// 之后改变公转（/rot-speed、Faster）不会反过来修改它。
-// 不同花瓣要不同的自转速度时，在它的注册项/数据里声明 selfSpin（rad/s，优先于上式）。
-const PETAL_SELF_TURN_T = 1.5;        // 合计一圈所需秒数
-const PETAL_SELF_SPIN = 0.9;          // 兜底自转速度（rad/s，没有公转时用）
+// 【默认口径】「公转 + 自转 = PETAL_SELF_TURN_T 秒一圈」（用户口径：2s 一圈）。
+// 绘制角 = 公转角(drawRot) + selfRot，所以 selfRate 要减去公转角速度，
+// 两者叠加后才是玩家看到的那一圈。
+// 每片花瓣在生成那一刻算出并固定 b.selfRate，之后改变公转（/rot-speed、Faster）
+// 不会反过来修改它。
+// 不同花瓣要不同的自转速度时，在它的注册项/数据里声明 selfSpin（rad/s，优先于上式）；
+// orientOutward（Missile）与落位实体（Wax）不走默认自转。
+const PETAL_SELF_TURN_T = 2;          // 合计一圈所需秒数
+const PETAL_SELF_SPIN = 0.9;          // 兜底自转速度（rad/s，仅当上面的秒数非法时）
 // 实体重量按【横截面积(直径²)】换算：直径差 N 倍 -> 重量差 N² 倍。
 // 例：super 直径约为 common 的 ~11 倍 -> ~121 倍重（用户要求面积而非线性）。
 // 障碍型生物 ×5；花朵本体 = unusual 重量；花瓣 = 对应稀有度重量。
@@ -148,7 +155,7 @@ const FLOWER_KNOCKBACK = 0.3;
 const KNOCKBACK_SHARE = {
   common: [0.15, 0.85], unusual: [0.25, 0.75], rare: [0.35, 0.65], epic: [0.45, 0.55],
   legendary: [0.55, 0.45], mythic: [0.65, 0.35], ultra: [0.75, 0.25], super: [0.85, 0.15],
-  eternal: [0.92, 0.08], unique: [0.92, 0.08]
+  eternal: [0.92, 0.08]
 };
 // 反弹是「速度冲量 + 指数衰减」，不是瞬移：
 //   施加时给一个初速度 v0 = 目标总位移 × KNOCKBACK_DECAY，随后每帧 damp 回 0，
@@ -318,6 +325,14 @@ const PETAL_RUB_MAX = 120;
 // 击退强度与速度无关：统一按"正常转速下动能的 1.5 倍"给固定冲量。
 // 速度只用于判断接触，不参与强度，否则 reach 伸得远、转得快时击退会翻倍。
 const PETAL_KB_IMPACT = 1.5;
+// 花瓣的【撞击质量】：所有花瓣统一取 Legendary 档（与 petalKnockbackWeight 同一口径）。
+// 旧口径按花瓣自身最大血量算 sqrt(hp/30)（0.8~1.8），于是高稀有度花瓣撞得更狠 ——
+// 已按用户口径废弃：不管装的是什么花瓣，撞击都按"legendary 花瓣以标准移速撞上来"算。
+// 1.8 = clamp(sqrt(legendaryHp/30), 0.8, 1.8) 的饱和值（绝大多数 legendary 花瓣都已封顶）。
+const PETAL_KB_MASS_LEGENDARY = 1.8;
+// 生物【等级】对击退的衰减：total × 1 / (1 + (level-1) × 该系数)。
+// 等级 1（当前所有自然生成个体）= 不衰减；等级越高，挨同样一下被撞得越轻。
+const KB_LEVEL_FALLOFF = 0.35;
 // Wax（落位实体）：玩家来源的推力放大 50 倍；单帧位移封顶，保证是"被推动"而非飞出去
 const WAX_PLAYER_PUSH_K = 50;
 const WAX_PLAYER_PUSH_MAX = 3;      // px/帧（60fps 下约 180px/s 上限）

@@ -174,6 +174,7 @@ class Game {
 
     // UI 由 ui.js 动态生成；绑定回调
     UI.onBagToggle = () => this.toggleBag();
+    UI.onCraftToggle = () => this.toggleCraft();
     UI.onDexToggle = () => this.toggleDex();
     UI.onSettingsToggle = () => this.toggleSettings();
     // 设置项即时生效（Cookie 的写入在 UI 侧完成，这里只负责应用到运行时）
@@ -182,6 +183,11 @@ class Game {
       else if (key === 'debug') window.__debug = !!value;
     };
     UI.onSlotClick = (i) => this.swapSlotColumn(i);         // 点击主槽卡 -> 与副槽同列互换（不再飞回背包）
+    // 合成粒子：与掉落/起土同一套方形粒子，直接在花朵当前位置炸开（世界坐标）
+    UI.onCraftBurst = (color, n) => {
+      const p = this.player;
+      if (p && !p.dead && n > 0) this.spawnParticles(p.x, p.y, color, n);
+    };
     UI.onInvBarClick = (i) => this.equipFirstEmptyFromInv(i); // 点击物品栏卡 -> 装备到花朵
     UI.onSubClick = (i) => this.swapSlotColumn(i);          // 点击副槽卡 -> 与主槽同列互换
     UI.onBagCardClick = (i) => this.moveBagToInv(i);        // 点击背包卡 -> 进物品栏（无空槽则无反应）
@@ -248,6 +254,8 @@ class Game {
     if (Number.isFinite(hpParam) && hpParam > 0) {
       const hpVal = Math.min(hpParam, 1e7);
       this.player.maxHp = hpVal;
+      // Soil 的加成是"在基础上限之上"叠加的：基础值必须同步，否则会被平滑逻辑拉回 100
+      this.player.baseMaxHp = hpVal;
       this.player.hp = hpVal;
       this.player.dispHp = hpVal; this.player.ghostHp = hpVal; this.player.ghostV = 0;
     }
@@ -276,6 +284,7 @@ class Game {
     const sp = (this.map && this.map.spawnCheckpointPoint)
       ? this.map.spawnCheckpointPoint(p.r || 22) : { x: 0, y: 0 };
     p.maxHp = FLOWER_BASE_HP;
+    p.baseMaxHp = FLOWER_BASE_HP;   // Soil 加成以它为基准（重置时清掉旧加成）
     p.xp = 0; p.level = 1; p.xpNext = 24;
     p.slots = emptySlots();
     p.subSlots = emptySlots();
@@ -435,13 +444,7 @@ class Game {
     const px = p.x, py = p.y;
     // 近处半径覆盖实际相机视口（含相机与玩家的偏移）+ 交互余量。
     // 相机缩放会平滑变化，因此每份快照都重算；不能缓存未缩放时的半径。
-    const zoom = Math.max(0.01, this.camZoom || 1);
-    const camera = this.camera || p;
-    const viewX = this.W / (2 * zoom), viewY = this.H / (2 * zoom);
-    const nearR = this._nearR = Math.hypot(
-      Math.abs(camera.x - px) + viewX,
-      Math.abs(camera.y - py) + viewY
-    ) + 300;
+    const nearR = this._nearR = this.viewRadius() + 300;
     const nearR2 = nearR * nearR;
     let farN = 0;
     let farX = this._farX, farY = this._farY;
@@ -489,8 +492,8 @@ class Game {
         v.shape = v.hull = null;             // 贴图变化后按新主体重新提取碰撞轮廓
       }
       if (e.pollenShot) v.pollenShot = true;
-      // 尾针（Missile）按 id 复用同一个客户端对象：
-      // id 相同则就地更新字段（引用稳定，退场标记与插值起点都保留），id 变化才算新导弹。
+      // 尾针（Missile）按 id 复用同一个客户端对象：同一个实体从"挂载"过渡到"飞行"
+      // 也还是这一份对象（见 _applyProjectiles 的收养），不重建、不复制状态。
       if (e.hornetMissile) {
         const src = e.hornetMissile;
         let ms = v.hornetMissile;
@@ -501,27 +504,44 @@ class Game {
           ms.px = src.x; ms.py = src.y;
           ms.tx = src.x; ms.ty = src.y;
           ms.blend = 1;
+          // 新实体入场：走通用实体引擎（Q 弹 + 渐显），再沿用服务端已经走过的生命周期
+          EntityFX.spawn(ms, 'projectile');
+          ms.age = src.age || 0;
+          ms.hurtT = src.hurtT || 0;
+          if (src.exiting) {
+            EntityFX.despawn(ms);
+            ms.exitT = src.exitT || 0;
+          }
           v.hornetMissile = ms;
         } else {
+          const wasExiting = !!ms.exiting;
           const dispX = (ms.x != null) ? ms.x : src.x;
           const dispY = (ms.y != null) ? ms.y : src.y;
           Object.assign(ms, src);              // 权威字段（facing/hp/exiting/exitT…）
+          ms._kind = 'projectile';
           ms.px = dispX; ms.py = dispY;        // 插值起点 = 上一帧显示位置
           ms.tx = src.x; ms.ty = src.y;        // 插值目标 = 服务端权威位置
           ms.blend = 0;
+          // 退场由快照的 exiting/exitT 驱动：本地也走同一条曲线（否则会永远挂在尾巴上）
+          if (src.exiting && !wasExiting) {
+            ms.exiting = false;
+            EntityFX.despawn(ms);
+            ms.exitT = src.exitT || 0;
+          }
         }
-        // 退场由快照的 exiting/exitT 驱动，计时统一交给 EntityFX.tickEntity
         ms._kind = 'projectile';
       } else if (v.hornetMissile) {
-        if (!v.hornetMissile.exiting) {
-          v.hornetMissile._kind = 'projectile';
-          EntityFX.despawn(v.hornetMissile);
+        // 服务端已经没有挂载态尾针：已发射的那枚会被 _applyProjectiles 收养（引用被搬走），
+        // 走到这里说明它被打碎了 —— 补一次通用退场，播完再摘掉引用。
+        // 绝不能直接置 null：那等于"凭空消失"，也正是 F3 里那个幽灵碰撞箱的来源之一。
+        const gone = v.hornetMissile;
+        if (this.hornetProjectiles.get(gone.id) === gone) {
+          // 同一个对象已经在飞行态表里（发射了）：只摘掉挂载引用，退场由飞行那条线负责
+          v.hornetMissile = null;
+        } else {
+          if (!gone.exiting) EntityFX.despawn(gone);
+          if (EntityFX.done(gone)) v.hornetMissile = null;
         }
-      }
-      // 快照里没有挂载尾针（已发射 / 尾针被击碎）时，视图构造阶段创建的
-      // 占位 missile 必须一起失效，否则会一直画出挂载尾针。
-      if (v.hornet && e.hornetMissile == null && v.hornet.missile) {
-        if (!v.hornet.missile.exiting) v.hornet.missile = null;
       }
       if (e.segIdx != null) v.segIdx = e.segIdx;   // 节序号：多节链不做逐节插值
       if (e.plateStyle) v.plateStyle = e.plateStyle;   // 名牌显示模式（头节经典 / 其余主角血条式）
@@ -558,12 +578,33 @@ class Game {
     const seen = new Set();
     for (const item of items || []) {
       seen.add(item.id);
-      const current = this.hornetProjectiles.get(item.id);
+      let current = this.hornetProjectiles.get(item.id);
+      // 【同一个实体】发射瞬间：服务端只是把同一枚尾针从"挂载"挪进"飞行"，
+      // 客户端也必须沿用 Mounted 的那个对象（age / 红闪 / 入场进度全部连续），
+      // 而不是另造一个 —— 否则就是"两个实体"，还会丢掉已经掉的血。
+      if (!current && item.parentId != null) {
+        const owner = this.mobViews.get(item.parentId);
+        if (owner && owner.hornetMissile && owner.hornetMissile.id === item.id) {
+          current = owner.hornetMissile;
+          owner.hornetMissile = null;
+          current.flight = true;
+          this.hornetProjectiles.set(item.id, current);
+        }
+      }
+      const isNew = !current;
       const view = current || Object.assign({}, item);
+      if (isNew) {
+        // 新实体：入场由实体引擎统一负责（与挂载态同一条曲线）
+        EntityFX.spawn(view, 'projectile');
+        view._kind = 'projectile';
+        view.age = item.age || 0;
+        view.hurtT = item.hurtT || 0;
+      }
       const wasExiting = !!view.exiting;
       const px = current ? current.x : item.x;
       const py = current ? current.y : item.y;
       Object.assign(view, item);
+      view._kind = 'projectile';
       view.px = px; view.py = py;
       view.tx = item.x; view.ty = item.y;
       view.blend = current ? 0 : 1;
@@ -571,6 +612,7 @@ class Game {
       if (item.exiting && !wasExiting) {
         view.exiting = false;
         EntityFX.despawn(view);
+        view.exitT = item.exitT || 0;
       }
       this.hornetProjectiles.set(item.id, view);
     }
@@ -667,13 +709,22 @@ class Game {
       // 25Hz -> 60fps 插值后整条平滑移动（不做逐帧硬贴，避免 25Hz 台阶抖动）。
       m.x = m.px + (m.tx - m.px) * b;
       m.y = m.py + (m.ty - m.py) * b;
-      if (m.hornetMissile) {
-        const missile = m.hornetMissile;
-        if (missile.exiting) EntityFX.tickEntity(missile, dt);
-        else if (missile.blend < 1) {
-          missile.blend = Math.min(1, missile.blend + k);
-          missile.x = missile.px + (missile.tx - missile.px) * missile.blend;
-          missile.y = missile.py + (missile.ty - missile.py) * missile.blend;
+      const hm = m.hornetMissile;
+      if (hm) {
+        // 【统一实体引擎】挂载态尾针与飞行态是同一个实体：入场/红闪/退场只有一份计时。
+        // 旧代码只在 exiting 时 tick，于是重装出来的新针 age 永远是 0 —— 没有入场动画。
+        EntityFX.tickEntity(hm, dt);
+        // 位置/朝向每帧由【挂点函数】重算（绘制 / F3 / 服务端判定读同一个函数）：
+        // 本体正在插值移动，尾针不能停在上一份快照的位置上。
+        if (!hm.flight && !hm.exiting && typeof MobFX !== 'undefined') {
+          const hs = hm.drawSize || (m.drawSize * ((MobFX.hornetTail && MobFX.hornetTail.size) || 0.3));
+          const pt = MobFX.hornetTailPoint(m, hs);
+          hm.x = pt.x; hm.y = pt.y; hm.facing = pt.a;
+          hm.px = pt.x; hm.py = pt.y;
+        } else if (!hm.exiting && hm.blend < 1) {
+          hm.blend = Math.min(1, hm.blend + k);
+          hm.x = hm.px + (hm.tx - hm.px) * hm.blend;
+          hm.y = hm.py + (hm.ty - hm.py) * hm.blend;
         }
       }
       // 主角血条模式（多节生物的非头节）：血条满血渐隐 / 掉血渐显 —— 视图不走 Mob.update，
@@ -713,6 +764,20 @@ class Game {
     }
   }
 
+  // 客户端【实际可见范围】的世界半径（px）：视口半对角线 + 相机相对玩家的偏移。
+  // 这是服务端醒/睡半径的唯一来源（随 input.viewR 上行）：
+  // 镜头拉远（Antennae 视野加成）之后，屏幕里的生物必须继续跑 AI，
+  // 而不是"看得见、却只有玩家周围固定半径内的在动"。
+  viewRadius() {
+    const p = this.player || { x: 0, y: 0 };
+    const cam = this.camera || p;
+    const zoom = Math.max(0.01, this.camZoom || 1);
+    return Math.hypot(
+      Math.abs(cam.x - p.x) + this.W / (2 * zoom),
+      Math.abs(cam.y - p.y) + this.H / (2 * zoom)
+    );
+  }
+
   _resize() {
     this.W = window.innerWidth; this.H = window.innerHeight;
     this.canvas.width = this.W * this.dpr;
@@ -724,10 +789,21 @@ class Game {
   }
 
   toggleBag() {
-    UI.setDexVisible(false);            // 同一时刻只允许一个窗口
+    UI.setCraftVisible(false);          // 同一时刻只允许一个窗口
+    UI.setDexVisible(false);
     UI.setSettingsVisible(false);
     UI.setBagVisible(!UI.isBagVisible());
     if (UI.isBagVisible()) this.renderInventory();
+  }
+
+  // ---------- 合成 ----------
+  // 与背包/图鉴互斥；窗口内的状态机在 UI 侧（库存 _gc 与背包共用一份）
+  toggleCraft() {
+    UI.setBagVisible(false);
+    UI.setDexVisible(false);
+    UI.setSettingsVisible(false);
+    UI.setCraftVisible(!UI.isCraftVisible());
+    if (UI.isCraftVisible()) UI.renderCraft();
   }
 
   // ---------- 主循环 ----------
@@ -831,6 +907,9 @@ class Game {
     // —— 本地玩家：客户端预测（沿用原有 damp + moveEntity，手感与视觉零变化）——
     const hpBefore = p.hp;
     p.update(dt, dir, this.map, near);   // 传入近处生物视图：花瓣会与生物碰撞
+    // 遁地刚开始：起土粒子要等地面画出来才能取色（见 render），先立个一次性 flag。
+    if (p.burrowT > 0 && !(this._burrowPrev > 0)) this._burrowFxPending = true;
+    this._burrowPrev = p.burrowT;
     // 掉血就抖屏：与掉血量挂钩（比例越大抖得越狠，上限 = 一次普通受击）。
     // 放在这里而不是只在 hurt 事件里，是为了覆盖【一切】掉血来源 ——
     // 中毒（每帧连续扣血）、未来任何 DoT、环境伤害都不需要各自记得发抖动。
@@ -842,7 +921,8 @@ class Game {
 
     // —— 上行：把输入意图与最新装备交给服务端；随后推进服务端并收取快照/事件 ——
     this.net.send({ t: 'loadout', slots: p.slots, hold: p.reloadHold });
-    this.net.sendInput({ dx: dir.x, dy: dir.y, mode: p.mode });
+    // viewR = 当前可视半径：服务端拿它决定哪些生物醒着跑 AI（见 LocalServer.activeR）。
+    this.net.sendInput({ dx: dir.x, dy: dir.y, mode: p.mode, viewR: this.viewRadius() });
     this.net.step(dt);
     // 快照延迟：_applySnap 里清零，这里累加（本地实现每帧都有快照 -> 恒 ≈ 0）
     this.perf.snapAge += dt;
@@ -852,7 +932,8 @@ class Game {
 
     // 玩家 vs 昆虫：同一套 physicsPush（反质量 + 动能）。生物速度来自快照（vx/vy），
     // 视图实体不积分位置，速度字段每份快照都会被权威值覆盖。
-    if (!p.dead) {
+    // 遁地期间玩家没有碰撞箱：本地预测也必须跳过，否则会看到"地下还在被顶开"。
+    if (!p.dead && p.burrowT <= 0) {
       // 只对"可能接触"的生物做推挤：全图 4600+ 只逐个做轮廓判定是纯浪费，
       // 预筛半径必须按【外接尺寸】算（collSize×0.75 ≈ 轮廓最远点），
       // 用等面积圆 r 会漏掉"外形比 r 大得多"的大型生物 —— 那正是玩家钻进怪身体里的原因。
@@ -952,12 +1033,7 @@ class Game {
     const sight = Math.max(0, (this.player && this.player.sightBonus) || 0);
     this.camZoomTarget = 1 / (1 + sight);
     this.camZoom = damp(this.camZoom || 1, this.camZoomTarget, 4.5, dt);
-    const zoom = Math.max(0.01, this.camZoom);
-    const camera = this.camera || p;
-    this._nearR = Math.hypot(
-      Math.abs(camera.x - p.x) + this.W / (2 * zoom),
-      Math.abs(camera.y - p.y) + this.H / (2 * zoom)
-    ) + 300;
+    this._nearR = this.viewRadius() + 300;
     this.shake = Math.max(0, this.shake - dt * 30);
     // F3 调试屏幕：只在打开时更新（内部再限频 5Hz）
     if (typeof DebugScreen !== 'undefined' && DebugScreen.on) DebugScreen.update(dt);
@@ -1031,6 +1107,21 @@ class Game {
   spawnText(x, y, text, color) { this.dmgTexts.push(new DamageText(x, y, text, color)); }
   spawnParticles(x, y, color, n) {
     for (let i = 0; i < n; i++) this.particles.push(new Particle(x, y, color));
+  }
+
+  // 取世界坐标处【画布上已画出的地面颜色】（遁地起土粒子用）。
+  // 必须只在"背景 + 瓦片"画完、实体尚未绘制的时刻调用（见 render 的调色点）。
+  // getImageData 不吃 canvas 变换，所以坐标要自己换算到设备像素。
+  _groundColorAt(wx, wy, camX, camY, z, shx, shy) {
+    try {
+      const dpr = this.dpr || 1;
+      const sx = Math.round(((wx - camX) * (z || 1) + this.W / 2 + (shx || 0)) * dpr);
+      const sy = Math.round(((wy - camY) * (z || 1) + this.H / 2 + (shy || 0)) * dpr);
+      if (sx < 0 || sy < 0 || sx >= this.canvas.width || sy >= this.canvas.height) return '#1ea761';
+      const d = this.ctx.getImageData(sx, sy, 1, 1).data;
+      if (d && d[3] > 8) return 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + (d[3] / 255) + ')';
+    } catch (e) { /* 画布被污染（file://）：退回草地绿 */ }
+    return '#1ea761';
   }
 
   // ---------- 地面掉落物 ----------
@@ -1177,6 +1268,18 @@ class Game {
     if (this.gardenData && this.gardenData.layers.length) {
       try { drawGardenTiles(ctx, this.gardenData, camX, camY, vw, vh); }
       catch (e) { console.error('[drawGardenTiles]', e); }
+    }
+
+    // 遁地（Shovel）：阴影铺在【所有实体之下】（地面上方、网与掉落物之下）；
+    // 起土粒子在这里生成 —— 此刻画布上只有背景与瓦片，取到的就是脚下瓦片的实际颜色。
+    const bp = this.player;
+    if (bp && bp.burrowT > 0) {
+      try { bp.drawBurrowShadow(ctx); } catch (e) { console.error('[draw burrow]', e); }
+      if (this._burrowFxPending) {
+        this._burrowFxPending = false;
+        const col = this._groundColorAt(bp.x, bp.y, camX, camY, z, shx, shy);
+        this.spawnParticles(bp.x, bp.y, col, 16);
+      }
     }
 
     // 场地型实体（网）：铺在最底层 —— 掉落物、生物、玩家全在它上面。
@@ -1379,8 +1482,16 @@ class Game {
       ctx.save();
       ctx.strokeStyle = '#ff9a5b';
       for (const m of mobs) {                       // 挂载态（每只 Hornet 的尾针）
-        if (!m || m.dead || !m.hornetMissile) continue;
-        drawStinger(m.hornetMissile, m.facing + Math.PI);
+        const s = m && m.hornetMissile;
+        if (!m || m.dead || !s || s.dead || s.exiting || s.flight) continue;
+        // 与绘制【同一个挂点函数】：位置与朝向都由本体姿态推出。
+        // 旧代码用 `m.facing + π` 猜朝向，画出来就是那个"倒置的尾针碰撞箱"。
+        const ht = (typeof MobFX !== 'undefined') ? MobFX.hornetTail : null;
+        const sz = s.drawSize || (m.drawSize * ((ht && ht.size) || 0.3));
+        const pt = (typeof MobFX !== 'undefined' && MobFX.hornetTailPoint)
+          ? MobFX.hornetTailPoint(m, sz)
+          : { x: s.x, y: s.y, a: s.facing };
+        drawStinger({ x: pt.x, y: pt.y, drawSize: sz, radius: s.radius }, pt.a);
       }
       const shots = this.hornetProjectiles;        // 飞行态
       if (shots && shots.size) {
@@ -1442,6 +1553,7 @@ class Game {
 
   toggleDex() {
     UI.setBagVisible(false);            // 同一时刻只允许一个窗口
+    UI.setCraftVisible(false);
     UI.setSettingsVisible(false);
     UI.setDexVisible(!UI.isDexVisible());
     if (UI.isDexVisible()) UI.renderDex(this);
@@ -1450,13 +1562,15 @@ class Game {
   // 设置窗口：同样与背包/图鉴互斥
   toggleSettings() {
     UI.setBagVisible(false);
+    UI.setCraftVisible(false);
     UI.setDexVisible(false);
     UI.setSettingsVisible(!UI.isSettingsVisible());
   }
 
-  // 拖拽开始时关闭所有小窗口（背包/图鉴/设置）
+  // 拖拽开始时关闭所有小窗口（背包/合成/图鉴/设置）
   closeAllWindows() {
     UI.setBagVisible(false);
+    UI.setCraftVisible(false);
     UI.setDexVisible(false);
     UI.setSettingsVisible(false);
   }

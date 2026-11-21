@@ -10,13 +10,13 @@ const DROP_POP_T = 0.34;         // 从死亡点弹到目标位置的时长（�
 // legendary 150 / mythic 180 / ultra 210；super 及以上不过期（Infinity）。
 const DROP_LIFETIME = {
   common: 30, unusual: 60, rare: 90, epic: 120, legendary: 150,
-  mythic: 180, ultra: 210, super: Infinity, eternal: Infinity, unique: Infinity
+  mythic: 180, ultra: 210, super: Infinity, eternal: Infinity
 };
 // 到期后的渐隐时长不在这里：退场时长由 EntityFX 的 drop 种类统一定义（sim/exit.js）。
 // 呼吸起伏：每 2 秒 3 个来回 -> 周期 2/3 s -> 角频率 2π×(3/2)
 const DROP_BREATH_W = (TAU * 3) / 2;
 const DROP_BREATH_AMP = 0.024;   // 幅度 2.4%（原 1.2% 的 2 倍）
-const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal', 'unique']);   // 持续冒粒子的稀有度
+const DROP_FX_CONT = new Set(['ultra', 'super', 'eternal']);   // 持续冒粒子的稀有度
 const _dropFaceCache = {};       // slug|rarity -> 已渲染好的卡面 canvas
 
 // 地面卡片的「持续粒子」时长（秒）—— 按【掉落概率】分级，而不是只看稀有度：

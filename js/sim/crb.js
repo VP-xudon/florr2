@@ -15,7 +15,7 @@ const CRB = {
   ready: false,
 
   // 实装的物种才需要碰撞箱；没实装的生物不管（返回 null -> 走素材轮廓兜底）
-  MOB_FILES: ['3', '4', '11', '12_h', '12_b', '21', '27', '11_missile'],
+  MOB_FILES: ['3', '4', '8', '11', '12_h', '12_b', '21', '27', '11_missile'],
   PETAL_FILES: ['96'],
 
   async loadAll() {

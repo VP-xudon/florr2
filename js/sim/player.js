@@ -16,11 +16,22 @@ function lerpHex(a, b, t) {
 class Player {
   constructor() {
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
-    this.r = 22 * 0.6;   // 主角半径 = 原来的 0.6 倍 (≈13.2)
+    this.r = PLAYER_R_STD;   // 主角半径 = 原来的 0.6 倍 (≈13.2)
+    this.baseR = this.r;     // 不含 Soil 加成的半径（平滑过渡的基准）
     this.facing = 0;
     this.baseSpeed = PLAYER_BASE_SPEED; this.speed = this.baseSpeed;  // 人物移速 = 当前(0.4倍)再放慢一半 = 0.5 倍于当前
     this.weight = rarityWeight('unusual');   // 花朵本体视为 unusual 生物的重量（玩家也是实体，参与重量推挤）
+    // 阵营：玩家 = 'player'（召唤物同阵营）。Mob.noteThreat 按阵营判"是不是敌人"，
+    // 没有这个字段时玩家会被当成 'enemy'，与所有野生生物同阵营 ——
+    // 于是中立生物（工蚁 / 高稀有度瓢虫）挨打【永远不记仇】，只剩敌对型会主动追。
+    this.faction = 'player';
     this.maxHp = 100; this.hp = 100;
+    this.baseMaxHp = this.maxHp;   // 不含 Soil 的生命上限（平滑过渡的基准）
+    // Soil（泥土）装备加成：多件叠加。extraRadius 相加、flowerHp 相加、
+    // speedMul（每件 0.75）按【乘积】叠加；实际生效值在 update 里平滑逼近。
+    this.soilRadius = 0;
+    this.soilHp = 0;
+    this.soilSpeedMul = 1;
     this.xp = 0; this.level = 1; this.xpNext = 24;
     this.slots = emptySlots();      // 花朵花瓣（主槽，已装备）
     this.subSlots = emptySlots();   // 副槽（临时存储，不参与装备）
@@ -67,6 +78,11 @@ class Player {
     this.modeT = 0;              // 模式过渡进度 0->1（0.15s）
     this.age = 0;                // 出场计时：脸部 Q 弹（EntityFX.pop，重生时归零重播）
     this.killedBy = null;        // 死因（生物名称），死亡界面显示用
+    // 遁地（Shovel）：burrowT = 剩余时长（秒）、burrowDur = 本次总时长、stealth = 隐身+无碰撞箱。
+    // 客户端预测副本与服务端权威副本都按同一份装备/模式/装填状态推进，两端自然一致。
+    this.burrowT = 0;
+    this.burrowDur = 0;
+    this.stealth = false;
   }
 
   recompute() {
@@ -76,6 +92,8 @@ class Player {
     //   sight   ：Antennae  → 视野放大比例，相机缩放 = 1/(1+sight)
     // 花瓣的 type.spd 只描述花瓣自身飞行速度，不参与玩家移速。
     let rotBonus = 0, reachBonus = 0, sightBonus = 0, healBonus = 0;
+    // Soil（泥土）：额外半径 / 花朵生命上限（相加）、移速倍率（相乘）
+    let extraRadius = 0, flowerHp = 0, speedMul = 1;
     const seenType = Object.create(null);
     this.slotActive = [];        // 每格是否生效（不可堆叠花瓣的重复件为 false）
     this.accessories = [];       // 装备型饰品：不进入轨道，直接画在人物身上
@@ -95,11 +113,19 @@ class Player {
         reachBonus += b.reach || 0;
         sightBonus += b.sight || 0;
         healBonus += b.healBonus || 0;      // Healing Bonus（Basil）：同类可叠加，求和
+        extraRadius += b.extraRadius || 0;  // Soil：额外半径（可叠加）
+        flowerHp += b.flowerHp || 0;        // Soil：花朵生命上限（可叠加）
+        speedMul *= (b.speedMul == null) ? 1 : b.speedMul;   // Soil：移速倍率（乘积）
       }
       if (p.type.accessory) this.accessories.push({ card: p, slot: i });
     }
     // maxHp 只由构造函数与重生入口维护，换装不重置（?hp=N 依赖这一点）。
-    this.speed = this.baseSpeed;
+    // Soil：移速倍率是"乘积叠加"，直接乘在基础移速上（上限移速同步下降）。
+    this.speed = this.baseSpeed * speedMul;
+    // Soil 的目标加成（实际生效值在 update 里平滑逼近，见 _tickSoil）
+    this.soilRadius = extraRadius;
+    this.soilHp = flowerHp;
+    this.soilSpeedMul = speedMul;
     this.bodyDmg = FLOWER_BODY_DMG;
     // 最大转速 = 基础 + 所有 Faster 加成（叠加）。/rot-speed 只能在这个值上打 0.1~1.0 的倍率，
     // 所以转速上限是【动态】的，绝不硬编码在别处。
@@ -129,14 +155,27 @@ class Player {
     return true;
   }
 
+  // 离场朝向 = 【进入退场那一刻的画面朝向】（与 _drawPetalEntity 的取角规则逐条对应）。
+  // 飞行体（Missile）的朝向由速度决定（flightRot）：死亡时若切回"轨道径向"，
+  // 就会在消失的一瞬间歪一下 —— 所以退场必须定格在它当前看到的那个角度。
+  _petalExitRot(b) {
+    if (!b) return 0;
+    if (b.flightRot != null) return b.flightRot + (b.flightSpin || 0);
+    if (b.anchor) return 0;
+    if (b.fxActive) return Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+    return (b.stationary ? 0 : (b.drawRot != null ? b.drawRot : 0)) + (b.selfRot || 0);
+  }
+
   // 花朵死亡：花瓣原地快速渐隐消失，本体随机旋转一个角度后保持不动（叉叉眼 + 哭脸）
   die() {
     this.dead = true; this.corpseT = 0;
     this.deathRot = rand(0, TAU);
+    // 遁地中死亡：先取消隐身/无碰撞，否则尸体仍然"感知不到"
+    this.burrowT = 0; this.burrowDur = 0; this.stealth = false;
     // 每个花瓣实体各自进入通用退场（多体花瓣本就是 N 个实体，无需特殊处理）
     for (const b of this.petals) {
       if (b.dead || b.exiting) continue;
-      b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+      b.exitRot = this._petalExitRot(b);
       EntityFX.despawn(b);
       this.petalExit.adopt(b);
     }
@@ -203,9 +242,11 @@ class Player {
     // 场上的网不属于这条命的状态：权威侧由 LocalServer 自己按时长回收，
     // 客户端镜像表 netWebs 只跟随快照，这里都不动。
     this.netPetals = null;                 // 旧快照键映射作废，避免重生瞬间串状态
+    // 遁地状态不属于"下一条命"：重生必须清掉，否则会带着隐身出生。
+    this.burrowT = 0; this.burrowDur = 0; this.stealth = false;
     this.reload = this.slots.map((c) => c ? {
       card: c, age: 0,
-      dur: (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0)
+      dur: petalReloadOf(c)
     } : null);
     this.reloadHold = this.slots.map(() => false);
     InvulnFX.add(this, 'spawn', FLOWER_SPAWN_INVULN);
@@ -225,6 +266,8 @@ class Player {
     }
     // 花瓣退场表始终推进（换装/碎裂的实体在播完前仍需计时）
     this.petalExit.sweep(dt);
+    // Soil：额外半径 / 生命上限的平滑过渡（必须在血量条平滑之前）
+    this._tickSoil(dt);
     // 地形减速：站在 foliage / seaweed / vine 这类瓦片上时——
     //   · 移动速度 = 默认值的 40%
     //   · 所有花瓣强制回到"待加载"状态（装填进度清零、不生成实体），离开后重新装填
@@ -251,9 +294,11 @@ class Player {
       // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。据此缩放目标速度，
       // 并复用下方同一套 rate 9/4 指数平滑加减速。
       const sc = Math.min(len, 1);
-      // 减速瓦片：×0.4；/speed 的倍率再整体乘上来（客户端/服务端共用同一个 MOVE_MULT）
-      // 状态效果（如踩到蛛网）：统一走 StatusFX.speedMul —— 与减速瓦片相乘。
-      const spd = this.speed * MOVE_MULT * (this.slowTile ? SLOW_TILE_SPEED : 1)
+      // 减速瓦片：×0.4；遁地（Shovel）期间同样按这个系数减速（用户口径：幅度与树丛一致）。
+      // /speed 的倍率再整体乘上来（客户端/服务端共用同一个 MOVE_MULT）；
+      // 状态效果（如踩到蛛网）：统一走 StatusFX.speedMul —— 与上面的倍率相乘。
+      const spd = this.speed * MOVE_MULT
+        * ((this.slowTile || this.burrowT > 0) ? SLOW_TILE_SPEED : 1)
         * ((typeof StatusFX !== 'undefined') ? StatusFX.speedMul(this) : 1);
       tx = dir.x / len * spd * sc;
       ty = dir.y / len * spd * sc;
@@ -296,6 +341,75 @@ class Player {
     this._syncPetals(dt, map, mobs);
   }
 
+  // ---------------- 遁地（Shovel）----------------
+  // 唯一入口：装填完成 + 处于 burrow.mode（detect）-> 立即遁地 dur 秒。
+  // 遁地期间：所有花瓣强制下架（走通用退场）、装填冻结、生物感知不到、没有碰撞箱。
+  // 客户端预测副本与服务端权威副本调用的是同一份逻辑，因此两端表现一致。
+  _startBurrow(dur) {
+    if (this.dead || this.burrowT > 0) return false;
+    const d = (dur > 0) ? dur : 2;
+    this.burrowT = d;
+    this.burrowDur = d;
+    this.stealth = true;
+    // 花瓣全部下架：不是凭空消失 —— 统一走 EntityFX 退场，播完由 petalExit 回收
+    for (const b of this.petals) {
+      if (!b || b.dead) continue;
+      b.dead = true;
+      b.exitRot = this._petalExitRot(b);
+      EntityFX.despawn(b);
+      this.petalExit.adopt(b);
+    }
+    this.petals = [];
+    // 所有槽位从头装填（遁地期间冻结，恢复后重新计时）
+    for (let i = 0; i < this.slots.length; i++) {
+      this._petalGen[i] = (this._petalGen[i] | 0) + 1;
+      const c = this.slots[i];
+      this.reload[i] = c
+        ? { card: c, age: 0, dur: petalReloadOf(c), frozen: true }
+        : null;
+    }
+    return true;
+  }
+
+  _endBurrow() {
+    const was = this.burrowT > 0;
+    this.burrowT = 0;
+    this.burrowDur = 0;
+    this.stealth = false;
+    if (!was) return;
+    // 恢复：所有槽位从 0 开始重新装填（不继承遁地前的进度）
+    for (let i = 0; i < this.reload.length; i++) {
+      const r = this.reload[i];
+      if (!r) continue;
+      r.frozen = false;
+      r.age = 0;
+      r.hold = false;
+    }
+  }
+
+  // Soil（泥土）：装备即生效的加成 —— 额外半径 / 花朵生命上限【平滑】逼近目标值。
+  //   · 多件 Soil 叠加（recompute 已把目标值求和/求积算好）；
+  //   · 装上变大、卸下变小都是渐变（指数阻尼），绝不瞬移/瞬变；
+  //   · 生命上限变化时，当前血量与血条的两条平滑值按【同一比例】缩放，
+  //     于是血条的剩余百分比在加减 Soil 的整个过程中保持不变。
+  _tickSoil(dt) {
+    // 过渡速率 3（= 原来的 6 的 0.5 倍）：装上/卸下都是更缓慢的渐变。
+    const RATE = 3;
+    const targetR = this.baseR + (this.soilRadius || 0);
+    if (Math.abs(this.r - targetR) > 0.01) this.r = damp(this.r, targetR, RATE, dt);
+    const targetMax = this.baseMaxHp + (this.soilHp || 0);
+    if (Math.abs(this.maxHp - targetMax) > 0.05) {
+      const prev = this.maxHp;
+      this.maxHp = damp(this.maxHp, targetMax, RATE, dt);
+      const k = (prev > 0) ? (this.maxHp / prev) : 1;
+      if (k > 0 && k !== 1) {
+        this.hp = Math.min(this.maxHp, this.hp * k);
+        if (this.dispHp != null) this.dispHp *= k;
+        if (this.ghostHp != null) this.ghostHp *= k;
+      }
+    }
+  }
+
   // 滞留型花瓣（Pollen / Honey）的脱轨条件：
   // 只要处在 reach / detect 模式就立刻生效 —— 按下按键那一刻模式就已经切换，
   // 不能等花瓣飞到扩展轨道的位置（那是"外观过渡"，与机制无关）。
@@ -312,14 +426,14 @@ class Player {
     // 先问引擎（与服务端同一套语义）：飞行途中的 Web 被打碎要立刻成网
     if (typeof PetalFX !== 'undefined' && PetalFX.onPop) PetalFX.onPop(b, this);
     b.dead = true;
-    b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+    b.exitRot = this._petalExitRot(b);
     EntityFX.despawn(b);                 // 入场/退场/红闪统一由实体引擎打标记
     this.petalExit.adopt(b);             // 退场播完由 petalExit.sweep 回收
     // 与服务端 _destroyPetal 同一规则：放在地上的滞留实体（Pollen / Honey）碎了就是碎了，
     // 不触发卡片重装。少了这一条，客户端会把该槽冷却重置一遍 -> 之后每次装填都比服务端慢一拍。
     if (b.stationary) return;
     const c = b.card;
-    const dur = (c.type.reload != null) ? c.type.reload : Math.max(0, c.type.spd || 0);
+    const dur = petalReloadOf(c);
     const cnt = (CardRenderer.lightSubCount) ? CardRenderer.lightSubCount(c.type, c.rarity) : 1;
     if (cnt > 1) {
       // 多实体卡：只有这一个实体进入自己的重装填（服务端权威计时），卡片【不】进入
@@ -430,10 +544,13 @@ class Player {
       if (!c) { this.reload[i] = null; this.reloadHold[i] = false; continue; }
       const r = this.reload[i];
       if (!r || r.card !== c) {
-        // 冷却时长：优先 type.reload（显式字段），否则取 type.spd
-        const dur = (c.type && c.type.reload != null)
-          ? c.type.reload : Math.max(0, (c.type && c.type.spd) || 0);
-        this.reload[i] = { card: c, age: 0, dur };
+        // 冷却时长：唯一入口 petalReloadOf（支持按稀有度，Shovel）
+        this.reload[i] = { card: c, age: 0, dur: petalReloadOf(c) };
+      } else if (this.burrowT > 0) {
+        // 遁地（Shovel）：所有花瓣强制禁用 —— 装填进度清零并冻结，
+        // 恢复（_endBurrow）后全部从 0 重新装填。
+        r.age = 0;
+        r.frozen = true;
       } else if (this.slowTile) {
         // 减速瓦片（foliage / seaweed / vine）：所有花瓣强制回到"待加载"，进度清零。
         r.age = 0;
@@ -461,19 +578,23 @@ class Player {
   // 该主槽是否装填完成（dur<=0 视为无需装填，立即完成）
   reloadDone(i) {
     if (this.slowTile) return false;      // 减速瓦片上：一律视为"待加载"
+    if (this.burrowT > 0) return false;   // 遁地期间：所有花瓣强制禁用
     const r = this.reload[i];
     return !!r && r.age >= r.dur;
   }
 
   // 某片花瓣的自转速率（rad/s）——【生成时算一次并记住】，之后不再随公转变化。
-  // 口径：公转 + 自转 = PETAL_SELF_TURN_T 秒一圈；花瓣自带 selfSpin 时优先用它。
+  // 口径：公转 + 自转 = PETAL_SELF_TURN_T 秒一圈（= 2s，玩家看到的整圈速度）；
+  // 花瓣自带 selfSpin 时优先用它。
+  // 注：绘制角 = drawRot(公转角) + selfRot，所以这里必须减去公转，
+  // 否则两段叠加会让花瓣转得比设定值快（1.07s 一圈）。
   _petalSelfRate(b) {
     if (b.selfRate != null) return b.selfRate;
     const type = b && b.card && b.card.type;
     const own = type && (typeof type.selfSpin === 'number') ? type.selfSpin : null;
     if (own != null) return own;
     const orbit = (this.rotMax || PETAL_SPIN) * ROT_SCALE;
-    const target = TAU / PETAL_SELF_TURN_T;
+    const target = (PETAL_SELF_TURN_T > 0) ? (TAU / PETAL_SELF_TURN_T) : PETAL_SELF_SPIN;
     return (target - orbit) || PETAL_SELF_SPIN;
   }
 
@@ -527,6 +648,23 @@ class Player {
   //   · 人物跑起来时目标点跟着跑，花瓣会被甩在后面一小段距离，再平滑吸附（故意保留的缓冲感）
   //   · 装备数量变化引起间距重排时，同样走这套吸附过程，绝不瞬移
   _syncPetals(dt, map, mobs) {
+    // ---- 遁地（Shovel）状态机：唯一入口 ----
+    if (this.burrowT > 0) {
+      this.burrowT = Math.max(0, this.burrowT - dt);
+      if (this.burrowT <= 0) this._endBurrow();
+      else return;                       // 遁地期间：不生成、不更新任何花瓣实体
+    }
+    // 装填完成 + 处于 burrow.mode 指定的模式 -> 立即遁地。
+    // 判定放在实体生成【之前】：那一片铲子直接被"用掉"，不会先飞出去再消失。
+    if (!this.dead) {
+      for (let i = 0; i < this.slots.length; i++) {
+        const c = this.slots[i];
+        const bt = c && (typeof PetalFX !== 'undefined') && PetalFX.trait(c.type, 'burrow');
+        if (!bt || !this.reloadDone(i)) continue;
+        if (this.mode !== (bt.mode || 'detect')) continue;
+        if (this._startBurrow(bt.dur)) return;
+      }
+    }
     // 【装上就算数】：所有已装备的主槽都参与排列（n = 装备总数），
     // 装填中/被打碎重冷的槽位照样占一个位置 —— 其它花瓣自动给它留出空位。
     const equipped = [];
@@ -565,7 +703,7 @@ class Player {
       // 已碎的滞留实体：走通用退场后由 petalExit 回收，不留在 petals 里越积越多。
       if (b.dead) {
         if (!b.exiting) {
-          b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+          b.exitRot = this._petalExitRot(b);
           EntityFX.despawn(b);
           this.petalExit.adopt(b);
         }
@@ -575,7 +713,7 @@ class Player {
       // （否则切下 Honey 再切回来会凭空多出一批实体，越切越多。）
       if (this.slots[b.slotIndex] !== b.card) {
         b.dead = true;
-        b.exitRot = Math.atan2(b.y - this.y, b.x - this.x) + Math.PI / 2;
+        b.exitRot = this._petalExitRot(b);
         EntityFX.despawn(b);
         this.petalExit.adopt(b);
         continue;
@@ -711,14 +849,11 @@ class Player {
           // 绝不把半块蜡塞进墙里（这是"生成空间不足就重新加载"的落点）。
           if (body.cancelSpawn) {
             body.dead = true;
-            body.exitRot = body.selfRot || 0;
+            body.exitRot = this._petalExitRot(body);
             EntityFX.despawn(body);
             this.petalExit.adopt(body);
             this._petalGen[slotIndex] = gen + 1;
-            this.reload[slotIndex] = {
-              card, age: 0,
-              dur: (card.type.reload != null) ? card.type.reload : 0
-            };
+            this.reload[slotIndex] = { card, age: 0, dur: petalReloadOf(card) };
             continue;
           }
           body.stationary = true;                   // 脱离轨道：不再跟随
@@ -730,8 +865,7 @@ class Player {
           bodies.push(body);                        // 仍然是实体，只是换了运动规则
           this._petalGen[slotIndex] = gen + 1;      // 本槽换代：下一批实体用新世代号
           // 卡面进入冷却：Pollen / Peas 立刻重新装填；Honey 等实体死亡（r.hold，见 _tickReload）
-          const dur = (card.type.reload != null) ? card.type.reload : 0;
-          const r = { card, age: 0, dur };
+          const r = { card, age: 0, dur: petalReloadOf(card) };
           const hold = plan ? plan.holdReload : PetalFX.trait(card.type, 'holdReloadUntilDeath');
           if (hold) r.hold = true;
           this.reload[slotIndex] = r;
@@ -750,8 +884,8 @@ class Player {
       // 已碎的独立子体已在死亡时离场，这里不重复
       if (!kept && !b.exiting) {
         // 卸下 = 离场：必须 despawn 后再收养，否则实体既不计时也无法被回收
+        b.exitRot = this._petalExitRot(b);
         EntityFX.despawn(b);
-        b.exitRot = b.selfRot || 0;
         this.petalExit.adopt(b);
       }
     }
@@ -777,7 +911,9 @@ class Player {
     let reachMult = 1;
     if (this.mode === 'reach') reachMult = 1 + this.modeT;              // 1 -> 2
     else if (this.mode === 'detect') reachMult = 1 - (1 - PETAL_DETECT) * this.modeT;  // 1 -> 0.5
-    const baseReach = this.r * (1 + PETAL_REACH) * 1.105;
+    // 轨道半径用【标准半径】而不是 this.r：Soil 只让花朵本体变大，
+    // 花瓣与人物的距离保持标准状况（否则 +10 半径会把整圈花瓣一起推远，看起来像整只放大了）。
+    const baseReach = PLAYER_R_STD * (1 + PETAL_REACH) * 1.105;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     // 吸附候选：先在玩家附近筛一遍（轨道半径 + 触发距离 + 余量），
     // 避免全图 1600+ 只生物时每片花瓣都扫全表。
@@ -1091,22 +1227,45 @@ class Player {
       const cv = svg ? CardRenderer.artCanvas(svg, 128) : null;
       // 拿到画布 = 素材已就绪 => 实体窗口也已实测出来，尺寸可以取准。
       const size = entSize();
-      // 子体尺寸同样乘 k（与卡面一致，k 一处修改两边同时生效）
-      if (cv) {
-        drawPetalArt(c, cv, size * (b.formK != null ? b.formK : 1), 0, 0, rot, 1, null,
-          so ? so.x : 0, so ? so.y : 0);
+      const artSize = size * (b.formK != null ? b.formK : 1);
+      const ox = so ? so.x : 0, oy = so ? so.y : 0;
+      if (cv) drawPetalArt(c, cv, artSize, 0, 0, rot, 1, null, ox, oy);
+      // 花瓣受伤红闪 = 【贴图自己的形状】（用户口径：跟随形状，不是一个圆）：
+      // 用同一张素材染红后的剪影、同一个变换（含 spinOrigin 轴心偏移）叠上去，
+      // 所以任何形状（导弹的长条、翅膀的弯月、多体子瓣）都严丝合缝。
+      // 素材还没就绪时退回碰撞半径圆（PETAL_R），保证任何时候都有受击反馈。
+      const hurtA = EntityFX.hurtAlpha(b);
+      if (!(hurtA > 0)) return;
+      const red = svg ? CardRenderer.redArtCanvas(svg) : null;
+      if (red) {
+        // drawArt 会【赋值】globalAlpha，这里把实体自身的入场/退场透明度乘进去
+        drawPetalArt(c, red, artSize, 0, 0, rot, 1, c.globalAlpha * hurtA, ox, oy);
+      } else {
+        EntityFX.drawHurtShape(c, b, 0, 0, b.shapePoly || null, b.cr || 0, b.cr || PETAL_R);
       }
-      // 花瓣受伤红闪：与生物同一个入口，画【碰撞箱形状】——
-      // 落位实体（Wax）有碰撞多边形，就填多边形；普通花瓣的碰撞箱本来就是圆（cr），就填圆。
-      EntityFX.drawHurtShape(c, b, 0, 0, b.shapePoly || null,
-        b.cr || 0, b.cr || size / 2);
     });
   }
 
   // 图层高于生物的花瓣（Glass）：Player.draw 里跳过它们，由 game.render 在生物与
   // 主角都画完之后调用这里补一遍 —— 于是它们永远压在所有生物之上（与生物一样高）。
+  // 遁地阴影：与主人物【完全相同大小】的灰色半透明纯色圆（无渐变、无描边），
+  // 画在【所有实体之下】（见 game.render）。
+  // 遁地期间本体完全不画（Player.draw 直接 return），所以画面里只剩这一个圆。
+  drawBurrowShadow(ctx) {
+    if (!(this.burrowT > 0) || this.dead) return;
+    const R = this.r * 1.2 * EntityFX.pop(this.age);   // 与脸部半径同一口径（R = r × 1.2）
+    if (!(R > 0)) return;
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = '#3a3f43';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, R, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
   drawOverMobs(ctx) {
-    if (this.dead) return;
+    if (this.dead || this.burrowT > 0) return;
     for (const b of this.petals) {
       if (b.dead || b.fxActive) continue;
       const t = b.card && b.card.type;
@@ -1115,6 +1274,8 @@ class Player {
   }
 
   draw(ctx) {
+    // 遁地：本体完全不可见（只剩 game.render 在最底层画的那片阴影）
+    if (this.burrowT > 0) return;
     // 死亡：先播完花瓣退场（渐隐），再画死亡本体（随机角度 + 叉叉眼 + 哭脸）
     if (this.dead) {
       for (const b of this.petalExit) this._drawPetalEntity(ctx, b, true);
@@ -1293,4 +1454,4 @@ class Player {
 // 生物视觉直径 = 主角视觉直径 × 各稀有度倍率。
 // 主角绘制半径 = r×1.2 = 13.2×1.2 = 15.84 → 视觉直径 31.68。
 // common→mythic 按 5 级等比变化：step = (mythic 倍率 / common 倍率)^(1/5) ≈ 1.4118，
-// ultra / super / eternal / unique 顺势等比。
+// ultra / super / eternal 顺势等比。

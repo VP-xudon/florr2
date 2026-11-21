@@ -33,6 +33,19 @@
 //   · 想加新物种 / 新场地种类，都只是加一条 register。
 // ============================================================================
 
+// ---- Hornet 尾针挂点常量（素材 11.svg）----
+// 飞针画的是花瓣 9 的素材："底边中点 -> 尖端"的长度归一化到它自己的素材窗口 = 0.8223。
+// 尾针绘制尺寸按它换算：size = 尾针长度 / (MISSILE_DART_LEN × 素材窗口单位)，
+// 于是画出来的飞针和贴图里那截尾针【一样长】。
+const MISSILE_DART_LEN = 0.82230;
+// SpriteStore 裁剪比例尚未标定时的兜底（与 _cropRatio 的标定值一致）
+const HORNET_TAIL_CROP_FALLBACK = 0.99602;
+// 素材解析失败时的兜底挂点 —— 与 11.svg 解析出来的【同一组数】：
+//   dx=dy=(85.49−55)/(0.99602×110)=0.2783、axis=45°、size=23.833/(0.99602×110)/0.8223=0.2645。
+// 这样无论素材何时就绪，第一枚与之后每一枚尾针的位置/大小都完全一致
+//（旧兜底是 0.45/0/0.3，和解析值差了 60%，表现为"发射一次后新针变小又跑位"）。
+const HORNET_TAIL_FALLBACK = { dx: 0.27829, dy: 0.27829, axis: Math.PI / 4, size: 0.26454 };
+
 const MobFX = {
   defs: {},        // slug -> 物种特性声明
   fields: {},      // kind -> 场地实体种类（怎么造）
@@ -43,7 +56,7 @@ const MobFX = {
     if (this._assetsReady && this.hornetTail) return true;
     // 先设兜底：确保即使下面精确解析失败，尾针也能显示（不缺失、不全透明）
     this._assetsReady = true;
-    this.hornetTail = this.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
+    this.hornetTail = this.hornetTail || HORNET_TAIL_FALLBACK;
     try {
       const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
     if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
@@ -116,46 +129,59 @@ const MobFX = {
         }
         const rest = tri.filter((q) => q !== tip);
         const m0 = rest[0], m1 = rest[1] || rest[0];
-        const mx = (m0[0] + m1[0]) / 2, my = (m0[1] + m1[1]) / 2;
+        const mx = (m0[0] + m1[0]) / 2, my = (m0[1] + m1[1]) / 2;   // 底边中点 = 与身体的连接面
+        // 尾针的【可见分块】= 第 1 个 path（实心三角）+ 第 2 个 path（同一位置的描边细节）。
+        // 挂点取并集包围盒的中心：只取三角形会让挂点偏向三角形的重心。
+        let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+        for (const node of [ps[0], ps[1]]) {
+          if (!node || !node.getBBox) continue;
+          const q = node.getBBox();
+          bx0 = Math.min(bx0, q.x); by0 = Math.min(by0, q.y);
+          bx1 = Math.max(bx1, q.x + q.width); by1 = Math.max(by1, q.y + q.height);
+        }
+        if (!(bx1 > bx0)) { bx0 = Math.min(tip[0], m0[0], m1[0]); bx1 = Math.max(tip[0], m0[0], m1[0]); }
+        if (!(by1 > by0)) { by0 = Math.min(tip[1], m0[1], m1[1]); by1 = Math.max(tip[1], m0[1], m1[1]); }
         tailBox = {
-          cx: mx, cy: my, tipX: tip[0], tipY: tip[1],
-          w: Math.abs(tip[0] - mx),
-          h: Math.abs(tip[1] - my),
+          cx: (bx0 + bx1) / 2, cy: (by0 + by1) / 2,
+          tipX: tip[0], tipY: tip[1],
+          baseX: mx, baseY: my,
           len: Math.hypot(tip[0] - mx, tip[1] - my)
         };
       }
     } catch (e) { bb = null; }
     measure.remove();
     if (bb && tailBox) {
-      const winW = Math.max(bb.w, bb.h);
-      const ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
-      // 【向量法】直接记录"贴图中心 -> 尾针中心"的 x/y 分量，不再拆成
-      // "距离 + 方向 + 横向补偿"。绘制时按精灵自身的旋转角旋转这个向量，
-      // 于是尾针永远落在素材画的那个位置（11.svg 里是 45° 右下方），
-      // 头朝上时横向分量自动归零 —— 不需要任何横向偏移常数。
-      const dx = (tailBox.cx - ccx) / winW;
-      const dy = (tailBox.cy - ccy) / winW;
-      // 尾针中轴：包围盒四角里离贴图中心最远的角 = 尖端（11.svg 是 (99.6,99.6)）
-      let tipX = tailBox.cx, tipY = tailBox.cy, best = -1;
-      const corners = [
-        [tailBox.cx - tailBox.w / 2, tailBox.cy - tailBox.h / 2],
-        [tailBox.cx + tailBox.w / 2, tailBox.cy - tailBox.h / 2],
-        [tailBox.cx - tailBox.w / 2, tailBox.cy + tailBox.h / 2],
-        [tailBox.cx + tailBox.w / 2, tailBox.cy + tailBox.h / 2]
-      ];
-      for (const c of corners) {
-        const d = Math.hypot(c[0] - ccx, c[1] - ccy);
-        if (d > best) { best = d; tipX = c[0]; tipY = c[1]; }
-      }
+      // 【坐标口径】必须是 drawMob 的【固定比例裁剪框】(cropRatio × viewBox)，不是内容包围盒：
+      // drawSize 对应的就是那个裁剪框。用内容包围盒归一化会把挂点放大 20%+，
+      // 尾针看起来就"飘在身体外面"（旧版就是这个 bug）。
+      const vbArr = (root.getAttribute('viewBox') || '0 0 110 110')
+        .trim().split(/[\s,]+/).map(Number);
+      const vbW = vbArr[2] || 110, vbH = vbArr[3] || 110;
+      const vbCx = (vbArr[0] || 0) + vbW / 2, vbCy = (vbArr[1] || 0) + vbH / 2;
+      const ratio = (typeof SpriteStore !== 'undefined' && SpriteStore._cropRatio)
+        ? (SpriteStore._cropRatio() || HORNET_TAIL_CROP_FALLBACK)
+        : HORNET_TAIL_CROP_FALLBACK;
+      const drawWin = ratio * vbW;               // 1 × drawSize 对应的素材单位
+      // 挂点 = "贴图中心 -> 尾针中心"（按向量记录，绘制时随精灵旋转）
+      const dx = (tailBox.cx - vbCx) / drawWin;
+      const dy = (tailBox.cy - vbCy) / drawWin;
+      // 尺寸：让画出来的飞针和贴图里的尾针【一样长】。
+      // 飞针素材（花瓣 9）里"底边中点 -> 尖端"的长度 = MISSILE_DART_LEN（归一化到它自己的窗口），
+      // 所以 size = 尾针长度 / (MISSILE_DART_LEN × 窗口单位)。
+      const size = (tailBox.len / drawWin) / MISSILE_DART_LEN;
       this.hornetTail = {
-        dx, dy,                                      // 贴图中心 -> 尾针中心（归一化到窗口）
-        axis: Math.atan2(tipY - tailBox.cy, tipX - tailBox.cx),  // 尾针中轴（素材坐标系）
-        size: Math.max(tailBox.w, tailBox.h) / winW
+        dx, dy,
+        axis: Math.atan2(tailBox.tipY - tailBox.baseY, tailBox.tipX - tailBox.baseX),
+        size
       };
     }
-    // 素材解析失败时给一个兜底向量，保证尾针仍能画出（位置按兜底，不精确，但不缺失）
+    // 素材解析失败时给一个兜底向量：与上面解析出来的【同一组数】，
+    // 这样无论素材早晚就绪，第一枚与之后每一枚尾针的位置/大小都完全一致。
     if (!this.hornetTail) {
-      this.hornetTail = { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
+      this.hornetTail = {
+        dx: HORNET_TAIL_FALLBACK.dx, dy: HORNET_TAIL_FALLBACK.dy,
+        axis: HORNET_TAIL_FALLBACK.axis, size: HORNET_TAIL_FALLBACK.size
+      };
     }
 
     const emptyRoot = root.cloneNode(true);
@@ -196,16 +222,31 @@ const MobFX = {
         const doc2 = parser.parseFromString(src, 'image/svg+xml');
         const root2 = doc2.documentElement;
         const g2 = root2.querySelector('g') || root2;
+        // 身体的【填充路径】集合：用来区分"触角/腿"和"身体自己的描边"——
+        // 两者都是 fill="none" + stroke，唯一的区别是后者的 d 与某条身体路径完全相同。
+        // 旧规则把所有 fill="none" 的描边一律当触角删掉，于是蜜蜂身体那圈 4.167 宽的
+        // 描边被一起删了 —— 碰撞箱比画面小一圈（用户口径："忽略了描边"）。
+        // 尾针 = fill #333 且紧贴右下角（Hornet / Bee 的尾刺，x/y 都 > 70）。
+        // 它和它的描边都不属于身体，也不能进 bodyDs（否则它的描边会被当成"身体描边"留下）。
+        const isTail = (node) => node.getAttribute('fill') === '#333'
+          && /^M9[0-9.]+\s+9[0-9.]+/.test((node.getAttribute('d') || '').trim());
+        const bodyDs = new Set();
+        for (const node of Array.from(g2.children)) {
+          if (node.localName !== 'path' || isTail(node)) continue;
+          const f = node.getAttribute('fill');
+          if (f && f !== 'none') bodyDs.add((node.getAttribute('d') || '').trim());
+        }
         let removed = 0;
         for (const node of Array.from(g2.children)) {
           if (node.localName !== 'path') continue;
           const d = node.getAttribute('d') || '';
-          // 触角 = 没有 fill（fill="none"）+ 有 stroke 的细线
-          const isAntenna = node.getAttribute('stroke') && node.getAttribute('fill') === 'none';
-          // 尾针 = fill #333 且紧贴右下角（Hornet 专属，x/y 都 > 70）
-          const isTail = node.getAttribute('fill') === '#333'
-            && /^M9[0-9.]+\s+9[0-9.]+/.test(d.trim());
-          if (isAntenna || isTail) { node.remove(); removed++; }
+          // 身体描边：d 与身体填充路径一致 -> 保留（它才是画面最外沿）
+          const isBodyOutline = node.getAttribute('fill') === 'none'
+            && bodyDs.has(d.trim());
+          // 触角 = 没有 fill（fill="none"）+ 有 stroke 的细线（且不是身体描边）
+          const isAntenna = node.getAttribute('stroke') && node.getAttribute('fill') === 'none'
+            && !isBodyOutline;
+          if (isAntenna || isTail(node)) { node.remove(); removed++; }
         }
         if (removed > 0) {
           // 与 11_empty 同理：补一个不可见矩形占住原内容框，
@@ -248,7 +289,7 @@ const MobFX = {
     return true;
     } catch (e) {
       console.warn('[MobFX] prepareAssets failed, using fallback hornetTail:', e);
-      this.hornetTail = this.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
+      this.hornetTail = this.hornetTail || HORNET_TAIL_FALLBACK;
       this._assetsReady = true;
     }
     return true;
@@ -382,28 +423,33 @@ const MobFX = {
   //   · 挂载在尾巴上时用本体的姿态；
   //   · 飞出去后用实体自己的坐标与朝向。
   // 受伤红闪与其它实体同一套（红色蒙层），不再是"贴图不会闪"。
-  drawMissileAt(ctx, missile, x, y, facing, size, alpha) {
+  drawMissileAt(ctx, missile, x, y, facing, size, parentAlpha) {
     if (!missile || (missile.dead && !missile.exiting)) return;
-    const attached = !missile.flight;
+    // 【唯一实体引擎】入场 Q 弹、退场放大渐隐、红闪全部读导弹自己的状态：
+    // 挂载态与飞行态是同一条曲线（装载好的新针会像其它实体一样弹出，不再"凭空出现"）。
     const fx = EntityFX.visual(missile);
-    // 【挂载态】入场动画跟本体走：本体已经统一套过出场曲线，这里不再叠第二次；
-    // 【飞行态 / 正在退场】用导弹自己的实体状态（发射那一刻开始渐显、死亡放大渐隐）。
-    const useOwn = !attached || missile.exiting;
-    const scale = useOwn ? fx.scale : 1;
-    let a = (alpha == null ? 1 : alpha) * (useOwn ? fx.alpha : 1);
+    const a = (parentAlpha == null ? 1 : parentAlpha) * fx.alpha;
     // 【矢量】优先：128px 位图放大到高稀有度尺寸会糊成"千疮百孔"的一团
     const art = CardRenderer.artImage('9') || CardRenderer.artCanvas('9', 128);
     if (!art) return;
     // 尖端始终对准朝向（挂载/飞行同一条口径）；位置由素材实测的挂点决定。
-    drawPetalArt(ctx, art, size * scale, x, y, facing - MISSILE_TIP_ANGLE, 1, a);
-    // 红闪：与所有实体同一个入口，画【碰撞箱形状】——
-    // 尾针有硬编码碰撞箱（CRB 11_missile），所以填的就是它自己的轮廓，不再是一个圆。
-    if (EntityFX.hurtAlpha(missile) > 0) {
+    drawPetalArt(ctx, art, size * fx.scale, x, y, facing - MISSILE_TIP_ANGLE, 1, a);
+    // 红闪：【碰撞箱形状】—— 碰撞箱来自硬编码 CRB（11_missile），归一化坐标以
+    // 【素材窗口中心】为原点，所以必须套用与贴图完全相同的变换
+    //（平移到 (x,y) → 旋转 facing - 尖端角 → 缩放 size）再填多边形。
+    // 客户端快照不带 shape 字段，这里直接查同一份离线 CRB；
+    // 缺失时才退回圆 —— 挂载态 / 飞行态 / F3 因此永远是同一个轮廓。
+    const hurtA = EntityFX.hurtAlpha(missile);
+    if (hurtA > 0) {
+      const crb = missile.shape
+        || ((typeof CRB !== 'undefined' && CRB.get) ? CRB.get('11_missile') : null);
+      const sc = (missile.collSize || size) * fx.scale;
       ctx.save();
       ctx.globalAlpha = a;
-      EntityFX.drawHurtShape(ctx, missile, x, y,
-        (missile.shape && missile.shape.pts) || null,
-        (missile.collSize || 0) * scale, size * 0.32 * scale);
+      ctx.translate(x, y);
+      ctx.rotate(facing - MISSILE_TIP_ANGLE);
+      EntityFX.drawHurtShape(ctx, missile, 0, 0,
+        (crb && crb.pts) || null, sc, size * 0.32 * fx.scale);
       ctx.restore();
     }
   },
@@ -571,39 +617,36 @@ MobFX.register('hornet', {
   // 尾针（Missile 子实体）绘制：挂载时按本体姿态算位置，飞出去后按自身坐标画。
   // 两者用【同一张素材、同一个尺寸、同一个尖端角】，所以观感完全连续。
   draw(ctx, mob, scale, alpha) {
-    const st = mob.hornet;
-    // 快照优先：客户端视图自带的 hornet.missile 可能只是占位对象；
-    // 权威状态在 mob.hornetMissile（服务端每帧下发），未收到快照时才使用占位对象。
-    const snap = mob.hornetMissile;
-    // 本方法由 MobFX.drawMob 以 def.draw(...) 调用，this 指向注册定义而不是 MobFX，
-    // 因此读取挂点要用 MobFX.hornetTail。
-    const ht = MobFX.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
-    // 素材尚未就绪（prepareAssets 异步）时用兜底向量，保证尾针能先画出来，
-    // 素材就绪后下一帧自动用精确值覆盖；不直接 return，避免"永远不画"。
-    // 不再合成"假尾针"占位：没有实体就不画。发射后服务端把 st.missile 移进
-    // projectiles，快照的 hornetMissile 变 null，客户端视图的占位也会同步清掉。
-    const missile = snap || (st && st.missile);
+    // 只画【快照里的那一个实体】：客户端不持有自己的占位尾针（见 init），
+    // 所以"挂载态"与"飞行态"永远是同一个 id 的同一份状态。
+    const missile = mob.hornetMissile;
     if (!missile || (missile.dead && !missile.exiting)) return;
     // 已经发射：挂载态尾针不再画（飞出去的那枚由 hornetProjectiles 独立绘制）
     if (missile.flight) return;
+    const ht = MobFX.hornetTail || { dx: 0.45, dy: 0, axis: 0, size: 0.3 };
     const size = missile.drawSize || (mob.drawSize * ht.size);
-    if (!missile.exiting) {
-      // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
-      // 挂点 = 素材向量(dx,dy)按本体旋转角旋转，见 hornetTailPoint。
-      // p.a 已经是【最终旋转角】（包含了素材尖端方向补偿）。drawMissileAt 内部
-      // 会做 facing - MISSILE_TIP_ANGLE 抵消素材默认朝向，所以直接传 p.a 即可。
-      const p = MobFX.hornetTailPoint(mob, size);
-      // size 乘本体合成缩放（出场 Q 弹 / 受击挤压 / 退场放大）：挂载态不叠自己的入场曲线。
-      MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size * (scale || 1), alpha);
-      return;
-    }
-    MobFX.drawMissile(ctx, missile, size, alpha);
+    // 挂在尾巴上：位置每帧由本体姿态推出（客户端视图不走 tick 也能跟随）。
+    // p.a 已经是【最终旋转角】（含素材尖端方向补偿），drawMissileAt 内部再抵消
+    // 素材默认朝向，所以直接传 p.a。
+    const p = MobFX.hornetTailPoint(mob, size);
+    // 入场/退场/红闪全部由导弹自己的 EntityFX 状态驱动（与飞行态同一套曲线），
+    // 本体只提供一个透明度倍率（本体退场时尾针跟着淡出）。
+    MobFX.drawMissileAt(ctx, missile, p.x, p.y, p.a, size, alpha);
   },
   init(mob) {
-    mob.hornet = { mode: 'approach', missile: MobFX.createMissile(mob), projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 };
+    // 【不在构造时预生成尾针】：客户端视图也会走这里，预生成就会凭空多出一个
+    // "占位尾针"实体（与快照镜像并存 = 两个实体，正是用户看到的幽灵碰撞箱）。
+    // 真正的尾针由服务端 tick 在第一次需要时创建，客户端只镜像 hornetMissile。
+    mob.hornet = {
+      mode: 'approach', missile: null, projectiles: [], spinT: 0,
+      launchAngle: 0, reloadT: 0, cooldown: 0
+    };
   },
   tick(mob, dt) {
-    const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
+    const st = mob.hornet || (mob.hornet = {
+      mode: 'wander', missile: null, projectiles: [], spinT: 0,
+      launchAngle: 0, reloadT: 0, cooldown: 0
+    });
     // 射击冷却：只影响"能不能开下一枪"，不影响走位与瞄准回转
     if (st.cooldown > 0) st.cooldown = Math.max(0, st.cooldown - dt);
     // 【针生成：独立于 hornetMode】无论什么模式，只要没有挂载态针且冷却已结束，
@@ -634,7 +677,10 @@ MobFX.register('hornet', {
     }
   },
   step(mob, dt, player) {
-    const st = mob.hornet || (mob.hornet = { mode: 'wander', missile: null, projectiles: [], spinT: 0, launchAngle: 0, reloadT: 0 });
+    const st = mob.hornet || (mob.hornet = {
+      mode: 'wander', missile: null, projectiles: [], spinT: 0,
+      launchAngle: 0, reloadT: 0, cooldown: 0
+    });
     const spinRate = TAU * 3;
     if (st.spinPhase === 'return') {
       // 射击后转身面对玩家：目标角 = 发射角 + π（尾针指向玩家）
@@ -731,7 +777,7 @@ MobFX.register('hornet', {
 //   野生的没有 followEnt → 跟随逻辑自动不生效；阵营交给 registry 的 type 决定
 //   （Soldier = Hostile 追人，Worker = Neutral、Baby = Passive 不主动追）。
 // ============================================================================
-for (const antSlug of ['soldier_ant', 'worker_ant', 'baby_ant']) {
+for (const antSlug of ['soldier_ant', 'worker_ant', 'baby_ant', 'queen_ant']) {
   MobFX.register(antSlug, {
     // 底层身体（翅膀之下）；素材没就绪时返回 null -> 退回整张贴图（静止的小牙，先说能看）
     // 【顺带在这里启动解析】：artSvgOf 每只生物构造时调一次，是唯一不依赖 AI/绘制时机的入口，

@@ -8,7 +8,7 @@ const MOB_DIAM_STEP = Math.pow(
   (1.9 * Math.pow(_MOB_OLD_STEP, 6)) / MOB_DIAM_BASE, 1 / 5);   // ≈ 1.4118
 const MOB_DIAM = (function () {
   const o = {};
-  const order = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal', 'unique'];
+  const order = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
   for (let i = 0; i < order.length; i++) o[order[i]] = MOB_DIAM_BASE * Math.pow(MOB_DIAM_STEP, i);
   return o;
 })();

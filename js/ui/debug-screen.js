@@ -127,13 +127,20 @@ const DebugScreen = {
     this._set('mobs', String(g._mobTotal || (g.mobs.length + farN)));
     this._set('visible', String((g._visibleMobs || []).length));
     let asleep = 0;
-    const R2 = (typeof MOB_ACTIVE_R !== 'undefined' ? MOB_ACTIVE_R : 2200) ** 2;
+    // 与服务端同一个口径：R = 客户端可视半径 + MOB_ACTIVE_PAD（下限 MOB_ACTIVE_MIN）。
+    // 服务端不再用固定半径，这里也就不能拿常量比 —— 否则 F3 的 asleep 全是假数。
+    const viewR = (typeof g.viewRadius === 'function') ? g.viewRadius() : 0;
+    const R = Math.max(
+      (typeof MOB_ACTIVE_MIN !== 'undefined') ? MOB_ACTIVE_MIN : 1200,
+      viewR + ((typeof MOB_ACTIVE_PAD !== 'undefined') ? MOB_ACTIVE_PAD : 480)
+    );
+    const R2 = R * R;
     if (p) {
       for (const m of g.mobs) {
         const dx = m.x - p.x, dy = m.y - p.y;
         if (dx * dx + dy * dy > R2) asleep++;
       }
-      // 远端点也要算进去（近处半径可能小于 MOB_ACTIVE_R，它们未必都在休眠区）
+      // 远端点也要算进去（近处视图半径 = 视野 + 300，比醒/睡半径还小一圈）
       const fx = g._farX, fy = g._farY;
       for (let i = 0; i < farN; i++) {
         const dx = fx[i] - p.x, dy = fy[i] - p.y;

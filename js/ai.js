@@ -19,7 +19,7 @@
 // 未注册的物种自动回落到 'wander'（通用游走 + 仇恨追击 + 逃离），即原有行为。
 //
 // —— 唤醒/休眠 ——
-// 休眠由服务端按 MOB_ACTIVE_R 控制（远处不调 update），AI 侧不需要知道。
+// 休眠由服务端按 activeR()（客户端视野 + 余量）控制（远处不调 update），AI 侧不需要知道。
 //
 // —— 多节生物（蜈蚣）——
 // 只有段首跑 AI；其余节由 LocalServer._solveChains 沿头的真实轨迹刚性摆放。
@@ -187,7 +187,8 @@ const MobAI = {
       let ignoreRange = false;
       if (mob.avenger) {
         if (mob.avenger.dead) mob.avenger = null;
-        else { tgt = mob.avenger; ignoreRange = true; }
+        // 遁地（Shovel）：复仇目标隐身时不再追（目标不丢，出来继续追）
+        else if (!mob.avenger.stealth) { tgt = mob.avenger; ignoreRange = true; }
       }
       if (!tgt) tgt = mob.topThreat ? mob.topThreat() : null;
       if (!tgt || (!ignoreRange && mob.hostility === 'passive' && !tgt.honey)) {

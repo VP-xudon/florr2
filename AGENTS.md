@@ -153,7 +153,13 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   `webs`、`projectiles`。
 - 事件：`dmg`、`kill`、`hurt`、`chat`、`sys`、`respawned`、`teleported`。
 - 客户端差分镜像：新 `netId` 建视图，消失的播放退场后回收；`px/tx/blend` 插值。
-- 远处生物休眠：`MOB_ACTIVE_R = 2200`，休眠个体不跑 AI/物理，但仍下发人口（小地图使用）。
+- 远处生物休眠：半径**不是固定值** —— 客户端每帧把可视半径（视口半对角线 + 相机偏移，
+  已含 Antennae 缩放）随 `input.viewR` 上行，服务端 `activeR() = max(MIN, viewR + PAD)`；
+  客户端从未上报时才退回 `MOB_ACTIVE_R = 2200`。休眠个体不跑 AI/物理，但仍下发人口（小地图使用）。
+- 醒/睡判定的唯一入口是 `LocalServer._isAwake(m, p, R)`（分区 / 周期唤醒 / 每步休眠共用）。
+  **多节生物按整条链判定**：锚点取 `m._head`（链头），半径加 `head._chainLen`（整链长），
+  否则链尾进视野时链头还在睡，`_solveChains` 没有头可解 —— 表现就是"半条蜈蚣僵住"。
+  某一节死亡导致断链时，新段首要重置自己和后续所有节的 `_head` 与 `_chainLen`。
 - 生物互相推挤用均匀网格宽相位：格距 192px，按最大半径扩圈，`_pseq` 保证每对只算一次。
 - 新增网络实现只需实现 `Net` 子类，客户端代码不变。
 
@@ -187,8 +193,21 @@ EntityFX.hurt(ent, dur);
 例外：
 
 - 主角不在容器里，但 Q 弹、红闪、计时共用引擎。
-- Hornet 弹体是母体子实体，id 为 `父 netId + ':missile:' + 序号`，不进世界人口表。
-- 挂载态弹体画在父实体坐标系里，用 `visual()` + `drawHurt()`。
+- Hornet 尾针是母体子实体，id 为 `父 netId + ':missile:' + 序号`，不进世界人口表。
+  **发射前后是同一个实体对象**（只切 `flight` 标记）：血量 / 红闪 / age / 入场进度全部连续，
+  发射时不会重置 HP，也不会"先删一个再建一个"。
+- 尾针【两端各自只有一个】：服务端由 `MobFX.tick` 惰性创建（`init` 不再预生成），
+  客户端只镜像快照里的 `hornetMissile`，绝不自己造占位对象。
+  发射瞬间客户端在 `_applyProjectiles` 里【收养】挂载态那个对象（`parentId` → `hornetMissile`），
+  从挂载过渡到飞行还是同一份对象。快照里没有 `hornetMissile` 时立刻把引用清空（否则 F3 会留一个
+  静止的幽灵碰撞箱）。
+- 挂载态位置 / 朝向只由 `MobFX.hornetTailPoint(mob, size)` 给出：绘制、F3、受击判定三处共用，
+  不许再用 `mob.facing + π` 之类的猜测角度。
+- 尾针挂点 `dx/dy/size` 一律按 **drawSize 的固定裁剪框**（`cropRatio × viewBox`）归一化，
+  不是内容包围盒（用内容包围盒会把挂点放大 20%+）。`HORNET_TAIL_FALLBACK` 必须与
+  `prepareAssets` 解析出来的那组数**完全一致**（0.2783 / 45° / 0.2645），
+  否则素材就绪前后会出现"第一枚正常、之后变小又跑位"。
+- 尾针的入场 / 退场 / 红闪读它自己的 `EntityFX.visual()`（挂载态也是），父实体只提供一个透明度倍率。
 
 ### 7.2 花瓣实体
 
@@ -199,11 +218,53 @@ EntityFX.hurt(ent, dur);
   "同槽同子号的唯一未认领记录"，且**不改写实体的 `gen`**（否则同槽两代会共用一个键）。
 - 客户端只生成服务端确实有的实体（`_netSlotHasLive`）。
 - `_snapPetals` 必须为"有卡但无实体"的槽补 dead 记录，否则客户端会留下不参与伤害的幽灵花瓣。
+- 【能不能挨打】只有一个判据：`PetalFX.canBeHit(body)`（= `!type.noHealth`）。
+  生物体伤、Hornet 尾针（挂载态与飞行态两段）、Pollen 弹等**所有外部伤害入口都只问它**，
+  不许各自拼 `noDamage / noPush / noHealth` 的组合 —— 漏一处就是"Basil 被尾针打碎"。
+- Shovel（铲子）＝ 不参与任何实体碰撞/结算（同 Basil：noDamage/noHealth/noPush/noKnockback/overMobs），
+  唯一效果是【遁地】：`PETAL_TRAITS.shovel.burrow = { mode: 'detect', dur: 2 }`，
+  装填完成且处于 detect 模式时由 `Player._startBurrow(dur)` 触发（客户端/服务端同一份逻辑）：
+  · 所有花瓣实体走通用退场下架，装填冻结清零，`_endBurrow()` 后全部从 0 重新装填；
+  · `player.stealth = true`：`Mob.canSee/canChase/_pickTarget` 全部忽略它（仇恨表不清，出来继续追），
+    `sysPush` 的玩家推挤、`_combatTick` 的花朵体伤与尾针命中全部跳过；
+  · 表现：本体不画，只留 `Player.drawBurrowShadow()` —— 与本体同尺寸的**纯色半透明圆**
+    （无渐变、无描边；画在瓦片之上、所有实体之下）＋ 起土粒子
+    （颜色 = 起手瞬间画布上脚下的地面像素，见 `Game._groundColorAt`）；
+  · 移速：与踩到 foliage/seaweed/vine 同一档减速（`SLOW_TILE_SPEED`，见 `Player.update`）。
 
 ### 7.3 碰撞与伤害
 
 - `Mob._ensureShape()` 是碰撞轮廓唯一建立入口，键为 `'mob' + (artSvg || svg)`。
+- 生物的硬编码碰撞箱在 `assets/crbs/mobs/*.crb`，由 `tools/gen_mob_crb.py` 从 SVG 矢量几何生成：
+  参与碰撞的是 `BODY_PARTS[id]` 列出的【填充路径颜色】，
+  外加"与身体同 `d` 的 `fill="none"` 描边"（按 `stroke-width/2` 向外扩），
+  触角 / 腿 / 尾针（不与身体同 d 的细线）不参与。
+  坐标口径 = 运行时固定裁剪框（`_cropRatio` 以瓢虫图案包围盒标定）+ `MOB_PIVOT` 轴心位移，
+  所以"画多大就判多大"。
+  · 瓢虫 `3`：红壳 `#eb4034` + **黑色头部 `#0e0e0e`/`#111`**（旧版只取红壳，头部凹进一块）
+  + **红描边圈**（独立素材 `assets/entities/3_ring.svg`，运行时按 `LADYBUG_RING_RECT`
+  拉伸叠在本体上；工具里用 `RING_LAYERS` 把它并入凸包，否则可见红圈比判定大一圈）；
+  · 蜜蜂 `4` / 大黄蜂 `27`：黄色身体 + **身体自己的 4.167 描边**（旧版把描边当成触角删掉，碰撞箱小一圈）。
+- 【路径解析的坑】`tools/fit_mob_viewbox.py` 的 `path_points` 必须实现 **T/S 平滑曲线**：
+  `T = 平滑二次贝塞尔`（控制点是上一段 Q/T 控制点关于当前点的镜像）、
+  `S = 平滑三次贝塞尔`（第一控制点同理）。瓢虫描边圈、蚂蚁/蜈蚣身体全是用 `T` 串起来的
+  90° 大弧 —— 旧实现把 `T` 当"直线端点"（不采样、不反射），弧段中段只剩空档，
+  碰撞箱就会"缺一块"（瓢虫后方）。改完必须重跑 `gen_mob_crb.py` 重新生成所有 `.crb`。
 - 多节生物头节 `12_h`、身体节 `12_b` 各用本节贴图，不回落整条外形。
+- 多节生物【节数】按稀有度递减（`MOB_TRAITS.centipede.segCount`），平均：
+  common 11.5 / unusual 11 / rare 9.5（**rare 及以下固定**）→ epic 8.5 / legendary 7.5 /
+  mythic 7 / ultra 6 / super 5 / eternal 5（高段整体比首版上浮约 30%，单调不回升）。
+  高等级体节更大、长链极易卡墙，所以越高级越短；自然生成的 45~60 节超长个体仍然只有 common 有 0.3% 概率。
+- 【禁止生成在墙体内】：所有自然生成都过 `LocalServer._canSpawnAt(x, y, r)` ——
+  `mobBlockedAt`（减速瓦片 = 生物的墙）+ `canStandAt`（半径内不压瓦片碰撞多边形），
+  半径取 `min(r, MOB_WALK_LIMIT_R)`（未建轮廓时 r 是视觉外接半径，会大出一大截）。
+  蜈蚣是**逐节判**：某一节要落的位置站不住就【就地截断】，后面的节不再生成；
+  头节本身在墙里则整条不生成（`_spawnChain` 返回 0，`_spawnInZone` 返回 false）。
+- 多节生物【出生摆位】与 `_solveChain` 读同一个半径口径 `_chainRad`（`rMean`）+ `GLUE = 1.0`。
+  出生时素材可能还没加载（`rMean` 算不出来），间距只能退回 `r` 估（偏大 20%+）；
+  `_spawnChain` 因此把链头挂进 `_chainSettle`，素材就绪后由 `_settleChains` 用同一套解算
+  **重摆一次**（每步最多 6 条）。少了这一步：远处的链会一直"一节一节散着"，
+  直到玩家走近、链头进入视野被解算，才啪一下合拢。
 - 物种可选手写 `MOB_TRAITS[slug].collider = { type:'circle', k }`。
 - 蜘蛛轮廓从删除 8 条腿后的身体素材提取。
 - `Mob.walkR / walkSize / walkHull` 只用于墙体与禁行地形；伤害、推挤、花瓣命中用 `r / shape / collSize`。
@@ -261,6 +322,16 @@ EntityFX.hurt(ent, dur);
   碰撞箱 = **一个**体节（`'5_body'`）—— 生成脚本对体节数量不做假设，有几条身体 path 就取几条。
   体型按【主体球】对齐同级 Worker 的较大体节：`MOB_TRAITS.baby_ant.sizeScale = 0.8465`
   （素材归一化球径 Baby 0.8678 / Worker 大球 0.7346）。
+- **蚂蚁家族整体小一档**：`MOB_TRAITS.<ant>.sizeTier = -1`（worker / baby / soldier / queen），
+  `Mob` 构造里 `sizeTier` 换算成 `MOB_DIAM_STEP^tier`（≈0.708），绘制与碰撞同步缩放。
+  用档位而不是手写小数：它直接对齐稀有度表，改表时不会脱节。蚁穴 / 蚁卵是结构物，不下移。
+- 阵营：玩家本体 `Player.faction = 'player'`（召唤物同阵营）。`Mob.noteThreat` 用阵营判敌我，
+  没有这个字段时玩家会被当成 `'enemy'`（= 与所有野生生物同阵营），于是**中立生物（工蚁 /
+  Rare+ 瓢虫）挨打永远不记仇**，只有主动敌对型才会追 —— 这是"工蚁像是被动"的根因。
+- 花瓣 → 生物的击退是**统一口径**：所有花瓣都按"legendary 花瓣以标准移速撞上来"算
+  （`PETAL_KB_MASS_LEGENDARY` = 1.8，速度不参与），生物一侧按稀有度份额 `KNOCKBACK_SHARE`
+  × 质量悬殊 `kbBoost` × 等级衰减 `1/(1+(level-1)×KB_LEVEL_FALLOFF)` 递减。
+  花瓣自身的稀有度/等级/血量/速度一律不得进入击退公式。
 - 脱战只有一条规则：`Mob.canChase(ent)` = 距离 ≤ `sightR × MOB_DEAGGRO_K`（=2）且视线不被墙挡；
   `topThreat()` 用它逐条筛仇恨表。超范围的目标【只在本帧失效】，仇恨记录永不抹除 ——
   超范围时自动改选范围内下一个有效目标，没有有效目标就返回 null 让 AI 游走；
@@ -268,6 +339,9 @@ EntityFX.hurt(ent, dur);
   `canSee`（1×）/`canChase`（2×）/`wallBlocked` 共用同一份结果。
 - Ant Egg 蚁卵（生物，id 40，与同名花瓣是两个东西）：障碍型 + `immovable`（重量 Infinity、
   不吃击退/推挤，`speed: 0` 据此判 `obstacle`），固定在原地；掉落花瓣 Ant Egg（官方通用表）。
+  `immovable` 的实现在 `Mob.update`：**不跑 `moveEntity`**，速度/击退全部清零。
+  只靠重量 Infinity 不够 —— 地形解算（`map.move/moveShape`）在实体压住墙体时会把它推出去，
+  那正是"蚁穴/蚁卵偶尔会动"的来源。新增障碍型物种只要声明 `immovable: true` 就自动锁死。
   被击碎时 50% 原地生成【同级】Baby Ant（`mob.avenger`）：通用 `chase` 优先选中它并
   **忽略距离**（仍受墙阻挡），仇恨永不转移；玩家死亡后清空 `avenger`，变回正常被动。
   复仇幼蚁的追击速度 = Soldier Ant（同为 `speed:'player'`）。
@@ -276,6 +350,10 @@ EntityFX.hurt(ent, dur);
   同时统计自己 `brood` 里的存活数，< 7 就停下写一次 `queenEggReq`（间隔 ≥1.5s）。
   生成/孵化全在服务端：`_queenAntTick` → `_spawnQueenEgg`（低一级、无敌、走通用实体接口）
   → 1s 后 `_hatchQueenEgg`（`despawn` 蚁卵原地放同级 Soldier Ant，存活数不变）。
+  外观/碰撞：也进 `AntArt.SPECIES`（`queen_ant: '8'`）→ 翅膀与小牙和兵蚁一样摆动；
+  碰撞箱 `assets/crbs/mobs/8.crb` 只含 3 个体节（`BODY_PARTS['8'] = ['#454545','#555']`），
+  **翅膀与小牙不参与**。体型 `sizeScale = 1.369`：以"头部第一节圆"对齐兵蚁同级头部
+  （素材头径 40.83/84.361 vs 兵蚁 29.17/44.027），否则整只蚁后比兵蚁还小。
 - Ant Hole 蚁穴（id 9）：障碍型（`speed:0` + `immovable`）固定不动；数值走
   `MOB_RARITY_OVERRIDES[9]`。产卵参数全在 `MOB_TRAITS.ant_hole.hole`：
   `init` 开局铺 6 只（3 幼蚁 / 2 工蚁 / 1 兵蚁），`pool` 是整局 40 只的构成
@@ -284,21 +362,41 @@ EntityFX.hurt(ent, dur);
   （兵蚁后置），蚁后在生命 < `queenAt`（40%）时随某一批额外出现一次。
   受击时属于它的工蚁全部 `hostility='hostile'`（AI 与兵蚁一致）。
   `MOB_TRAITS.ant_hole.passWith` = 蚂蚁家族：`sysPush` 的 `_passThrough` 跳过这类配对的推挤，
-  蚂蚁可以随意踩在蚁穴上。掉落物暂不实装。
+  蚂蚁可以随意踩在蚁穴上。
+  **掉落**：`MOB_DROP_ITEMS.ant_hole = ['soil','shovel']`，两张专属分布表在
+  `MOB_DROP_TABLE_MOB.ant_hole`（官方 Wiki 的 Soil / Shovel 两个页签，逐档抄录）。
+  走 `rollMobDrops` 通用掷骰，所以图鉴悬浮框（`mobDropRows`）与地面掉落同源。
+  **生成**：蚁穴是【全图物种】，不是蚂蚁区专属 —— 它写在 `MOB_GROUPS.garden` 里
+  （`['ant_hole', 0.05]`，与地图里那条专属权重同口径）。garden.tmj 的 41 个生成区里
+  只有 1 个写了 `ant_hole:0.05`，其余 32 个写的是组名 `garden`；组表是唯一的分布来源，
+  所以在组表里漏掉它 = 全图只有那一个区会刷蚁穴。
+  全图 garden 区合计约 1500 只时，期望 7~8 个蚁穴（每区约 0.5% 概率）。
+  `MOB_TRAITS.ant_hole.spawnMin = 1` 只是【整张地图】的保底数量（`_ensureStructureSpawns`），
+  兜住"一整局一个都没随机到"的极小概率 —— **不要**退回"每个区保底一只"（那会变成 32 个穴）。
 - 掉落表有三级优先级（`dropDistFor(slug, rarity, mobSlug)`）：
   【该生物对该件花的专属表（`MOB_DROP_TABLE_MOB`）】 > 【该件花的全局专属表（`MOB_DROP_TABLE_ITEM`）】 > 官方通用表。
   为什么要第二层：工蚁/幼蚁的 Leaf 表与通用表完全不同，而 Leaf 同样是蜈蚣的掉落 ——
   把 Leaf 写成全局专属表会把蜈蚣一起改掉。Magic Leaf 与同生物的 Leaf 表完全相同（只入库、不掉落）。
 - 红闪【唯一入口】是 `EntityFX.drawHurtShape(ctx, ent, x, y, poly, scale, r, maxA)`：
   有碰撞多边形就填多边形（生物 / Wax 落位实体 / Hornet 尾针的 CRB），碰撞箱本来就是圆的
-  （普通花瓣的 `cr`、花朵本体的 `R`）就填圆。
-  绝不再为某个物种单写"红剪影 / 专属半径"——那套已经删干净，红闪永远与碰撞箱严格对齐。
+  （花朵本体的 `R`）就填圆。
+  绝不再为某个物种单写"红剪影 / 专属半径"。
+- **花瓣**的红闪按用户口径是【贴图自己的形状】（不是一个圆）：`_drawPetalEntity` 用
+  `CardRenderer.redArtCanvas(svg)`（素材整张 `source-in` 染红、按 svg 缓存）叠在同一个变换上
+  （含 `spinOrigin` 轴心偏移），素材未就绪才退回 `PETAL_R` 圆。
+- **Hornet 尾针 / Missile 花瓣**：素材是花瓣 9，CRB 为 `assets/crbs/mobs/11_missile.crb`，
+  由 `tools/gen_stinger_crb.py` 生成 —— **必须按 `stroke-width/2` 做圆角外扩**
+  （素材是 `stroke-linejoin="round"`，描边才是画面最外沿；只取中心线会小一圈）。
+  画红闪时必须套用与贴图相同的变换（平移到实体 → 旋转 `facing - MISSILE_TIP_ANGLE` → 缩放），
+  CRB 的归一化坐标是【素材坐标系】，不旋转就会和画面错开。
 - 回血增幅（Basil）= `stats.healBonus`，在 `Player.recompute` 里求和成 `player.healBonus`；
   【最后结算】: 所有回血只能走 `PetalFX.ctx.heal`，那里统一乘 `(1 + healBonus)`。
 - 有方向的素材（Missile）只有两个声明：数据表的 `launchRadial`（方向取脱轨瞬间的轨道角）
   与 `PetalFX.artTip(type)`（尖端角，绘制与飞行朝向的唯一来源）。
   飞行朝向每帧由速度重算（`atan2(vy,vx) - artTip`），不依赖快照时机；
   实体推进与快照回填两处用同一个公式。
+  退场朝向必须【定格在进入退场那一刻的画面朝向】（`Player._petalExitRot(b)`）：
+  飞行体的 `flightRot` 与轨道花瓣的径向角是两回事，死亡时切回径向会在消失瞬间歪一下。
 - 伤害唯一入口 `LocalServer._dmg(atk, armor) = max(atk - armor, 0)`，四个方向共用。
 - 接触伤害每 tick 一次、一次为完整面板值，无伤害冷却与单次上限；
   只有花朵本体有 `FLOWER_HURT_INVULN` 受伤无敌帧。
@@ -311,9 +409,44 @@ EntityFX.hurt(ent, dur);
 - `registry.js`：花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实，84+ 忽略。
 - 启用花瓣（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf,
   faster, third_eye, web, antennae, orange, missile, wax, rice, corn, wing, ant_egg, clover,
-  glass, basil`。
+  glass, basil, shovel, soil`。
 - 不可堆叠（`stackable: false`，只有最左那格生效）：`third_eye, antennae, clover`。
   这是"卡不可叠"，不是"效果不可叠"：多个玩家各带一张 Clover 时幸运值照常加算。
+- 生物词条键：`MOB_I18N_ALIASES` 把 slug 映射到官方键（蚂蚁家族是 `ant_*` 前缀：
+  `worker_ant→ant_worker / baby_ant→ant_baby / soldier_ant→ant_soldier / queen_ant→ant_queen`），
+  名字与简介都必须经 `mobI18nKey(slug)` 查，否则中文环境回落英文且没有简介。
+  特例：Bumble Bee 的 Pollen 是【生物实体】（`POLLEN_SHOT_TYPE`，slug `pollen_shot`），
+  不能借 `Petals/pollen`，词条在 `js/i18n-extra.js` 里单独登记。
+- 花瓣默认自转：口径是「**公转 + 自转 = `PETAL_SELF_TURN_T` 秒一圈**」（= 2s），
+  所以 `_petalSelfRate` 必须 **减去公转角速度**（绘制角 = drawRot + selfRot，叠加才是玩家看到的一圈）。
+  `type.selfSpin` 优先；`orientOutward`（Missile）与落位实体（Wax）不走默认自转。
+  Wing 的自转轴心 = 半月形外弧的圆心（`spinOrigin` 按"实体窗口边长"归一化，见 data.js）。
+- Soil（泥土）：伤害/血量/Flower Health 按稀有度在 `PETAL_RARITY_OVERRIDES.soil`；
+  装备即生效的三项加成走 `PetalFX.bonus` → `Player.recompute`：
+  `extraRadius`（+10/件，叠加）、`flowerHp`（按稀有度相加）、`speedMul`（0.75/件，**乘积**）。
+  `Player._tickSoil(dt)` 用指数阻尼平滑逼近半径与生命上限（速率 3 = 半径变化速度的 0.5×）；
+  改生命上限时当前血量与 `dispHp/ghostHp` 按**同一比例**缩放 → 血条百分比恒定。
+  `baseR / baseMaxHp` 是不含 Soil 的基准，`?hp=`/attach/重置 三处必须同步维护。
+  【花瓣轨道距离与本体半径解耦】：轨道半径一律用 `PLAYER_R_STD`（≈13.2）算，
+  不用 `this.r` —— 否则 Soil 的 +10 会把整圈花瓣一起推远（视觉上像整只放大）。
+  Wax 落点仍用 `p.r`（蜡块不能落在变大的花朵内部）。
+- **合成窗口（Craft）**：纯客户端 —— 库存就是背包的 `_gc`（`type.key|rar -> 数量`），
+  装入时一次性扣 5、失败返还、成功 +1 目标稀有度，与背包/装备同一份口径。
+  · 入口：左下角 `craftBtn`（`assets/ui/btn-party.svg`，与背包同尺寸，位于其下方，
+    `#dockBtns` 从底部锚定所以背包整体上移一格）；窗口尺寸/动效与背包一致
+    （主色 = btn-party 内板 #db9d5a，描边 #b17f49）。
+  · 下半列表 = 库存按 (花瓣 × 稀有度) 分行，一种一行、数量 0 整行不显示；
+    第一格卡面带 xN 角标，其余是图鉴同款灰槽。**数量 > 5 才上色可点**（点 = 装 5 张），
+    不足的置灰不可点；点击是否有效按【实时数量】判断（行角标可能滞后）。
+  · 成功率表 `UI.CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1/0.1%，按目标稀有度）；
+    失败概率均分 4 份 = 损失 1~4 张。
+  · 抖动时长均值随目标稀有度线性过渡（unusual 1s -> eternal 13s），取样
+    `mean × [0.6, 1.4]` 再钳 [1,18] —— 全档合计正好落在用户口径的 1~18s。
+  · 粒子：抖动期速率 = 最终迸发数 × 0.5 × 已过百分比 / 时长（总量 N/4，封顶一半），
+    最终迸发 unusual 1~2 个 -> eternal ≈500 个（线性过渡），颜色 = 目标稀有度色；
+    失败的损失卡迸发【源稀有度】色后分开缩小消失。粒子统一走
+    `UI.onCraftBurst(color, n)` → `Game.spawnParticles`（花朵世界坐标）。
+  · 成功后成品卡展示在聚拢中心：点击拿下来、或装下一组自动替换；背包界面始终 +1。
 - Antennae 的 `sight` 为官方视野比例，相机缩放 `1/(1+sight)`；
   所有以屏幕尺寸计算视口的位置都要除以缩放值。
 - 一卡多体的显示口径由 `PETAL_STAT_DISPLAY` 声明：`each` 单体值 / `total` 合计值，
@@ -348,6 +481,8 @@ EntityFX.hurt(ent, dur);
 - Missile：发射链路与 Peas 相同（`launch` 能力字段 + 引擎默认 `detach`/`flightOf`）；
   reach 下加载完成即沿当前轨道角径向飞出（`launchRadial`），直线飞行 2s，参与实体碰撞。
 - Hornet：追击速度 0.95× 玩家，尾部 Missile 为 MobFX 子实体，独立受击，消失后 0.5s 重生。
+- Shovel：装填按稀有度递减（`PETAL_RARITY_OVERRIDES.shovel.reload`：15.0 / 13.1 / 11.8 / 10.1 /
+  8.5 / 6.9 / 5.2 / 3.6 / 2.0 / 2.0 s，唯一入口 `petalReloadOf(card)`）；detect 模式装填完成即遁地 2s。
 - 可自然生成生物（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, bumble_bee, centipede, spider, hornet,
   soldier_ant, worker_ant, baby_ant, ant_egg, queen_ant, ant_hole`。地图 TMJ 里的旧名走
   `MOB_SPAWN_ALIASES`（`ant_soldier / ant_worker / ant_baby / ant_queen` → 对应物种）。

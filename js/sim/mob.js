@@ -32,9 +32,12 @@ class Mob {
     const baseHp = rs ? (rs.hp || 0) : type.hp;
     const baseDmg = rs ? (rs.dmg || 0) : type.dmg;
     // 视觉直径 = 稀有度倍率 × 等级缩放 × 该物种的等比体型倍数（数据表 MOB_TRAITS.sizeScale）
+    // × 【体型档位偏移】(sizeTier)：±1 档 = ×/÷ MOB_DIAM_STEP（整族一起平移一档，
+    //   比给每个物种手写一个小数倍率更好读，也不会和稀有度表脱节）。
     const sizeScale = type.sizeScale || 1;
+    const tierK = type.sizeTier ? Math.pow(MOB_DIAM_STEP, type.sizeTier) : 1;
     const diam = Math.round(PLAYER_VISUAL_D * (MOB_DIAM[this.rarity] || MOB_DIAM_BASE)
-      * mobScale(this.level) * sizeScale);
+      * mobScale(this.level) * sizeScale * tierK);
     this.visualD = diam;
     this.drawSize = diam;               // 视觉裁剪框（含体型倍数，决定画多大）
     // 碰撞尺寸 = 绘制尺寸：画多大就判多大，不按物种再折算。
@@ -255,6 +258,8 @@ class Mob {
   // 视线采样（lineBlocked）较贵，同一目标 0.15s 内复用上一次结果。
   canSee(ent) {
     if (!ent || ent.dead) return false;
+    // 遁地（Shovel）：隐身 —— 视觉/追击/仇恨判定全部看不见（仇恨记录保留，出来后自动恢复）
+    if (ent.stealth) return false;
     const dx = ent.x - this.x, dy = ent.y - this.y;
     const sr = this.sightR || MOB_SIGHT_R;
     if (dx * dx + dy * dy > sr * sr) return false;
@@ -265,6 +270,8 @@ class Mob {
   // 与 canSee 的唯一区别是距离：看见目标用 sightR，保持追击可以用到 2 倍。
   canChase(ent) {
     if (!ent || ent.dead) return false;
+    // 遁地（Shovel）：隐身 —— topThreat() 因此自动跳过它（仇恨表本身不清，出来立刻恢复追击）
+    if (ent.stealth) return false;
     const dx = ent.x - this.x, dy = ent.y - this.y;
     const rr = (this.sightR || MOB_SIGHT_R) * MOB_DEAGGRO_K;
     if (dx * dx + dy * dy > rr * rr) return false;
@@ -449,8 +456,10 @@ class Mob {
   _pickTarget(player, others) {
     const mine = this.faction || 'enemy';
     let best = null, bestD = Infinity;
+    // 遁地（Shovel）中的玩家：隐身，不能被任何生物选为目标（仇恨记录保留）
+    const pVisible = player && !player.dead && !player.stealth;
     if (mine !== 'player') {
-      if (player && !player.dead) {
+      if (pVisible) {
         best = player;
         bestD = Math.hypot(player.x - this.x, player.y - this.y);
       }
@@ -463,7 +472,7 @@ class Mob {
     }
     // 玩家阵营（召唤物）绝不把玩家当目标：没有敌人就原地待命。
     if (mine === 'player') return best || null;
-    return best || (player && !player.dead ? player : null);
+    return best || (pVisible ? player : null);
   }
 
   update(dt, player, map, others) {
@@ -525,7 +534,9 @@ class Mob {
       const sp = this.chaseSpeed || this.speed || 0;
       want = { x: this.keepDir.x * sp, y: this.keepDir.y * sp };
     } else {
-      want = MobAI.step(this.ai, dt, this, target || player || this);
+      // 传给 AI 的"玩家"也必须是【能被感知到的】：遁地中的玩家不参与任何目标计算
+      want = MobAI.step(this.ai, dt, this,
+        target || (player && !player.stealth ? player : null) || this);
     }
     // 物种硬上限（蜈蚣要保证整条一定比普通生物慢）：
     // 由该物种的 AI 定义声明自己的 speedLimit，引擎统一钳制。
@@ -552,7 +563,14 @@ class Mob {
     // 用削完的速度去比，会把"确实被挡住"又算成"没走满"，判定变得时灵时不灵。
     const px = this.x, py = this.y;
     const preVx = this.vx, preVy = this.vy;
-    moveEntity(this, dt, map);
+    // 障碍型（蚁穴 / 蚁卵）：位置【强制锁死】—— 不积分自主速度，也不积分击退，
+    // 连地形解算都不跑。moveEntity 在"实体压住墙体/减速瓦片"时会把位置推出去，
+    // 那正是"蚁穴在特定情况下会动"的来源（重量 Infinity 只挡住了推挤，挡不住解算）。
+    if (this.immovable) {
+      this.vx = 0; this.vy = 0; this.kbX = 0; this.kbY = 0;
+    } else {
+      moveEntity(this, dt, map);
+    }
     // 大招期间归位：moveEntity 可能因为墙体推出/击退冲量挪动它，
     // 这里把它按回锚点，保证"定在原地"是字面意思（自转但不位移）。
     if (this.ultHold) {

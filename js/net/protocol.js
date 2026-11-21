@@ -28,7 +28,13 @@ const PER_ZONE_MAX = Math.round(6 * DENSITY_SCALE);              // 90：单区�
 const SPAWN_PER_TILE = 0.012 * DENSITY_SCALE;                    // 0.18：每格面积贡献的目标数量
 const GLOBAL_MAX_MOBS = Math.round(110 * DENSITY_SCALE);         // 1650：全图存活上限
 const SPAWN_INTERVAL = 0.1;         // 每 0.1s 补 1 只（总量变大，补缺口也要更快）
-const MOB_ACTIVE_R = 2200;          // 与玩家距离超过它 -> 生物休眠（不跑 AI、不参与推挤）
+// ---- 醒/睡半径（AI 计算范围）----
+// 不再是"玩家周围一个固定半径"：客户端每帧把【它实际能看到的范围】上报给服务端
+// （上行 input.viewR = 视口半对角线，含相机偏移与缩放），服务端按 viewR + PAD 决定谁醒着。
+// 于是装了 Antennae 把镜头拉远之后，视野里的生物仍然在跑 AI（过去会僵在原地）。
+const MOB_ACTIVE_PAD = 480;         // 视野外多醒一圈：AI 要提前起步，不能"刚进屏才开始动"
+const MOB_ACTIVE_MIN = 1200;        // 下限：窗口很小 / 客户端还没上报过视野时的兜底
+const MOB_ACTIVE_R = 2200;          // 客户端从未上报视野时的默认半径（等价旧口径）
 const CP_RESPAWN_STAYS = 3;         // 每个复活点的保底复活次数
 const HONEY_PULL_R = 700;           // Honey 吸引仇恨的半径（px）：范围要足够大，否则"只吸引到一只"
 const HONEY_IMMUNE_T = 40;          // 被蜜影响累计满 40s -> 该生物永久免疫所有蜜

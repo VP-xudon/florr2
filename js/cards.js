@@ -414,6 +414,28 @@ const CardRenderer = (function () {
     return null;
   }
 
+  // 红闪剪影：把实体素材【整张染红】（只保留不透明区域），用于"红闪跟随贴图形状"。
+  // 与 artCanvas 同一份素材、同一个窗口、同一个 128px 位图，所以叠在贴图上严丝合缝；
+  // 素材未就绪时返回 null（调用方退回圆），绝不做"永久缓存失败"。
+  const _redCv = {};    // svgId -> canvas（成功才缓存）
+  function redArtCanvas(svgId) {
+    const hit = _redCv[svgId];
+    if (hit) return hit;
+    const src = artCanvas(svgId, 128);
+    if (!src) return null;
+    try {
+      const c = document.createElement('canvas');
+      c.width = src.width; c.height = src.height;
+      const x = c.getContext('2d');
+      x.drawImage(src, 0, 0);
+      x.globalCompositeOperation = 'source-in';   // 只保留素材不透明处
+      x.fillStyle = '#ff4040';
+      x.fillRect(0, 0, c.width, c.height);
+      _redCv[svgId] = c;
+      return c;
+    } catch (e) { return null; }
+  }
+
   // 实体素材的【矢量】版本：直接返回 SVG 的 <img>（浏览器按目标尺寸实时栅格化，
   // 任意缩放都清晰）。artCanvas 是固定 128px 的位图 —— 显示尺寸接近或超过 128px 时
   // 会糊；需要锐利边缘的地方（如装备型饰品）应当用这个。
@@ -872,7 +894,7 @@ const CardRenderer = (function () {
   }
 
   return {
-    createCard, darken, rarityColor, artCanvas, artImage, renderCardTo, repaintAll, paintCard: paint,
+    createCard, darken, rarityColor, artCanvas, redArtCanvas, artImage, renderCardTo, repaintAll, paintCard: paint,
     schedulePaint, setCount, FONT,
     // 素材窗口（[x,y,w,h]，素材自身 viewBox 坐标）：给"按素材坐标对位"的绘制方用
     artWindow: (id) => _artWin[id] || null,

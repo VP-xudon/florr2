@@ -90,7 +90,20 @@
 
     // ---- 新实装物种：蚁后（官方词条键是 ant_queen，slug 是 queen_ant）----
     'Mobs/queen_ant/Name': 'Queen Ant',
-    'Mobs/queen_ant/Description': 'You must have done something really bad if she is chasing you.'
+    'Mobs/queen_ant/Description': 'You must have done something really bad if she is chasing you.',
+    // ---- Bumble Bee 产出的 Pollen：它是【生物实体】（走 Mob 管线），不是花瓣卡，
+    //      所以不能借 Petals/pollen 的词条，这里单独登记。----
+    'Mobs/pollen_shot/Name': 'Pollen',
+    'Mobs/pollen_shot/Description': 'A drifting puff of pollen. It stings a little if you bump into it.',
+    // ---- Soil（泥土）：花朵生命上限 / 额外半径 ----
+    'UI/Petal/FlowerHealthLabel': 'Flower Health:',
+    'UI/Petal/ExtraRadiusLabel': 'Extra Radius:',
+    // ---- 合成窗口 ----
+    'UI/Craft/Title': 'Craft',
+    'UI/Craft/Button': 'Craft',
+    'UI/Craft/Consume': 'Consume 5 identical petals to craft once.',
+    'UI/Craft/FailNote': 'On failure 1~4 petals are lost.',
+    'UI/Craft/Chance': 'Success rate: {0}%'
   };
 
   const ZH = {
@@ -170,7 +183,19 @@
     'Chat/Sys/Spawn/centipede': '远方是一列巨型火车吗？',
 
     'Mobs/queen_ant/Name': '蚁后',
-    'Mobs/queen_ant/Description': '如果你被她追着跑，那你一定干了什么坏事。'
+    'Mobs/queen_ant/Description': '如果你被她追着跑，那你一定干了什么坏事。',
+    // Bumble Bee 产出的 Pollen（生物实体，不是花瓣卡）
+    'Mobs/pollen_shot/Name': '花粉',
+    'Mobs/pollen_shot/Description': '一团飘散的花粉，撞上去会有点疼。',
+    // Soil（泥土）：花朵生命上限 / 额外半径
+    'UI/Petal/FlowerHealthLabel': '花朵生命值：',
+    'UI/Petal/ExtraRadiusLabel': '额外半径：',
+    // 合成窗口
+    'UI/Craft/Title': '合成',
+    'UI/Craft/Button': '合成',
+    'UI/Craft/Consume': '消耗5个相同的花瓣来进行一次合成',
+    'UI/Craft/FailNote': '失败会损失1~4个花瓣',
+    'UI/Craft/Chance': '成功率: {0}%'
   };
 
   I18N.addPack('en_US', EN);

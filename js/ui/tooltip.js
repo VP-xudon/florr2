@@ -73,6 +73,14 @@ Object.assign(UI, {
           }
         } else {
           if (t.hp > 0) rows.push({ label: statLabel('Petal/Attribute/Health', 'Health:'), value: t.hp, labelColor: STAT_LABEL_COLORS.health });
+          // Flower Health（Soil）：装备时给花朵加的生命上限；标签色【与 Health 完全相同】
+          if (t.flowerHp > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/FlowerHealthLabel', 'Flower Health:'),
+              value: t.flowerHp,
+              labelColor: STAT_LABEL_COLORS.health
+            });
+          }
           if (t.dmg > 0) rows.push({ label: statLabel('Petal/Attribute/Damage', 'Damage:'), value: t.dmg, labelColor: STAT_LABEL_COLORS.damage });
           if (t.maxDamage > 0) {
             rows.push({ label: statLabel('UI/Petal/MaxDamageLabel', 'Max Damage:'), value: t.maxDamage, labelColor: STAT_LABEL_COLORS.damage });
@@ -101,6 +109,14 @@ Object.assign(UI, {
           //   Rotation Speed = Faster 给主角叠加的最大转速
           //   Attack Range   = Third Eye 在 reach 模式下额外伸出的距离
           const bonusColor = STAT_LABEL_COLORS.bonus;
+          // Extra Radius（Soil）：装备时主人物的半径加成；标签色与 Max Mob Rarity 同一支
+          if (t.extraRadius > 0) {
+            rows.push({
+              label: statLabel('UI/Petal/ExtraRadiusLabel', 'Extra Radius:'),
+              value: '+' + fmtNum(t.extraRadius),
+              labelColor: bonusColor
+            });
+          }
           if (t.rotSpeed > 0) {
             rows.push({
               label: statLabel('UI/Petal/RotSpeedLabel', 'Rotation Speed:'),

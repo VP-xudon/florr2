@@ -42,7 +42,7 @@ const MOB_POISON_COLOR = '#c58cff';
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
   'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile', 'wax',
-  'rice', 'corn', 'wing', 'ant_egg', 'clover', 'glass', 'basil'
+  'rice', 'corn', 'wing', 'ant_egg', 'clover', 'glass', 'basil', 'shovel', 'soil'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -83,7 +83,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 3645,  hp: 7290,  maxDamage: 72900 },
     super:     { dmg: 10935, hp: 21870, maxDamage: 218700 },
     eternal:   { dmg: 32805, hp: 65610, maxDamage: 656100 },
-    unique:    { dmg: 32805, hp: 65610, maxDamage: 656100 }
   },
   missile: {
     unusual:   { dmg: 105,    hp: 6 },
@@ -94,7 +93,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 25515,  hp: 1458 },
     super:     { dmg: 76545,  hp: 4374 },
     eternal:   { dmg: 229635, hp: 13122 },
-    unique:    { dmg: 229635, hp: 13122 }
   },
   // Pollen：伤害/血量逐级 ×3（common 38/5 与 wiki 的 unusual 114/15 自洽）
   pollen: {
@@ -117,7 +115,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 36450 },
     super:     { dmg: 0, hp: 109350 },
     eternal:   { dmg: 0, hp: 328050 },
-    unique:    { dmg: 0, hp: 328050 }
   },
   // Peas：4 个绿色小球实体（阵型型），数值表里是【单个小球】的 dmg/hp。
   //   对外显示走【合并口径】（statDisplay='total'）：卡面/悬浮框显示 4 个小球合计的一份数值，
@@ -132,7 +129,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 10935, hp: 3645 },
     super:     { dmg: 32805, hp: 10935 },
     eternal:   { dmg: 98415, hp: 32805 },
-    unique:    { dmg: 98415, hp: 32805 }
   },
   // Leaf：从 Unusual 起；持续给主人回血（heal 为每秒计数，连续回血，无反馈）。dmg/hp/heal 均为此花瓣值。
   leaf: {
@@ -144,7 +140,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 11664,  hp: 8748,  heal: 420.9 },
     super:     { dmg: 34992,  hp: 26244, heal: 729 },
     eternal:   { dmg: 104976, hp: 78732, heal: 1261.2 },
-    unique:    { dmg: 104976, hp: 78732, heal: 1261.2 }
   },
   // Faster：伤害/血量逐级 ×3（common 12/5 与 wiki 一致）；
   // rotSpeed = 装备后给主角【加】的最大转速（rad/s），可叠加，与装填状态无关。
@@ -158,7 +153,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 8748,  hp: 3645,  rotSpeed: 1.7 },
     super:     { dmg: 26244, hp: 10935, rotSpeed: 1.9 },
     eternal:   { dmg: 78732, hp: 32805, rotSpeed: 2.1 },
-    unique:    { dmg: 78732, hp: 32805, rotSpeed: 2.1 }
   },
   // Antennae（触角）：装备型饰品，无伤害/血量。
   //   sight = 【视野放大比例】（0.10 = 看得远 10%）：相机缩放系数 = 1 / (1 + sight)，
@@ -177,7 +171,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 0, sight: 1.857 },
     super:     { dmg: 0, hp: 0, sight: 4.0 },
     eternal:   { dmg: 0, hp: 0, sight: 9.0 },
-    unique:    { dmg: 0, hp: 0, sight: 9.0 }
   },
   // Web：从 Unusual 起才有；dmg/hp 逐级 ×3；radius = 落地后那张网的半径（px）
   web: {
@@ -189,7 +182,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 3645,  hp: 3645,  radius: 200 },
     super:     { dmg: 10935, hp: 10935, radius: 250 },
     eternal:   { dmg: 32805, hp: 32805, radius: 300 },
-    unique:    { dmg: 32805, hp: 32805, radius: 300 }
   },
   // Wax（蜡块）：没有伤害，只有血量 + 半径；加载好立刻在玩家旁边落一块蜡，
   // 之后它就"长"在原地挡住生物（有碰撞箱，但不吸引、不造成伤害）。
@@ -203,7 +195,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 729000,  radius: 210 },
     super:     { dmg: 0, hp: 2187000, radius: 240 },
     eternal:   { dmg: 0, hp: 6561000, radius: 270 },
-    unique:    { dmg: 0, hp: 6561000, radius: 270 }
   },
   // Rice：高攻速、低单发的普通攻击花瓣（reload 0.05s）
   rice: {
@@ -216,7 +207,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 2916,  hp: 729 },
     super:     { dmg: 8748,  hp: 2187 },
     eternal:   { dmg: 26244, hp: 6561 },
-    unique:    { dmg: 26244, hp: 6561 }
   },
   // Corn：高血量（200 起）、中速（reload 7s）
   corn: {
@@ -229,7 +219,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 5832,   hp: 145800 },
     super:     { dmg: 17496,  hp: 437400 },
     eternal:   { dmg: 52488,  hp: 1312200 },
-    unique:    { dmg: 52488,  hp: 1312200 }
   },
   // Wing：低血量、中速（reload 3s）。reach 模式下轨道距离按三角函数摆动（见 PETAL_TRAITS）。
   wing: {
@@ -242,7 +231,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 14580,  hp: 7290 },
     super:     { dmg: 43740,  hp: 21870 },
     eternal:   { dmg: 131220, hp: 65610 },
-    unique:    { dmg: 131220, hp: 65610 }
   },
   // Clover（幸运草）：伤害/血量逐级 ×3；luck = 装上后给【玩家附近环境幸运值】加的数值
   // （环境幸运值规则见 LUCK_BASE / luckRarityShift，基准 -0.6 = 60% 降一级）。
@@ -256,7 +244,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 7290,   hp: 7290,   luck: 0.7 },
     super:     { dmg: 21870,  hp: 21870,  luck: 0.8 },
     eternal:   { dmg: 65610,  hp: 65610,  luck: 0.9 },
-    unique:    { dmg: 65610,  hp: 65610,  luck: 0.9 }
   },
   // Glass（玻璃）：伤害逐级 ×3；【没有血量】（不会被接触打碎，所以 hp 恒为 0）；
   // interval = 两次伤害之间必须间隔的秒数 —— 与 reload（装填）是两回事。
@@ -270,10 +257,9 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 16038,   hp: 0, interval: 1 },
     super:     { dmg: 48114,   hp: 0, interval: 1 },
     eternal:   { dmg: 144342,  hp: 0, interval: 1 },
-    unique:    { dmg: 144342,  hp: 0, interval: 1 }
   },
   // Basil（罗勒）：增疗花瓣 —— 没有伤害、没有血量，【只有】 Healing Bonus（回血增幅）。
-  // 数值是百分比：Mythic 45% → Unique 60%；低档官方没给数值 = 不产出这几档的卡。
+  // 数值是百分比：Mythic 45% → Eternal 60%；低档官方没给数值 = 不产出这几档的卡。
   // 结算口径：在 PetalFX 的 ctx.heal 里【最后统一放大】—— 所有回血来源（Leaf 持续 /
   // Rose 一次性）先按自己的数值加起来，再乘 (1 + HealingBonus)，绝不各自提前乘。
   basil: {
@@ -281,7 +267,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 0, healBonus: 0.50 },
     super:     { dmg: 0, hp: 0, healBonus: 0.55 },
     eternal:   { dmg: 0, hp: 0, healBonus: 0.60 },
-    unique:    { dmg: 0, hp: 0, healBonus: 0.60 }
   },
   // Ant Egg：Health 恒为 1（不随稀有度成长，官方表就是每档 1）；
   // 不造成伤害（它自己不打人，靠内容物 Soldier Ant）。
@@ -295,7 +280,32 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 1 },
     super:     { dmg: 0, hp: 1 },
     eternal:   { dmg: 0, hp: 1 },
-    unique:    { dmg: 0, hp: 1 }
+  },
+  // Soil（泥土）：伤害 / 血量 / 花朵生命上限，三列都按官方表逐档给（10 -> 65610）。
+  // flowerHp = "Flower Health"：装备时给花朵加的生命上限（多件相加）。
+  soil: {
+    common:    { dmg: 10,    hp: 10,    flowerHp: 50 },
+    unusual:   { dmg: 30,    hp: 30,    flowerHp: 150 },
+    rare:      { dmg: 90,    hp: 90,    flowerHp: 450 },
+    epic:      { dmg: 270,   hp: 270,   flowerHp: 1350 },
+    legendary: { dmg: 810,   hp: 810,   flowerHp: 4050 },
+    mythic:    { dmg: 2430,  hp: 2430,  flowerHp: 12150 },
+    ultra:     { dmg: 7290,  hp: 7290,  flowerHp: 36450 },
+    super:     { dmg: 21870, hp: 21870, flowerHp: 109350 },
+    eternal:   { dmg: 65610, hp: 65610, flowerHp: 328050 },
+  },
+  // Shovel（铲子）：没有伤害/血量，只有【装填时间】—— 按稀有度递减（官方表）。
+  // 数值只影响 reload；"+2.0s"是遁地时长，写在 PETAL_TRAITS.shovel.burrow.dur。
+  shovel: {
+    common:    { dmg: 0, hp: 0, reload: 15.0 },
+    unusual:   { dmg: 0, hp: 0, reload: 13.1 },
+    rare:      { dmg: 0, hp: 0, reload: 11.8 },
+    epic:      { dmg: 0, hp: 0, reload: 10.1 },
+    legendary: { dmg: 0, hp: 0, reload: 8.5 },
+    mythic:    { dmg: 0, hp: 0, reload: 6.9 },
+    ultra:     { dmg: 0, hp: 0, reload: 5.2 },
+    super:     { dmg: 0, hp: 0, reload: 3.6 },
+    eternal:   { dmg: 0, hp: 0, reload: 2.0 },
   },
   // Third Eye：装备型饰品，没有伤害/血量，只有 attackRange（reach 模式下多伸出去的距离，px）
   third_eye: {
@@ -308,7 +318,6 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 0, attackRange: 140 },
     super:     { dmg: 0, hp: 0, attackRange: 190 },
     eternal:   { dmg: 0, hp: 0, attackRange: 240 },
-    unique:    { dmg: 0, hp: 0, attackRange: 240 }
   }
 };
 
@@ -318,14 +327,14 @@ const PETAL_RARITY_OVERRIDES = {
 //   pollen : common 1 / unusual 2 / rare 2 / epic 及以上 3（等同"一次放出 N 个 pollen 实体"）
 //   stinger: Mythic 3 个 / Ultra 及以上 5 个
 const PETAL_SUB_COUNT = {
-  light: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 5, ultra: 5, super: 6, eternal: 6, unique: 6 },
-  pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
-  stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5, unique: 5 },
+  light: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 5, ultra: 5, super: 6, eternal: 6 },
+  pollen: { common: 1, unusual: 2, rare: 2, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3 },
+  stinger: { mythic: 3, ultra: 5, super: 5, eternal: 5 },
   // Peas：所有稀有度均为 4 个实体（单个绿色小球才是实体，见阵型布局）
-  peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 },
-  orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3, unique: 3 },
+  peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4 },
+  orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3 },
   // Ant Egg：所有稀有度都是 4 个蛋实体 = 4 只 Soldier Ant 的内容物
-  ant_egg: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4, unique: 4 }
+  ant_egg: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4 }
 };
 
 const PETAL_FORMATION_ORBIT_SPOTS = { orange: 8 };
@@ -391,7 +400,7 @@ function petalDisplayStats(type, rarity) {
 // 注意：表里【没有】的稀有度必须被视为"吸引不到任何生物"，由 petal-effects.js 的判定保证。
 const HONEY_MAX_MOB_RARITY = {
   unusual: 'common', rare: 'unusual', epic: 'rare', legendary: 'epic', mythic: 'legendary',
-  ultra: 'mythic', super: 'ultra', eternal: 'super', unique: 'super'
+  ultra: 'mythic', super: 'ultra', eternal: 'super'
 };
 const MAX_MOB_RARITY_COLOR = '#d2eb34';
 
@@ -499,6 +508,27 @@ const PETAL_TRAITS = {
     reload: 2.5, reloadText: '2.5s', sticky: false,
     noPush: true, noKnockback: true, noHealth: true, overMobs: true
   },
+  // Soil（泥土）：普通攻击花瓣（伤害/血量按稀有度，见 PETAL_RARITY_OVERRIDES.soil），
+  // 装备即生效的属性（不依赖是否装填）：
+  //   · soil.radius = +10：主人物半径平滑增加（多件叠加）；
+  //   · flowerHp（按稀有度）= 花朵生命上限增加，现有生命等比放大（血条百分比不变）；
+  //   · soil.speedMul = 0.75：最大移速 ×0.75，多件【按乘积】叠加。
+  // 三个数值都走 PetalFX.bonus -> Player.recompute 求和/求积，行为层不判断 slug。
+  soil: {
+    reload: 2.5, reloadText: '2.5s', sticky: false,
+    soil: { radius: 10, speedMul: 0.75 }
+  },
+  // Shovel（铲子）：不参与任何实体碰撞/结算（与 Basil 同口径：noDamage + noHealth +
+  // noPush + noKnockback + overMobs），只有一个"使用"效果：
+  //   · 装填完成时若处于 detect 模式 -> 【立即遁地】burrow.dur 秒（见 Player._startBurrow）；
+  //   · 遁地期间所有花瓣强制禁用（实体下架 + 装填冻结），恢复后全部从 0 重新装填；
+  //   · 遁地者隐身（生物感知不到、也没有碰撞箱），只留一片灰色阴影。
+  // reload 按稀有度递减，在 PETAL_RARITY_OVERRIDES.shovel 里（15.0s -> 2.0s）。
+  shovel: {
+    reload: 15.0, reloadText: null, sticky: false,
+    noDamage: true, noPush: true, noKnockback: true, noHealth: true, overMobs: true,
+    burrow: { mode: 'detect', dur: 2.0 }
+  },
   // Ant Egg：60s 装填；不做伤害；一卡 4 个蛋实体（见 PETAL_SUB_COUNT）。
   // 单个蛋实体死亡 -> 原地召唤一只【玩家阵营】的同等级 Soldier Ant（0.25 尺寸/数值）；
   // 该蛋【不立刻重装填】，等召唤物死亡后才开始 60s 冷却。
@@ -518,10 +548,16 @@ const PETAL_TRAITS = {
     reload: 3.0, reloadText: '3.0s', sticky: false,
     reachWave: { spanK: 5.0, period: 2.0 },
     selfSpin: TAU * 2,
-    // 自转轴心 = 外边缘圆弧的圆心（SVG 源码拟合：R=41.40、相对误差 2.1%，
-    // 圆心 (33.74,23.24)；内容框中心 (55,55)、窗口宽 39.461）。
-    // 图形中心相对弧心 = (+0.5389, +0.8049)，绘制时按这个偏移画 -> 视觉上绕弧心扇动。
-    spinOrigin: { x: 0.5389, y: 0.8049 }
+    // 自转轴心 = 【半月形外边缘那条圆弧的圆心】（用户口径：圆弧要一直落在同一个固定圆上）。
+    // 8.svg 的凸包是一条完美圆弧：圆心 (55.000, 47.858)、R=21.4288、拟合残差 0.0009。
+    // 实体窗口 = 以内容包围盒中心 (56.698, 52.783) 为心、边长 43.7467 的正方形
+    //（含 stroke-width 4.286 的 2.143 外扩，见 cards.js 的 artSvg）。
+    // drawArt 的 ox/oy 是"图像平移 / size"，所以偏移 = (窗口中心 − 圆心) / 窗口边长：
+    //   (56.698 − 55.000) / 43.7467 = 0.03883
+    //   (52.783 − 47.858) / 43.7467 = 0.11259
+    // 旧值 (0.5389, 0.8049) 是拿"内容框宽度 39.461"当分母算的（还拟合错了圆心），
+    // 偏移被放大十几倍 -> 轴心被甩到形体之外，看起来就是"绕着碰撞圈外沿转"。
+    spinOrigin: { x: 0.03883, y: 0.11259 }
   }
 };
 
@@ -597,6 +633,10 @@ function buildPetalTypes() {
       overMobs: !!tr.overMobs,
       // 场地型（Web）：{ duration } —— 落地那张网的存在时长（半径按稀有度，在 rarityStats 里）
       web: tr.web || null,
+      // 遁地型（Shovel）：{ mode, dur } —— 该模式下载荷完成后立即遁地 dur 秒
+      burrow: tr.burrow || null,
+      // 装备加成型（Soil）：{ radius, speedMul } —— 装备即生效的额外半径与移速倍率
+      soil: tr.soil || null,
       // 自动落地（Wax）：加载好立刻脱轨，不需要 reach/detect
       autoDetach: !!tr.autoDetach,
       // 装备型（饰品）：不进入轨道、无装填，固定在人物身上（Third Eye）
@@ -674,7 +714,11 @@ function petalStatsFor(type, rarity) {
     // 回血增幅（Basil）：0 = 没有这一项（0.45 = 回血 +45%）
     healBonus: o.healBonus || 0,
     // 场地型花瓣（Web）：落地网的半径 + 存在时长（0 = 没有这一项）
-    radius: o.radius || 0, duration: o.duration || dur
+    radius: o.radius || 0, duration: o.duration || dur,
+    // 装填秒数（Shovel 等按稀有度递减的卡）：null = 该稀有度没单独声明
+    reload: (o.reload != null) ? o.reload : null,
+    // 花朵生命上限加成（Soil 的 Flower Health）：装备时加到主人物身上
+    flowerHp: o.flowerHp || 0
   });
   const rs = type.rarityStats && type.rarityStats[rarity];
   if (rs) return pick(rs);
@@ -693,10 +737,25 @@ function petalStatsFor(type, rarity) {
       interval: s.interval || 0,
       healBonus: s.healBonus || 0,
       radius: (s.radius || 0) * (mult.radius || 1),
-      duration: s.duration || dur
+      duration: s.duration || dur,
+      reload: null,
+      flowerHp: 0
     };
   }
   return pick(s);
+}
+
+// 某张卡【按稀有度】的装填秒数 —— 装填计时的唯一入口。
+// 取值顺序：rarityStats[rarity].reload（Shovel：15.0s -> 2.0s）> type.reload > stats.spd。
+// 客户端预测副本与服务端权威副本都读它，卡面/悬浮框展示也读它，永远不会出现
+// "客户端按 15s 装填、服务端按 2s 装填"这种两端各算一套的情况。
+function petalReloadOf(card) {
+  const t = card && card.type;
+  if (!t) return 0;
+  const st = petalStatsFor(t, card.rarity);
+  if (st && st.reload != null) return st.reload;
+  if (t.reload != null) return t.reload;
+  return Math.max(0, t.spd || 0);
 }
 
 // ---------------- 生物 ----------------
@@ -735,7 +794,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 14580000,   dmg: 7290,  armor: 583, exp: 227398 },
     super:     { hp: 437400000,  dmg: 21870, armor: 583, exp: 13608888 },
     eternal:   { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 },
-    unique:    { hp: 2624400000, dmg: 65610, armor: 583, exp: 13608888 }
   },
   // Baby Ant 幼蚁（id 5）：官方表整表写实（Passive，被打了才反击）。
   5: {
@@ -748,7 +806,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 3645000,   dmg: 7290,  armor: 583, exp: 345862 },
     super:     { hp: 109350000, dmg: 21870, armor: 583, exp: 19893553 },
     eternal:   { hp: 656100000, dmg: 65610, armor: 583, exp: 19893553 },
-    unique:    { hp: 656100000, dmg: 65610, armor: 583, exp: 19893553 }
   },
   // Worker Ant 工蚁（id 6）：官方表整表写实（Neutral，与中立瓢虫同一档阵营）：
   //   hp 60 → 1.57464e9，dmg 10 → 65610，armor 1/2/7/22/65/194/583(超以上固定)，
@@ -764,7 +821,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 21870000,   dmg: 2187,  armor: 583, exp: 106740 },
     super:     { hp: 656100000,  dmg: 6561,  armor: 583, exp: 6475563 },
     eternal:   { hp: 3936600000, dmg: 19683, armor: 583, exp: 6475563 },
-    unique:    { hp: 3936600000, dmg: 19683, armor: 583, exp: 6475563 }
   },
   // Queen Ant 蚁后（id 8）：AI 与兵蚁基本一致，额外会产卵（Rare+）。
   8: {
@@ -777,7 +833,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 36450000,   dmg: 7290,  armor: 583, exp: 285763 },
     super:     { hp: 1093500000, dmg: 21870, armor: 583, exp: 15878612 },
     eternal:   { hp: 6561000000, dmg: 65610, armor: 583, exp: 15878612 },
-    unique:    { hp: 6561000000, dmg: 65610, armor: 583, exp: 15878612 }
   },
   // Ant Hole 蚁穴（id 9）：障碍型生物（固定不动、无穷重量）。
   9: {
@@ -790,7 +845,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 109350000,    dmg: 10935, armor: 583, exp: 197906 },
     super:     { hp: 3280500000,   dmg: 32805, armor: 583, exp: 12142438 },
     eternal:   { hp: 19683000000,  dmg: 98415, armor: 583, exp: 12142438 },
-    unique:    { hp: 19683000000,  dmg: 98415, armor: 583, exp: 12142438 }
   },
   6: {
     common:    { hp: 60,        dmg: 10,    armor: 1,   exp: 1 },
@@ -802,7 +856,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 8748000,   dmg: 7290,  armor: 583, exp: 147030 },
     super:     { hp: 262440000, dmg: 21870, armor: 583, exp: 9345409 },
     eternal:   { hp: 1574640000, dmg: 65610, armor: 583, exp: 9345409 },
-    unique:    { hp: 1574640000, dmg: 65610, armor: 583, exp: 9345409 }
   },
   // Spider 蜘蛛（id 21）：hp/dmg/armor/exp 全部按官方最新口径整表覆盖；
   //   poison     = 命中玩家后施加的【中毒总量】（总量固定，按 poisonRate 均摊扣完）
@@ -817,7 +870,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 8748000,    dmg: 10935, armor: 583, exp: 219486,   poison: 29160,  poisonRate: 10935 },
     super:     { hp: 262440000,  dmg: 32805, armor: 583, exp: 13451796, poison: 87480,  poisonRate: 32805 },
     eternal:   { hp: 1574640000, dmg: 98415, armor: 583, exp: 13451796, poison: 262440, poisonRate: 98415 },
-    unique:    { hp: 1574640000, dmg: 98415, armor: 583, exp: 13451796, poison: 262440, poisonRate: 98415 }
   },
   4: {   // Bee 蜜蜂
     common:    { hp: 35,        dmg: 50,     armor: 1,   exp: 1 },
@@ -829,7 +881,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 5103000,   dmg: 36450,  armor: 583, exp: 213236 },
     super:     { hp: 153090000, dmg: 109350, armor: 583, exp: 13376259 },
     eternal:   { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 },
-    unique:    { hp: 918540000, dmg: 328050, armor: 583, exp: 13376259 }
   },
   27: {  // Bumble Bee 大黄蜂（被动、不会产生仇恨）
     common:    { hp: 25,        dmg: 20,     armor: 1,   exp: 1 },
@@ -841,7 +892,6 @@ const MOB_RARITY_OVERRIDES = {
     ultra:     { hp: 3645000,   dmg: 14580,  armor: 583, exp: 492262 },
     super:     { hp: 109350000, dmg: 43740,  armor: 583, exp: 24350794 },
     eternal:   { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 },
-    unique:    { hp: 656100000, dmg: 131220, armor: 583, exp: 24350794 }
   },
   // Hornet 黄蜂 —— 数值【严格取自官方表 scripts/mobs_real.json（id 11）】：
   //   官方只有两列：hp 与 dmg。HP 是 x3 档（50->150->450->...->328050），
@@ -859,7 +909,6 @@ const MOB_RARITY_OVERRIDES = {
     super:     { hp: 109350, dmg: 390625,  armor: 583, exp: 16000000, missileHp: 109350, missileDmg: 390625, missileDur: 9 },
     // 官方表"永恒"档是 0（未收录），按 HP x3 / 伤害 x5 的序列补齐。
     eternal:   { hp: 984150,  dmg: 9765625, armor: 583, exp: 16000000, missileHp: 984150,  missileDmg: 9765625, missileDur: 10 },
-    unique:    { hp: 328050, dmg: 1953125, armor: 583, exp: 16000000, missileHp: 328050, missileDmg: 1953125, missileDur: 10 }
   }
 };
 
@@ -886,7 +935,7 @@ const MOB_TRAITS = {
     sizeScale: 1.395 * 0.9 * 1.4, chaseMult: 0.95,
     shootCd: {
       common: 3.0, unusual: 2.714, rare: 2.429, epic: 2.143, legendary: 1.857,
-      mythic: 1.571, ultra: 1.286, super: 1.0, eternal: 0.8, unique: 0.8
+      mythic: 1.571, ultra: 1.286, super: 1.0, eternal: 0.8
     }
   },
   // Soldier Ant：敌对、直线追击（默认 wander AI 自带 chase/flee + 限速，与瓢虫同一套）。
@@ -896,15 +945,17 @@ const MOB_TRAITS = {
   // follow = 跟随型属性（召唤物）：离领队超过 start 就往回走，走到 stop 之内停下。
   // 两个阈值是【迟滞】，单阈值会在边界上来回抽搐；行为实现在 ai.js 的通用 wander 里，
   // 任何生物都能配，不是召唤物专属代码。
-  soldier_ant: { speed: 'player', follow: { start: 420, stop: 240 } },
+  // 蚂蚁家族【整体小一档】：sizeTier = -1 表示"按稀有度表的下一档"取尺寸
+  //（× 1/MOB_DIAM_STEP ≈ 0.708），绘制与碰撞同步，各族之间的相对大小不变。
+  soldier_ant: { speed: 'player', follow: { start: 420, stop: 240 }, sizeTier: -1 },
   // 工蚁：与人蚁同一套移速口径（用户要求"速度属性和 Soldier Ant 相同"）；
   // 阵营走 registry（Neutral）= 中立，被打了才反击 —— 不要在这里加仇恨/追击字段。
-  worker_ant: { speed: 'player' },
+  worker_ant: { speed: 'player', sizeTier: -1 },
   // 幼蚁：Passive（不会主动生成仇恨），移速走 registry 默认值。
   // 体型校正：主体球（唯一体节）的直径要对齐同级 Worker 的【第一体节（较大的那个球）】。
   // 素材内球径（各自 viewBox 归一化宽度）：Baby 0.8678 / Worker 大球 0.7346，
   // 所以统一缩放取 0.7346 / 0.8678 ≈ 0.8465（绘制与碰撞同一尺寸，见 Mob 构造）。
-  baby_ant: { sizeScale: 0.8465 },
+  baby_ant: { sizeScale: 0.8465, sizeTier: -1 },
   // Ant Egg 蚁卵（生物）：障碍型 —— 速度 0（Mob 构造据此判定 obstacle）、
   // 无穷重量（immovable）：不被推挤、不吃击退，位置固定。
   ant_egg: { speed: 0, chaseMult: 0, immovable: true },
@@ -912,6 +963,11 @@ const MOB_TRAITS = {
   // 产卵参数是【属性】而不是第二套 AI（服务端消费 queenEggReq）。
   queen_ant: {
     speed: 'player',
+    sizeTier: -1,
+    // 体型对齐：以【头部第一节圆】为标准，和兵蚁同级头一样大。
+    // 素材里 蚁后头径 40.83 / viewBox 84.361 = 0.4840，兵蚁头径 29.17 / 44.027 = 0.6626，
+    // 所以等比放大 0.6626 / 0.4840 ≈ 1.369（否则整只蚁后看起来比兵蚁还小）。
+    sizeScale: 1.369,
     queen: { minRarity: 'rare', max: 7, eggCd: 1.5, hatch: 1.0 }
   },
   // Ant Hole 蚁穴：障碍型（速度 0 + 无穷重量），原地不动。
@@ -923,6 +979,10 @@ const MOB_TRAITS = {
   ant_hole: {
     speed: 0,
     immovable: true,
+    // spawnMin：结构型生成物【整张地图】的保底数量（服务端 _ensureStructureSpawns 消费）。
+    // 蚁穴本身按权重参与 garden 组的轮盘（见 MOB_GROUPS），全图期望 7~8 个；
+    // 这里只兜住"一整局一个都没随机到"的极小概率，不是"每个生成区保底一只"。
+    spawnMin: 1,
     passWith: ['baby_ant', 'worker_ant', 'soldier_ant', 'queen_ant', 'ant_egg'],
     hole: {
       step: 0.07,
@@ -931,7 +991,21 @@ const MOB_TRAITS = {
       pool: { baby_ant: 5, worker_ant: 8, soldier_ant: 26, queen_ant: 1 }
     }
   },
-  centipede: { segmented: true, sizeScale: 1.4 },
+  // 蜈蚣：节数按稀有度【递减】—— 越高等级个体越短（用户口径）。
+  // rare 及以下【不变】（common 11.5 / unusual 11 / rare 9.5 平均）；
+  // 高等级整体上浮约 30%（super / eternal 平均 4 -> 5），中间按同一斜率平滑过渡，
+  // 仍然保持"越高越短"的单调性（epic 8.5 / legendary 7.5 / mythic 7 / ultra 6）。
+  // 理由：巨型体节在狭窄地形里极易卡墙，而且长链的尾巴会被墙反复截断；
+  // 高等级本来碰撞箱就大，但 3~5 节又短得不像蜈蚣，所以高段整体加长一档。
+  // 自然生成的超长个体（45~60 节）仍然只有 common 才有 0.3% 概率（见 _spawnChain）。
+  centipede: {
+    segmented: true, sizeScale: 1.4,
+    segCount: {
+      common: [8, 15], unusual: [8, 14], rare: [7, 12], epic: [7, 10],
+      legendary: [6, 9], mythic: [6, 8], ultra: [5, 7], super: [4, 6],
+      eternal: [4, 6]
+    }
+  },
   // 蜘蛛：aggressive 敌对，仇恨半径 500（比通用 1200 小，贴近了才会扑上来）。
   // 追击 1.1× 玩家最高速、游荡 = 追击 × 0.9 —— 这两个由 ai.js 的 spider 定义写死（见 init）。
   //   gait = 有"换帧步态"（八条腿随行进摆动，见 render/spider-gait.js）
@@ -960,6 +1034,18 @@ const MOB_SPAWN_LINES = {
   centipede: 'Chat/Sys/Spawn/centipede'
 };
 
+// 物种 slug → 官方语言包里的词条键。
+// 官方 i18n 用的是【ant_ 前缀】的旧写法（ant_worker / ant_baby / ant_soldier / ant_queen），
+// 而 registry 的英文名是 "Worker Ant" → slug = worker_ant。不映射的话
+// Mobs/worker_ant/Name 查不到 → 回落英文名，中文环境里整族蚂蚁都是英文且没有简介。
+const MOB_I18N_ALIASES = {
+  worker_ant: 'ant_worker',
+  baby_ant: 'ant_baby',
+  soldier_ant: 'ant_soldier',
+  queen_ant: 'ant_queen'
+};
+function mobI18nKey(slug) { return MOB_I18N_ALIASES[slug] || slug; }
+
 function buildMobTypes() {
   const reg = (window.REGISTRY && window.REGISTRY.mobs) ? window.REGISTRY.mobs : [];
   const out = [];
@@ -974,7 +1060,7 @@ function buildMobTypes() {
     if (m.rarities) {
       rarityStats = {};
       for (const rk in m.rarities) {
-        if (rk !== 'unique' && RARITY_ORDER.indexOf(rk) < 0) continue;   // Unique 可作为扩展档登记，但不进入当前档位序列
+        if (RARITY_ORDER.indexOf(rk) < 0) continue;
         const v = m.rarities[rk] || {};
         rarityStats[rk] = { hp: v.hp || 0, dmg: v.dmg || 0, exp: v.exp || 0, armor: v.armor, hostility: MOB_HOSTILITY[v.type] };
       }
@@ -984,7 +1070,7 @@ function buildMobTypes() {
     if (ov) {
       rarityStats = rarityStats || {};
       for (const rk in ov) {
-        if (rk !== 'unique' && RARITY_ORDER.indexOf(rk) < 0) continue;
+        if (RARITY_ORDER.indexOf(rk) < 0) continue;
         rarityStats[rk] = Object.assign({}, rarityStats[rk] || {}, ov[rk]);
       }
     }
@@ -993,7 +1079,9 @@ function buildMobTypes() {
     const slug = (m.name || '').toLowerCase().replace(/ /g, '_');
     const mt = MOB_TRAITS[slug] || {};
     const t = {
-      id, slug, name: I18N.t('Mobs/' + slug + '/Name', m.name), zh: m.zh || '', svg: id,
+      id, slug,
+      // 词条键走别名表（蚂蚁家族的官方键是 ant_*），否则中文名/简介全会缺失
+      name: I18N.t('Mobs/' + mobI18nKey(slug) + '/Name', m.name), zh: m.zh || '', svg: id,
       // 速度：优先用 traits 显式声明，否则用 registry。
       // traits 里 speed === 'player' 是【标记】，表示"与玩家基础移速相同"；
       // 在 Mob 构造时才解析成 PLAYER_BASE_SPEED —— data.js 的执行早于 constants.js，
@@ -1013,13 +1101,16 @@ function buildMobTypes() {
       ai: m.ai || null,                  // 官方 AI 开关（aggro/chase/flee/retaliate…）
       // ---- 行为/体型字段：全部来自 MOB_TRAITS，行为层只读字段、不判断 slug ----
       segmented: !!mt.segmented,          // 多节生物：一次生成整条
+      segCount: mt.segCount || null,      // 多节生物：稀有度 -> [最少节, 最多节]（越高越短）
       sizeScale: mt.sizeScale || 1,       // 等比体型倍数（绘制与碰撞同尺寸）
+      sizeTier: mt.sizeTier || 0,         // 体型档位偏移（±1 档 = 稀有度表整档，见 Mob 构造）
       sPath: !!mt.sPath,                  // S 型游荡
       sightR: mt.sightR || null,          // 视野/仇恨半径（null = 通用 MOB_SIGHT_R）
       immovable: !!mt.immovable,          // 无穷重量：不被推挤/击退（障碍型）
       queen: mt.queen || null,            // 产卵参数（蚁后）：{ minRarity, max, eggCd, hatch }
       passWith: mt.passWith || null,      // 可穿透的物种 slug（蚁穴：蚂蚁家族可在其上行走）
       hole: mt.hole || null,              // 蚁穴产卵参数：{ step, queenAt, init, pool }
+      spawnMin: mt.spawnMin || 0,         // 结构型生成物：生成区里列出它时至少保底几只
       follow: mt.follow || null,          // 跟随型（召唤物）：{ start, stop } 两个迟滞阀值
       gait: !!mt.gait,                    // 有换帧步态（蜘蛛：八条腿摆动）
       immuneStatus: mt.immuneStatus || null,   // 状态免疫（{ web: true } = 不受蛛网减速）
@@ -1056,7 +1147,10 @@ const MOB_BY_ID = _mobs.byId;
 // 否则服务端生成了、快照也发了，客户端却因为找不到 typeId 直接 continue -> 永远看不见。
 const POLLEN_SHOT_ID = 9901;
 const POLLEN_SHOT_TYPE = {
-  id: POLLEN_SHOT_ID, slug: 'pollen_shot', name: 'Pollen',
+  id: POLLEN_SHOT_ID, slug: 'pollen_shot',
+  // 名字同样走 i18n（Mobs/pollen_shot/*，见 js/i18n-extra.js）：
+  // 它是「生物实体」而不是花瓣，不能借 Petals/pollen 的词条。
+  name: I18N.t('Mobs/pollen_shot/Name', 'Pollen'),
   svg: 'pollen', artSvg: 'pollen', type: 'Hostile',
   tier: 1, hp: 1, dmg: 0, armor: 0, exp: 0, speed: 0,
   sizeScale: 0.5, hideHpBar: true,
@@ -1078,7 +1172,6 @@ const MOB_DROP_TABLE = {
   ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
   super:     [['mythic', 0.357], ['ultra', 0.643]],
   eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-  unique:    [['mythic', 0.357], ['ultra', 0.643]]
 };
 
 // 每种生物掉哪些花瓣（顺序 = 悬浮框里的展示顺序）。
@@ -1099,6 +1192,9 @@ const MOB_DROP_ITEMS = {
   ant_egg: ['ant_egg'],
   // Queen Ant 蚁后：Basil + Ant Egg（两张专属表见 MOB_DROP_TABLE_MOB）
   queen_ant: ['basil', 'ant_egg'],
+  // Ant Hole 蚁穴：Soil + Shovel（两张专属表见 MOB_DROP_TABLE_MOB.ant_hole；
+  // 顺序 = 悬浮框展示顺序 = 掷骰顺序）
+  ant_hole: ['soil', 'shovel'],
   centipede: ['leaf', 'peas'],                 // Centipede / 蜈蚣（正常掉落 Leaf + Peas）
   // Spider / 蜘蛛：Faster + Web + Third Eye（Magic Eye 是 Third Eye 的魔法变种，仅登记不显示）
   spider: ['faster', 'web', 'third_eye', 'magic_eye'],
@@ -1123,7 +1219,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
   glass: {
     common:    [['common', 0.638], ['unusual', 0.194]],
@@ -1135,7 +1230,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.248], ['mythic', 0.748], ['ultra', 0.005]],
     super:     [['mythic', 0.290], ['ultra', 0.710]],
     eternal:   [['mythic', 0.290], ['ultra', 0.710]],
-    unique:    [['mythic', 0.290], ['ultra', 0.710]]
   },
   // Missile / Magic Missile / Orange：三张相同的 Hornet 专属表，最低档为 Unusual，无 Common 档。
   missile: {
@@ -1148,7 +1242,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
   orange: {
     common:    [['unusual', 0.164]],
@@ -1160,7 +1253,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
   magic_missile: {
     common:    [['unusual', 0.164]],
@@ -1172,7 +1264,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
   // Antennae：从 Rare 档起才有（common/unusual 档不掉），分布与 Missile 不同
   antennae: {
@@ -1183,7 +1274,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.628], ['mythic', 0.371], ['ultra', 0.002]],
     super:     [['mythic', 0.662], ['ultra', 0.338]],
     eternal:   [['mythic', 0.662], ['ultra', 0.338]],
-    unique:    [['mythic', 0.662], ['ultra', 0.338]]
   },
   pollen: {
     common:    [['unusual', 0.069]],
@@ -1195,7 +1285,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.628], ['mythic', 0.371], ['ultra', 0.002]],
     super:     [['mythic', 0.662], ['ultra', 0.338]],
     eternal:   [['mythic', 0.662], ['ultra', 0.338]],
-    unique:    [['mythic', 0.662], ['ultra', 0.338]]
   },
   honey: {
     rare:      [['rare', 0.070]],
@@ -1205,7 +1294,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.628], ['mythic', 0.371], ['ultra', 0.002]],
     super:     [['mythic', 0.662], ['ultra', 0.338]],
     eternal:   [['mythic', 0.662], ['ultra', 0.338]],
-    unique:    [['mythic', 0.662], ['ultra', 0.338]]
   },
   // Peas / Blueberries：掉落稀有度分布（Peas 掉落用；Blueberries 是 Peas 的魔法变种隐藏版，分布同 Peas）。
   // 注意：每档各列【声明宽度之和 < 1】，意味着有一定概率"这一档不掉 Peas"。
@@ -1219,7 +1307,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
     super:     [['mythic', 0.814], ['ultra', 0.186]],
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
-    unique:    [['mythic', 0.814], ['ultra', 0.186]]
   },
   // Blueberries：Peas 的魔法变种（隐藏），分布与 Peas 完全一致（见下方 DROP_HIDDEN_SLUGS）
   blueberries: {
@@ -1232,7 +1319,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
     super:     [['mythic', 0.814], ['ultra', 0.186]],
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
-    unique:    [['mythic', 0.814], ['ultra', 0.186]]
   },
   // Leaf / Magic Leaf：掉落分布（列从 Unusual 起，无 Common）。Magic Leaf 是 Leaf 的魔法变种隐藏版。
   leaf: {
@@ -1245,7 +1331,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
     super:     [['mythic', 0.814], ['ultra', 0.186]],
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
-    unique:    [['mythic', 0.814], ['ultra', 0.186]]
   },
   // Magic Leaf：Leaf 的魔法变种（隐藏），分布与 Leaf 完全一致
   magic_leaf: {
@@ -1258,7 +1343,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.792], ['mythic', 0.207], ['ultra', 0.001]],
     super:     [['mythic', 0.814], ['ultra', 0.186]],
     eternal:   [['mythic', 0.814], ['ultra', 0.186]],
-    unique:    [['mythic', 0.814], ['ultra', 0.186]]
   },
   // Web：蜘蛛掉落，比 Faster【低一档】—— 没有 Common 档（Wiki 表的 Common 行只有 16.4% Unusual），
   // 其余各档与 Faster 相同。之前误用通用表（带 Common 档）→ 会出现"Common Web"，与表矛盾。
@@ -1272,7 +1356,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   },
   // Honey / Pollen / Wax：Bumble Bee 的三张专属表（与通用表不同，逐格录入官方表）。
   honey: {
@@ -1283,7 +1366,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.394], ['mythic', 0.603], ['ultra', 0.003]],
     super:     [['mythic', 0.438], ['ultra', 0.562]],
     eternal:   [['mythic', 0.438], ['ultra', 0.562]],
-    unique:    [['mythic', 0.438], ['ultra', 0.562]]
   },
   pollen: {
     common:    [['unusual', 0.472]],
@@ -1295,7 +1377,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.019], ['mythic', 0.968], ['ultra', 0.013]],
     super:     [['mythic', 0.030], ['ultra', 0.970]],
     eternal:   [['mythic', 0.030], ['ultra', 0.970]],
-    unique:    [['mythic', 0.030], ['ultra', 0.970]]
   },
   wax: {
     rare:      [['rare', 0.328]],
@@ -1305,7 +1386,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.077], ['mythic', 0.914], ['ultra', 0.008]],
     super:     [['mythic', 0.104], ['ultra', 0.896]],
     eternal:   [['mythic', 0.104], ['ultra', 0.896]],
-    unique:    [['mythic', 0.104], ['ultra', 0.896]]
   },
   // Third Eye / Magic Eye：蜘蛛专属，Legendary 及以下一档都不掉（Wiki 表只有 Mythic 起）。
   //   Mythic 0.03% / Ultra 4.5% Mythic + 0.02% Ultra / Super+ 96% Mythic + 4% Ultra
@@ -1314,7 +1394,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:   [['mythic', 0.045], ['ultra', 0.0002]],
     super:   [['mythic', 0.96], ['ultra', 0.04]],
     eternal: [['mythic', 0.96], ['ultra', 0.04]],
-    unique:  [['mythic', 0.96], ['ultra', 0.04]]
   },
   // Magic Eye：Third Eye 的魔法变种（隐藏），分布与 Third Eye 完全一致
   magic_eye: {
@@ -1322,7 +1401,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:   [['mythic', 0.045], ['ultra', 0.0002]],
     super:   [['mythic', 0.96], ['ultra', 0.04]],
     eternal: [['mythic', 0.96], ['ultra', 0.04]],
-    unique:  [['mythic', 0.96], ['ultra', 0.04]]
   },
   // Magic Missile：Missile 的魔法变种隐藏版，掉率完全相同。
   magic_missile: {
@@ -1335,7 +1413,6 @@ const MOB_DROP_TABLE_ITEM = {
     ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
     super:     [['mythic', 0.357], ['ultra', 0.643]],
     eternal:   [['mythic', 0.357], ['ultra', 0.643]],
-    unique:    [['mythic', 0.357], ['ultra', 0.643]]
   }
 };
 
@@ -1357,7 +1434,6 @@ const MOB_DROP_TABLE_MOB = {
       ultra:     [['legendary', 0.498], ['mythic', 0.500], ['ultra', 0.002]],
       super:     [['mythic', 0.539], ['ultra', 0.461]],
       eternal:   [['mythic', 0.539], ['ultra', 0.461]],
-      unique:    [['mythic', 0.539], ['ultra', 0.461]]
     };
     return {
       worker_ant: {
@@ -1374,7 +1450,6 @@ const MOB_DROP_TABLE_MOB = {
           ultra:     [['legendary', 0.498], ['mythic', 0.500], ['ultra', 0.002]],
           super:     [['mythic', 0.539], ['ultra', 0.461]],
           eternal:   [['mythic', 0.539], ['ultra', 0.461]],
-          unique:    [['mythic', 0.539], ['ultra', 0.461]]
         }
       },
       queen_ant: {
@@ -1384,7 +1459,6 @@ const MOB_DROP_TABLE_MOB = {
           ultra:   [['mythic', 0.748], ['ultra', 0.005]],
           super:   [['mythic', 0.29], ['ultra', 0.71]],
           eternal: [['mythic', 0.29], ['ultra', 0.71]],
-          unique:  [['mythic', 0.29], ['ultra', 0.71]]
         },
         // Ant Egg：官方 Wiki 的 Ant Egg 页签
         ant_egg: {
@@ -1397,7 +1471,32 @@ const MOB_DROP_TABLE_MOB = {
           ultra:     [['legendary', 0.098], ['mythic', 0.895], ['ultra', 0.008]],
           super:     [['mythic', 0.127], ['ultra', 0.873]],
           eternal:   [['mythic', 0.127], ['ultra', 0.873]],
-          unique:    [['mythic', 0.127], ['ultra', 0.873]]
+        }
+      },
+      // 蚁穴（Ant Hole）：Soil / Shovel 两张专属表（官方 Wiki 的两个页签）。
+      // 空着的格子 = 该档不掉（与其它专属表同口径：有专属表就不再回落通用表）。
+      ant_hole: {
+        soil: {
+          common:    [['common', 0.598], ['unusual', 0.164]],
+          unusual:   [['common', 0.485], ['unusual', 0.512]],
+          rare:      [['common', 0.001], ['unusual', 0.834], ['rare', 0.165]],
+          epic:      [['unusual', 0.067], ['rare', 0.810], ['epic', 0.123]],
+          legendary: [['rare', 0.072], ['epic', 0.877], ['legendary', 0.050]],
+          mythic:    [['epic', 0.075], ['legendary', 0.917], ['mythic', 0.008]],
+          ultra:     [['legendary', 0.312], ['mythic', 0.684], ['ultra', 0.004]],
+          super:     [['mythic', 0.357], ['ultra', 0.643]],
+          eternal:   [['mythic', 0.357], ['ultra', 0.643]],
+        },
+        shovel: {
+          common:    [['common', 0.539], ['unusual', 0.133]],
+          unusual:   [['common', 0.553], ['unusual', 0.436]],
+          rare:      [['common', 0.003], ['unusual', 0.862], ['rare', 0.135]],
+          epic:      [['unusual', 0.114], ['rare', 0.786], ['epic', 0.100]],
+          legendary: [['rare', 0.122], ['epic', 0.837], ['legendary', 0.041]],
+          mythic:    [['epic', 0.126], ['legendary', 0.867], ['mythic', 0.006]],
+          ultra:     [['legendary', 0.394], ['mythic', 0.603], ['ultra', 0.003]],
+          super:     [['mythic', 0.438], ['ultra', 0.562]],
+          eternal:   [['mythic', 0.438], ['ultra', 0.562]],
         }
       },
       baby_ant: {
@@ -1414,7 +1513,6 @@ const MOB_DROP_TABLE_MOB = {
           ultra:     [['legendary', 0.098], ['mythic', 0.895], ['ultra', 0.008]],
           super:     [['mythic', 0.127], ['ultra', 0.873]],
           eternal:   [['mythic', 0.127], ['ultra', 0.873]],
-          unique:    [['mythic', 0.127], ['ultra', 0.873]]
         }
       }
     };
@@ -1639,8 +1737,13 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 地图文件内并不包含 —— 所以这里按公开组成登记一张组表。
 // 只登记"已完整实现（渲染/掉落/AI）"的物种；以后加物种只需往数组里加 slug。
 // 组内成员写成 [slug, 组内权重]；权重只在组内比较，外层 ":w" 会再乘上来。
+// 用户口径：Ant Hole 是【全图物种】—— 它和瓢虫/蜜蜂一样参与 garden 组的轮盘，
+// 不是蚂蚁区专属。所以它必须在组表里，而不是只靠某一个生成区里那一条 ant_hole:0.05。
+// 权重 0.05 = 与地图里那条专属权重同口径：全图 garden 区合计约 1500 只时，
+// 期望 7~8 个蚁穴（各区 0.5% 概率），分散而不是扎堆。
 const MOB_GROUPS = {
-  garden: [['ladybug', 3], ['bee', 2], ['bumble_bee', 1], ['spider', 2], ['centipede', 1], ['hornet', 1]]
+  garden: [['ladybug', 3], ['bee', 2], ['bumble_bee', 1], ['spider', 2], ['centipede', 1], ['hornet', 1],
+           ['ant_hole', 0.05]]
 };
 
 // 兜底物种（生成区解析不出任何有效物种时使用）
@@ -1695,9 +1798,9 @@ function applyLuckToRarity(rarity, luck) {
 //   · "名字:权重" -> 权重（省略按 1）
 //   · 纯组名 -> 展开 MOB_GROUPS
 // 返回 [{ type, weight }]（只保留 registry 里真实存在的生物）
-// 只有"行为已完整实现"的物种才参与地图生成。rock / ant_hole / ant_soldier 等
-// 虽然 registry 里有数据，但没有 AI / 掉落 / 战斗行为，生成出来只是站桩的假怪，
-// 因此生成表里出现也一律跳过（用 /summon 仍可手动召唤来调试）。
+// 只有"行为已完整实现"的物种才参与地图生成。garden.tmj 里目前只剩 rock / dandelion
+// 不在表里（它们是植物/障碍，本来就不是生物），会被跳过并在控制台提示一次；
+// 蚂蚁全家（ant_hole / queen_ant / ant_egg / soldier_ant / worker_ant / baby_ant）都已收录。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
 const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant', 'ant_egg', 'queen_ant', 'ant_hole']);
 
@@ -1711,10 +1814,21 @@ const MOB_SPAWN_ALIASES = {
   ant_queen: 'queen_ant'     // i18n 与旧写法都用 ant_queen（英文名 Queen Ant 的 slug 是 queen_ant）
 };
 
+// 未实装物种的提示（每个 slug 只提示一次）：地图表里有、场上却没有，
+// 过去只能靠人猜 —— 现在打开控制台就能看到到底跳过了什么。
+const _spawnSkipWarned = new Set();
+
 function parseSpawnMobs(str) {
   const out = [];
   const push = (slug, w) => {
-    if (!SPAWNABLE_MOB_SLUGS.has(slug)) return;   // 未实现的物种：不生成
+    if (!(w > 0)) return;                 // 显式写 0 = 关掉这个物种（组内也一样）
+    if (!SPAWNABLE_MOB_SLUGS.has(slug)) {
+      if (!_spawnSkipWarned.has(slug)) {
+        _spawnSkipWarned.add(slug);
+        console.info('[spawn] 生成表里的 "' + slug + '" 尚未实装（或不是生物），已跳过');
+      }
+      return;
+    }
     const t = MOB_TYPES.find((m) => m.slug === slug);
     if (!t) return;                      // 未收录的物种直接跳过，不臆造
     out.push({ type: t, weight: w });
@@ -1725,7 +1839,13 @@ function parseSpawnMobs(str) {
     const ci = line.indexOf(':');
     const raw = (ci >= 0 ? line.slice(0, ci) : line).trim().toLowerCase().replace(/ /g, '_');
     const slug = MOB_SPAWN_ALIASES[raw] || raw;
-    const w = ci >= 0 ? (parseFloat(line.slice(ci + 1)) || 1) : 1;
+    // 权重：省略 = 1；显式写数字就用它（0 表示禁用）。
+    // 旧写法 `parseFloat(x) || 1` 会把 :0 吞成 1 —— 写 0 反而变成正权重。
+    let w = 1;
+    if (ci >= 0) {
+      const v = parseFloat(line.slice(ci + 1));
+      w = Number.isFinite(v) ? Math.max(0, v) : 1;
+    }
     if (MOB_GROUPS[slug]) {
       for (const g of MOB_GROUPS[slug]) push(g[0], w * (g[1] || 1));
       continue;

@@ -180,10 +180,13 @@ const UI = {
     root.innerHTML = `
       <div id="hud"></div>
 
-      <!-- 左下角图标列：背包（真实矢量化按钮图） -->
+      <!-- 左下角图标列：背包 + 合成（合成在背包下方；列从底部向上堆叠，背包因此整体上移一格） -->
       <div id="dockBtns">
         <button id="bagBtn" class="dockbtn">
           <img src="assets/ui/btn-bag.svg?v=2" alt="">
+        </button>
+        <button id="craftBtn" class="dockbtn">
+          <img src="assets/ui/btn-party.svg?v=2" alt="">
         </button>
       </div>
       <!-- 左上角按钮组：设置（最左）+ 生物图鉴（排在第二、整体右移） -->
@@ -227,6 +230,27 @@ const UI = {
         </div>
         <div class="win-body">
           <div id="invGallery" class="gallery"></div>
+        </div>
+      </div>
+
+      <!-- 合成窗口：上半 = 5 个材料槽 + 合成按钮，下半 = 背包卡按种类排列（与图鉴同一套行样式） -->
+      <div id="craft" class="window hidden">
+        <div class="win-head">
+          <span class="win-title">${I18N.t('UI/Craft/Title', 'Craft')}</span>
+          <button class="win-close" data-close="craft">
+            <img src="assets/ui/btn-close.svg?v=2" alt="">
+          </button>
+        </div>
+        <div class="win-body craft-body">
+          <div class="craft-top">
+            <div class="craft-stage" id="craftStage"></div>
+            <div class="craft-side">
+              <button id="craftGo" class="craft-btn" disabled></button>
+              <div id="craftChance" class="craft-chance"></div>
+            </div>
+          </div>
+          <div class="craft-note" id="craftNote"></div>
+          <div class="craft-list" id="craftList"></div>
         </div>
       </div>
 
@@ -300,7 +324,10 @@ const UI = {
     const $ = (id) => root.querySelector('#' + id);
     this.refs = {
       bagBtn: $('bagBtn'), dexBtn: $('dexBtn'), setBtn: $('setBtn'),
+      craftBtn: $('craftBtn'),
       inv: $('inventory'), invGallery: $('invGallery'),
+      craft: $('craft'), craftStage: $('craftStage'), craftGo: $('craftGo'),
+      craftChance: $('craftChance'), craftNote: $('craftNote'), craftList: $('craftList'),
       dex: $('dex'), dexBody: $('dexBody'), dexCount: $('dexCount'),
       settings: $('settings'),
       setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
@@ -314,13 +341,15 @@ const UI = {
     this._initChatKeys();
 
     this.refs.bagBtn.addEventListener('click', () => { if (this.onBagToggle) this.onBagToggle(); });
+    this.refs.craftBtn.addEventListener('click', () => { if (this.onCraftToggle) this.onCraftToggle(); });
     this.refs.dexBtn.addEventListener('click', () => { if (this.onDexToggle) this.onDexToggle(); });
     this.refs.setBtn.addEventListener('click', () => { if (this.onSettingsToggle) this.onSettingsToggle(); });
     // 硬窗口风格：左下角按钮不接收键盘焦点，避免按空格（reach）误触发其默认 click /
     // 回车等，导致非主动的焦点交互（如空格开关 Mob Gallery）。鼠标点击不受影响。
-    [this.refs.bagBtn, this.refs.dexBtn, this.refs.setBtn].forEach(b => { if (b) b.tabIndex = -1; });
+    [this.refs.bagBtn, this.refs.craftBtn, this.refs.dexBtn, this.refs.setBtn].forEach(b => { if (b) b.tabIndex = -1; });
     // 按钮悬浮提示：使用与卡牌同款式的 canvas 悬浮框，不用原生 title
     this._bindSimpleTip(this.refs.bagBtn, () => I18N.t('UI/Inventory/Title', 'Inventory'));
+    this._bindSimpleTip(this.refs.craftBtn, () => I18N.t('UI/Craft/Title', 'Craft'));
     this._bindSimpleTip(this.refs.dexBtn, () => I18N.t('UI/MobGallery/Title', 'Mob Gallery'));
     this._bindSimpleTip(this.refs.setBtn, () => I18N.t('UI/Settings/Title', 'Settings'));
     this._initSettings();
@@ -330,6 +359,7 @@ const UI = {
       b.addEventListener('click', () => {
         const t = b.dataset.close;
         if (t === 'bag') { if (this.onBagToggle) this.onBagToggle(); }
+        else if (t === 'craft') { if (this.onCraftToggle) this.onCraftToggle(); }
         else if (t === 'dex') { if (this.onDexToggle) this.onDexToggle(); }
         else if (t === 'settings') { if (this.onSettingsToggle) this.onSettingsToggle(); }
       });
@@ -377,6 +407,15 @@ const UI = {
   isDexVisible() { return !this.refs.dex.classList.contains('hidden'); },
   toggleDex() { if (this.onDexToggle) this.onDexToggle(); },
 
+  // ---------- 合成窗口 ----------
+  setCraftVisible(v) {
+    this.refs.craft.classList.toggle('hidden', !v);
+    if (!v) { this._hideTip(); return; }
+    this.renderCraft();
+  },
+  isCraftVisible() { return !this.refs.craft.classList.contains('hidden'); },
+  toggleCraft() { if (this.onCraftToggle) this.onCraftToggle(); },
+
   // ---------- 设置窗口 ----------
   setSettingsVisible(v) { this.refs.settings.classList.toggle('hidden', !v); if (!v) this._hideTip(); },
   isSettingsVisible() { return !this.refs.settings.classList.contains('hidden'); },
@@ -385,7 +424,7 @@ const UI = {
   // 是否有【任意窗口】打开。所有"窗口打开时应当暂停"的逻辑都走这一个入口，
   // 以后新增窗口只要在这里加一项即可，不会出现"某个窗口忘了判断"的情况。
   isAnyWindowOpen() {
-    return this.isBagVisible() || this.isDexVisible() || this.isSettingsVisible();
+    return this.isBagVisible() || this.isCraftVisible() || this.isDexVisible() || this.isSettingsVisible();
   },
 
   // 分栏切换 + 三个设置项（写 Cookie；移动方式 / 调试模式当场生效，语言需重启）
@@ -736,6 +775,8 @@ const UI = {
     if (this._gc[key] !== Infinity) this._gc[key] += 1;
     // 背包开着才实时刷新（关着则下次打开自然读新值，避免无谓重建 900+ 卡）
     if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
+    // 合成窗口的下半部分就是这份库存的按种类视图：数量变化时同步角标
+    if (this.isCraftVisible()) this._craftSyncList();
   },
 
   // 生成一个「稀有度分组」：分割条 + 等级名字 + 卡片网格。
@@ -781,6 +822,323 @@ const UI = {
     }
     group.appendChild(grid);
     return group;
+  },
+
+  // ---------------- 合成窗口 ----------------
+  // 库存与背包共用同一份 _gc（type.key|rar -> 数量）：合成直接在这份库存上扣/加，
+  // 客户端即权威 —— 与背包/装备完全同一套口径，不引入服务端往返。
+  // 成功率 = 官方合成表（按【目标稀有度】查）；失败损失 1~4 张（四档均分概率）。
+  CRAFT_CHANCE: {
+    unusual: 0.64, rare: 0.38, epic: 0.19, legendary: 0.09, mythic: 0.04,
+    ultra: 0.02, super: 0.01, eternal: 0.001
+  },
+  // 5 个材料槽（stage 内百分比坐标，梅花形排布）+ 聚拢中心 + 成堆时的静态错开
+  _CRAFT_SLOTS: [[50, 8], [22, 42], [78, 42], [34, 78], [66, 78]],
+  _CRAFT_PILE: [46, 48],
+  _CRAFT_OFF: [[-5, -3], [5, -2], [-4, 4], [4, 5], [0, -5]],
+  // 合成状态机：idle（空） -> loaded（5 张已装） -> gather（聚拢） -> shake（抖动）
+  //   -> result（成功，中心展示成品）| resolve（失败，损失卡分开消失） -> idle
+  _craft: { state: 'idle', kind: null, target: null, dur: 0, t: 0, n: 0, raf: 0, last: 0, acc: 0, els: [] },
+  _craftBuilt: false,
+  _craftSig: '',
+  _craftRows: null,
+
+  // 抖动均值随目标稀有度线性过渡（unusual 1s -> eternal 13s）
+  _craftMeanOf(target) {
+    const order = ['unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
+    const i = Math.max(0, order.indexOf(target));
+    return 1 + 12 * (i / 7);
+  },
+  // 最终迸发的方形粒子数：unusual 1~2 个 -> eternal 500 个（按稀有度线性过渡）
+  _craftCountOf(target) {
+    const order = ['unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
+    const i = Math.max(0, order.indexOf(target));
+    return 1.5 + (500 - 1.5) * (i / 7);
+  },
+  _craftColor(r) { return (RARITIES[r] && RARITIES[r].color) || '#fff'; },
+  _craftTargetOf(r) {
+    const i = RARITY_ORDER.indexOf(r);
+    return (i >= 0 && i + 1 < RARITY_ORDER.length) ? RARITY_ORDER[i + 1] : null;
+  },
+
+  renderCraft() {
+    if (!this.isCraftVisible()) return;
+    this._craftBuildTop();
+    this._craftSyncTop();
+    this._craftSyncList();
+  },
+
+  // 顶区只建一次：5 个灰槽底 + 5 张待合成卡（初始停在槽位上）+ 成品展示位
+  _craftBuildTop() {
+    if (this._craftBuilt) return;
+    this._craftBuilt = true;
+    const stage = this.refs.craftStage;
+    stage.innerHTML = '';
+    for (let i = 0; i < 5; i++) {
+      const s = document.createElement('div');
+      s.className = 'craft-slot';
+      s.style.left = this._CRAFT_SLOTS[i][0] + '%';
+      s.style.top = this._CRAFT_SLOTS[i][1] + '%';
+      stage.appendChild(s);
+    }
+    this._craft.els = [];
+    for (let i = 0; i < 5; i++) {
+      const el = document.createElement('div');
+      el.className = 'craft-card';
+      this._craftSeat(el, i);
+      stage.appendChild(el);
+      this._craft.els.push(el);
+    }
+    const res = document.createElement('div');
+    res.className = 'craft-result hidden';
+    // 成品卡本来就自动进了背包，这里点击只是"拿下来"（收起展示）
+    res.addEventListener('click', () => this._craftDismiss());
+    stage.appendChild(res);
+    this._craftRes = res;
+  },
+  _craftSeat(el, i) {
+    el.style.left = this._CRAFT_SLOTS[i][0] + '%';
+    el.style.top = this._CRAFT_SLOTS[i][1] + '%';
+    el.style.transform = 'translate(0,0)';
+  },
+
+  _craftSyncTop() {
+    const st = this._craft;
+    const go = this.refs.craftGo;
+    const showT = (st.state === 'loaded' || st.state === 'result') ? st.target : null;
+    go.textContent = I18N.t('UI/Craft/Button', 'Craft');
+    go.disabled = st.state !== 'loaded';
+    go.classList.toggle('ready', st.state === 'loaded');
+    go.style.background = (st.state === 'loaded' && showT) ? this._craftColor(showT) : '#8a8a8a';
+    // 成功率：装了材料显示实际值；刚出结果时保留那一次的值；空槽时显示 ?
+    const pct = showT
+      ? (Math.round((this.CRAFT_CHANCE[showT] || 0) * 100000) / 1000)
+      : '?';
+    this.refs.craftChance.textContent = I18N.tf('UI/Craft/Chance', { 0: pct }, 'Success rate: {0}%');
+    let note = I18N.t('UI/Craft/Consume', 'Consume 5 identical petals to craft once.');
+    if (st.state === 'loaded') note += '<br>' + I18N.t('UI/Craft/FailNote', 'On failure 1~4 petals are lost.');
+    this.refs.craftNote.innerHTML = note;
+  },
+
+  // 下半部分 = 背包库存按 (花瓣种类 × 稀有度) 分行；一种一行，数量为 0 的整行不显示。
+  // 行样式与生物图鉴一致：第一格 = 卡面（带 xN 角标），其余为灰色空槽。
+  // 数量 > 5 的种类上色且可点击（一键装 5 张）；不足的置灰不可点。
+  _craftSyncList() {
+    const host = this.refs.craftList;
+    if (!host || !this.isCraftVisible()) return;
+    const kinds = [];
+    for (const p of PETAL_TYPES) {
+      for (const r of RARITY_ORDER) {
+        const n = this._galleryCount(p.key + '|' + r);
+        if (n > 0) kinds.push({ key: p.key + '|' + r, type: p, rarity: r, n });
+      }
+    }
+    kinds.sort((a, b) => {
+      const d = RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity);
+      return (d !== 0) ? d : a.type.name.localeCompare(b.type.name);
+    });
+    const sig = kinds.map((k) => k.key).join(',');
+    if (sig !== this._craftSig) {
+      this._craftSig = sig;
+      host.innerHTML = '';
+      this._craftRows = new Map();
+      for (const k of kinds) host.appendChild(this._craftBuildRow(k));
+    }
+    for (const k of kinds) {
+      const rec = this._craftRows && this._craftRows.get(k.key);
+      if (!rec) continue;
+      if (rec.n !== k.n) { rec.n = k.n; CardRenderer.setCount(rec.cv, k.n); }
+      const on = k.n > 5;
+      if (rec.on !== on) {
+        rec.on = on;
+        rec.cell.classList.toggle('on', on);
+        rec.cell.classList.toggle('off', !on);
+      }
+    }
+  },
+
+  _craftBuildRow(k) {
+    const row = document.createElement('div');
+    row.className = 'craft-row';
+    let first = null;
+    for (let i = 0; i < 8; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'craft-cell';
+      row.appendChild(cell);
+      if (i === 0) first = cell;
+    }
+    const on = k.n > 5;
+    first.classList.add(on ? 'on' : 'off');
+    const cv = CardRenderer.createCard({
+      rarity: k.rarity, svg: k.type.svg, count: k.n,
+      pad: 0.0756, radius: 0.0588            // 与背包卡同一套内板比例
+    });
+    first.appendChild(cv);
+    // 点击是否有效由 _craftLoad 里的【实时数量】判断（行内角标会随后续拾取/合成变化）
+    first.addEventListener('click', () => this._craftLoad(k));
+    this._bindTip(first, k.type, k.rarity);
+    if (!this._craftRows) this._craftRows = new Map();
+    this._craftRows.set(k.key, { cv, n: k.n, on, cell: first });
+    return row;
+  },
+
+  // 一次性从库存扣 n 张（调试模式 ∞ 永远够用）
+  _craftDec(kind, n) {
+    if (window.__debug) return true;
+    const cur = this._galleryCount(kind.key);
+    if (cur < n) return false;
+    this._gc[kind.key] = cur - n;
+    return true;
+  },
+
+  // 点击可合成的种类：一键把 5 张装进上方槽位（同时替换上一次的成品展示）
+  _craftLoad(k) {
+    const st = this._craft;
+    if (st.state === 'gather' || st.state === 'shake') return;   // 合成进行中：不响应
+    // 口径：同种同稀有度叠加【超过 5 个】才可合成 —— 用实时数量判断（行的角标可能滞后）
+    if (!(this._galleryCount(k.key) > 5)) return;
+    if (st.state === 'result') this._craftDismiss();
+    if (!this._craftDec(k, 5)) return;
+    st.state = 'loaded';
+    st.kind = { key: k.key, type: k.type, rarity: k.rarity };
+    st.target = this._craftTargetOf(k.rarity);
+    st.els.forEach((el, i) => {
+      el.style.transition = '';
+      el.style.display = '';
+      el.style.opacity = '1';
+      el.innerHTML = '';
+      el.appendChild(CardRenderer.createCard({
+        rarity: k.rarity, svg: k.type.svg, count: 0, pad: 0.0756, radius: 0.0588
+      }));
+      this._craftSeat(el, i);
+    });
+    this.refs.craftStage.classList.remove('crafting');
+    this._craftSyncTop();
+    this._craftSyncList();
+  },
+
+  // 点合成：5 张卡快速聚拢到中心成堆
+  _craftStart() {
+    const st = this._craft;
+    if (st.state !== 'loaded' || !st.kind || !st.target) return;
+    st.state = 'gather';
+    this.refs.craftGo.disabled = true;
+    // 聚拢后灰槽隐藏（与截图一致：抖动/展示阶段只剩中心一堆）
+    this.refs.craftStage.classList.add('crafting');
+    const [px, py] = this._CRAFT_PILE;
+    st.els.forEach((el, i) => {
+      el.style.left = px + '%';
+      el.style.top = py + '%';
+    });
+    // 时长：均值 = 设定值（unusual 1s -> eternal 13s），取样区间 [0.6m, 1.4m]
+    // 再钳到 [1, 18] —— 全稀有度合起来正好落在用户口径的 1~18 秒内
+    const mean = this._craftMeanOf(st.target);
+    st.dur = Math.min(18, Math.max(1, mean * (0.6 + 0.8 * Math.random())));
+    st.t = 0; st.acc = 0; st.last = 0;
+    // 最终迸发粒子数：unusual 1~2 -> eternal ≈500
+    st.n = Math.max(1, Math.round(this._craftCountOf(st.target) * (0.75 + Math.random() * 0.5)));
+    setTimeout(() => this._craftShake(), 250);
+  },
+
+  // 抖动阶段：同步抖动 + 越来越剧烈的目标稀有度色方形粒子
+  // 粒子强度 = 最终迸发的一半封顶（速率随已过百分比线性上升，总量 = N/4）
+  _craftShake() {
+    const st = this._craft;
+    if (st.state !== 'gather') return;      // 中途被重置（窗口重开等）
+    st.state = 'shake';
+    st.last = performance.now();
+    const color = this._craftColor(st.target);
+    const step = (now) => {
+      if (st.state !== 'shake') return;
+      const dt = Math.min(0.05, (now - st.last) / 1000);
+      st.last = now;
+      st.t += dt;
+      const pr = Math.min(1, st.t / st.dur);
+      const amp = 0.6 + 2.6 * pr;
+      const jx = (Math.random() * 2 - 1) * amp;
+      const jy = (Math.random() * 2 - 1) * amp;
+      const jr = (Math.random() * 2 - 1) * (1.5 + 4 * pr);
+      st.els.forEach((el, i) => {
+        const off = this._CRAFT_OFF[i];
+        el.style.transform = 'translate(' + (off[0] + jx) + 'px,' + (off[1] + jy) + 'px) rotate(' + jr + 'deg)';
+      });
+      st.acc += (st.n * 0.5) * pr * dt / st.dur;
+      const e = Math.floor(st.acc);
+      if (e > 0) { st.acc -= e; if (this.onCraftBurst) this.onCraftBurst(color, e); }
+      if (st.t >= st.dur) { this._craftResolve(); return; }
+      st.raf = requestAnimationFrame(step);
+    };
+    st.raf = requestAnimationFrame(step);
+  },
+
+  _craftResolve() {
+    const st = this._craft;
+    cancelAnimationFrame(st.raf);
+    const k = st.kind, target = st.target;
+    const p = (this.CRAFT_CHANCE[target] != null) ? this.CRAFT_CHANCE[target] : 0;
+    if (Math.random() < p) {
+      // ---- 成功：目标稀有度卡直接计入背包；中心展示成品（点击拿下来 / 装下一组自动替换）----
+      if (this.onCraftBurst) this.onCraftBurst(this._craftColor(target), st.n);
+      this.addGalleryCount(k.type, target);
+      st.state = 'result';
+      st.els.forEach((el) => { el.innerHTML = ''; el.style.display = 'none'; });
+      const res = this._craftRes;
+      res.innerHTML = '';
+      res.appendChild(CardRenderer.createCard({
+        rarity: target, svg: k.type.svg, count: 0, pad: 0.0756, radius: 0.0588
+      }));
+      res.classList.remove('hidden');
+    } else {
+      // ---- 失败：损失 1~4 张（四档均分）。损失卡迸发【源稀有度】色粒子后骤然分开、
+      // 缩小消失；剩余的直接计入背包（下半列表的角标随之更新）----
+      const lose = 1 + Math.floor(Math.random() * 4);
+      if (this.onCraftBurst) this.onCraftBurst(this._craftColor(k.rarity), 6 * lose);
+      for (let i = 0; i < 5 - lose; i++) this.addGalleryCount(k.type, k.rarity);
+      st.state = 'resolve';
+      st.els.forEach((el, i) => {
+        if (i < lose) {
+          const a = Math.random() * TAU;
+          el.style.transition = 'transform .42s ease-in, opacity .42s ease-in';
+          el.style.transform = 'translate(' + (Math.cos(a) * 46).toFixed(1) + 'px,'
+            + (Math.sin(a) * 46 - 10).toFixed(1) + 'px) scale(.25) rotate('
+            + (Math.random() * 120 - 60).toFixed(0) + 'deg)';
+          el.style.opacity = '0';
+        } else {
+          el.style.transition = 'opacity .3s ease-out';
+          el.style.opacity = '0';
+        }
+      });
+      setTimeout(() => this._craftReset(), 480);
+    }
+    this._craftSyncTop();
+    this._craftSyncList();
+  },
+
+  _craftReset() {
+    const st = this._craft;
+    st.state = 'idle';
+    st.kind = null; st.target = null;
+    st.els.forEach((el, i) => {
+      el.style.transition = '';
+      el.style.opacity = '1';
+      el.style.display = '';
+      el.innerHTML = '';
+      this._craftSeat(el, i);
+    });
+    this.refs.craftStage.classList.remove('crafting');
+    this._craftSyncTop();
+    this._craftSyncList();
+  },
+
+  // 收起成品展示（成品已在背包里，这里只是把中心那张拿掉）
+  _craftDismiss() {
+    const st = this._craft;
+    if (this._craftRes) { this._craftRes.classList.add('hidden'); this._craftRes.innerHTML = ''; }
+    if (st.state === 'result') {
+      st.state = 'idle';
+      st.kind = null; st.target = null;
+      this._craftSyncTop();
+    }
   },
 
   // ---------------- 图鉴：生物图鉴 ----------------
@@ -1080,8 +1438,15 @@ const UI = {
           // 持续回血的花瓣（healOverTime）治疗量是【每秒】计数单位，显示成 "3/s"；
           // Rose 等一次性治疗不显示 /s。
           healPerSec: !!type.healOverTime,
-          reload: (type.reload != null) ? type.reload : Math.max(0, type.spd || 0),
-          reloadText: type.reloadText || null,
+          // 装填秒数按【该稀有度】取（Shovel：15.0s -> 2.0s），与实体计时同源
+          reload: (typeof petalReloadOf === 'function')
+            ? petalReloadOf({ type, rarity })
+            : ((type.reload != null) ? type.reload : Math.max(0, type.spd || 0)),
+          reloadText: type.reloadText
+            || (type.burrow
+              ? ((typeof petalReloadOf === 'function' ? petalReloadOf({ type, rarity }) : type.reload) || 0).toFixed(1)
+                + 's + ' + (type.burrow.dur || 2).toFixed(1) + 's'
+              : null),
           // 装备加成类属性（0 = 没有这一项，整行不显示）：
           //   转速加成（Faster）、reach 额外伸距（Third Eye）—— 标签色同 Max Mob Rarity
           rotSpeed: st.rotSpeed || 0,
@@ -1093,6 +1458,9 @@ const UI = {
           interval: st.interval || 0,
           // 回血增幅（Basil）：0 = 没有这一项，整行不显示
           healBonus: st.healBonus || 0,
+          // Soil（泥土）：花朵生命上限（颜色同 Health）+ 额外半径（颜色同 Max Mob Rarity）
+          flowerHp: st.flowerHp || 0,
+          extraRadius: (type.soil && type.soil.radius) || 0,
           // 场地型（Web）：网半径 + 存在时长
           radius: st.radius || 0,
           duration: st.duration || 0,
@@ -1143,13 +1511,15 @@ const UI = {
       // 必须用 registry 里的【官方英文名】算 slug：mob.name 是当前语言的译文，
       // 拿它反推会得到 "瓢虫" 之类的键，简介永远查不到（这就是介绍不显示的原因）。
       const slug = mob.slug || String(mob.name || '').toLowerCase().replace(/ /g, '_');
+      // 词条键走 species → 官方键的别名表（蚂蚁家族是 ant_* 前缀，见 data.js 的 mobI18nKey）
+      const i18nSlug = (typeof mobI18nKey === 'function') ? mobI18nKey(slug) : slug;
       this._tip = {
         mob: true,
         name: mob.name || '',
         rarityName: I18N.t('Rarities/' + rarity + '/Name', rarity),
         rarityColor: (RARITIES[rarity] && RARITIES[rarity].color) || '#fff',
         // 简介可能缺条目：用 opt（缺失不显示 <键名>）
-        desc: I18N.opt('Mobs/' + slug + '/Description', ''),
+        desc: I18N.opt('Mobs/' + i18nSlug + '/Description', ''),
         xp: rs.exp || 0,
         // 数值：与花瓣悬浮框同款式（Health / Damage / Armor / Poison）
         // 口径：和卡牌一样 ——【有的属性才显示，没有就不显示】，不固定画 Health/Damage。
