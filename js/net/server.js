@@ -28,6 +28,16 @@ class LocalServer {
     // 客户端一帧都还没上报时用 MOB_ACTIVE_R 兜底（旧口径，等价于"看不看得见都先醒着"）。
     this.viewR = MOB_ACTIVE_R;
     this._events = [];          // 待投递事件（聊天、系统私信）
+    // 背包权威：type.key|rarity -> 数量。客户端 _gc 只是它的镜像，
+    // 任何增减都必须经 invRequest，插件改本地镜像改不到这里。
+    this.inventory = Object.create(null);
+    this._debugInv = false;
+    // 已扣下、等待合成的装载材料（key + 数量）。客户端不能自带数量，
+    // craft 只能消费这份服务端记录，避免"装载不扣/重复扣/伪造数量"。
+    this.pendingCraft = null;
+    // 已合成但玩家还没"拿下来"的成品：拿下/被替下之前不计入 inventory，
+    // 所以背包与合成列表都不会提前显示结果，也无法在客户端提前读到。
+    this.pendingResult = null;
     this._combatAcc = 0;
     this._started = false;
     this._inited = false;      // 是否已按生成表初始化过（每张地图只自动跑一次）
@@ -62,6 +72,10 @@ class LocalServer {
     // 少了出生无敌时，服务端副本从第 0 帧起就能被打 -> 客户端被快照置为 dead -> 一碰就死。
     p.resetForSpawn(playerTemplate);
     p.webSink = this.fields;        // 玩家生成的网（Web 花瓣）统一进 server.fields（场级实体单源）
+    // 调试模式给一张"取之不尽"的库存（用大数代替 Infinity，保证可 JSON 序列化）。
+    this._debugInv = !!(typeof window !== 'undefined' && window.__debug);
+    const sk = (typeof STARTER_INV_KEY !== 'undefined') ? STARTER_INV_KEY : null;
+    if (sk && !(sk in this.inventory)) this.inventory[sk] = 1;
     this._slotSig = '';
     // 地图/玩家就位后立刻按生成表把全图铺满（等价于 /init <map>），避免开局空场
     this.spawnT = 0;
@@ -2404,6 +2418,92 @@ class LocalServer {
 
   drainEvents() { const e = this._events; this._events = []; return e; }
 
+  // ---------------- 背包权威 ----------------
+  // 客户端只能发 op，不能自带数量：所有增减在这里算完，回传【整份】新背包让客户端覆盖镜像。
+  _invSnapshot() {
+    const o = {};
+    for (const k in this.inventory) o[k] = this.inventory[k];
+    return o;
+  }
+  _invCount(key) { return this._debugInv ? Infinity : (this.inventory[key] || 0); }
+  _invSet(key, n) { if (!this._debugInv) this.inventory[key] = Math.max(0, n); }
+
+  invRequest(a) {
+    const op = a.op;
+    const snap = () => ({ inventory: this._invSnapshot() });
+    if (op === 'get') return snap();
+    // 卸下全部装载材料：不需要 key，只认服务端记录的 pending。
+    if (op === 'unload') {
+      const prev = this.pendingCraft;
+      if (prev) {
+        this._invSet(prev.key, this._invCount(prev.key) + prev.n);
+        this.pendingCraft = null;
+      }
+      return snap();
+    }
+    // 领取结果：同样不需要 key，必须放在下面的 key 校验之前
+    if (op === 'takeResult') {
+      const r = this.pendingResult;
+      if (r) {
+        this._invSet(r.key, this._invCount(r.key) + r.count);
+        this.pendingResult = null;
+      }
+      return Object.assign({ taken: r ? r.count : 0 }, snap());
+    }
+    const key = a.key;
+    if (typeof key !== 'string' || !key) return Object.assign({ error: 'bad key' }, snap());
+    const n = Math.max(1, Math.floor(Number(a.n) || 1));
+    const fail = (err) => Object.assign({ error: err }, snap());
+
+    if (op === 'take') {
+      if (this._invCount(key) < n) return fail('not enough');
+      this._invSet(key, this._invCount(key) - n);
+    } else if (op === 'return' || op === 'add') {
+      this._invSet(key, this._invCount(key) + n);
+    } else if (op === 'load') {
+      // 装载合成材料：点击时就扣（库存立刻减少）；换卡/叠加先返还上一批。
+      if (this._invCount(key) < n) return fail('not enough');
+      const prev = this.pendingCraft;
+      if (prev) this._invSet(prev.key, this._invCount(prev.key) + prev.n);
+      this._invSet(key, this._invCount(key) - n);
+      this.pendingCraft = { key, n };
+    } else if (op === 'craft') {
+      // 只消费服务端已扣的材料：客户端传来的 n / target 一律不采信。
+      const pc = this.pendingCraft;
+      if (!pc) return fail('no pending craft');
+      if (pc.key !== key) return fail('key mismatch');
+      const m = pc.n;
+      this.pendingCraft = null;
+      const bar = pc.key.indexOf('|');
+      const typeKey = bar >= 0 ? pc.key.slice(0, bar) : pc.key;
+      const rarity = bar >= 0 ? pc.key.slice(bar + 1) : '';
+      const target = (typeof craftTargetOf === 'function') ? craftTargetOf(rarity) : null;
+      if (!target) return fail('bad rarity');
+      const p = (typeof CRAFT_CHANCE !== 'undefined' && CRAFT_CHANCE[target] != null)
+        ? CRAFT_CHANCE[target] : 0;
+      let left = m, wins = 0, losses = 0;
+      while (left >= 5) {   // 失败剩余继续复用，直到不足 5 张
+        if (Math.random() < p) { wins++; left -= 5; }
+        else { const lose = 1 + Math.floor(Math.random() * 4); losses += lose; left -= lose; }
+      }
+      // 剩余 1~4 张继续【留在装载槽】（已扣状态），不返还背包：
+      // 客户端 st.count = left，卸下时才由 unload 返还，两边始终一致。
+      if (left > 0) this.pendingCraft = { key: pc.key, n: left };
+      const tk = typeKey + '|' + target;
+      // 旧结果若还没拿下：被替下这一刻才真正入包（用户口径）。
+      if (this.pendingResult) {
+        const old = this.pendingResult;
+        this._invSet(old.key, this._invCount(old.key) + old.count);
+      }
+      // 新结果先挂在服务端，等玩家点结果卡 / 被下一拨替下才计入 inventory。
+      this.pendingResult = wins > 0 ? { key: tk, count: wins } : null;
+      return Object.assign({ wins, losses, left, target }, snap());
+    } else {
+      return fail('unknown op');
+    }
+    return snap();
+  }
+
   // 请求/应答入口：本地实现与远端传输层共用同一份分发，避免两处 if/else 分叉。
   // 返回值必须是纯数据（可 JSON 序列化）；字符串表示 i18n 错误键。
   handleRequest(kind, payload) {
@@ -2425,6 +2525,8 @@ class LocalServer {
       }
       case 'players':
         return this.player ? [{ name: this.player.name }] : [];
+      case 'inv':
+        return this.invRequest(a);
       default:
         return { error: 'unknown request: ' + kind };
     }

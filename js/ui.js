@@ -305,7 +305,15 @@ const UI = {
             <div class="set-note">${I18N.t('UI/Settings/MouseNote', 'Unchecked: the flower follows the mouse cursor.')}</div>
           </div>
           <div class="set-panel hidden" data-panel="graphics">
-            <div class="set-note">${I18N.t('UI/Settings/GraphicsNote', 'More options coming soon.')}</div>
+            <label class="set-row">
+              <span>${I18N.t('UI/Settings/ShowMobHpBar', 'Show mob health bars')}</span>
+              <span class="set-check" id="setShowHpBar"><i class="set-box"><b class="set-fill"></b></i></span>
+            </label>
+            <label class="set-row">
+              <span>${I18N.t('UI/Settings/ShowFeedback', 'Show feedback numbers')}</span>
+              <span class="set-check" id="setShowFeedback"><i class="set-box"><b class="set-fill"></b></i></span>
+            </label>
+            <div class="set-note">${I18N.t('UI/Settings/ApplyNow', 'Changes apply immediately.')}</div>
           </div>
           <div class="set-panel hidden" data-panel="credits">
             <div class="set-credits">
@@ -331,6 +339,7 @@ const UI = {
       dex: $('dex'), dexBody: $('dexBody'), dexCount: $('dexCount'),
       settings: $('settings'),
       setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
+      setShowHpBar: $('setShowHpBar'), setShowFeedback: $('setShowFeedback'),
       slotRow: $('slotRow'), subRow: $('subRow'), statusRow: $('statusRow'),
       loading: $('loading')
     };
@@ -428,7 +437,7 @@ const UI = {
     return this.isBagVisible() || this.isCraftVisible() || this.isDexVisible() || this.isSettingsVisible();
   },
 
-  // 分栏切换 + 三个设置项（写 Cookie；移动方式 / 调试模式当场生效，语言需重启）
+  // 分栏切换 + 设置项（写 Cookie；除语言外都当场生效）
   _initSettings() {
     const r = this.refs;
     // 分栏：Game / Controls / Graphics / Credits
@@ -444,12 +453,16 @@ const UI = {
     if (!r.setLang) return;
     // 初始值 = 当前设置
     const cur = (typeof Settings !== 'undefined')
-      ? Settings.all() : { lang: 'en_US', debug: false, keyboardMove: false };
+      ? Settings.all()
+      : { lang: 'en_US', debug: false, keyboardMove: false, showMobHpBar: true, showFeedback: true };
     r.setLang.value = cur.lang || 'en_US';
     r.setLang.addEventListener('change', () => this._setSetting('lang', r.setLang.value));
     // 勾选框：与聊天面板同款（黑描边外框 + 内部填充块）
     this._bindCheck(r.setDebug, !!cur.debug, (v) => this._setSetting('debug', v));
     this._bindCheck(r.setKeyboard, !!cur.keyboardMove, (v) => this._setSetting('keyboardMove', v));
+    // 图像开关：默认开启；老存档缺键时 !== false 同样视为开，切换立即由绘制层读取
+    this._bindCheck(r.setShowHpBar, cur.showMobHpBar !== false, (v) => this._setSetting('showMobHpBar', v));
+    this._bindCheck(r.setShowFeedback, cur.showFeedback !== false, (v) => this._setSetting('showFeedback', v));
   },
 
   // 单个设置项变更：写 Cookie + 立刻通知 Game 应用（不再需要重启）
@@ -745,39 +758,49 @@ const UI = {
     const invKey = (typeof STARTER_INV_KEY !== 'undefined') ? STARTER_INV_KEY : null;
     return (invKey && key === invKey) ? 1 : 0;
   },
-  // 画廊卡数量（调试=∞）；拿空(<=0)后该卡不再渲染
+  // 客户端背包 = 服务端库存的【只读镜像】。这里只渲染，不作为权威。
+  _applyInventory(inv) {
+    if (!inv || typeof inv !== 'object') return;
+    this._gc = Object.create(null);
+    for (const k in inv) this._gc[k] = inv[k];
+    if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
+    if (this.isCraftVisible()) this._craftSyncList();
+  },
+  // 统一背包请求：所有增减都经服务端，回执携带【整份】新背包覆盖镜像。
+  // 返回 Promise（null = 无网络层），调用方只在需要结果时 await。
+  _invRequest(op, key, n) {
+    const net = window.__game && window.__game.net;
+    if (!net || typeof net.request !== 'function') return Promise.resolve(null);
+    return net.request('inv', { op, key, n }).then((r) => {
+      if (r && r.inventory) this._applyInventory(r.inventory);
+      return r;
+    }).catch(() => null);
+  },
+  // 启动时从服务端拉取一次权威库存（Game 构造后 window.__game 才可用）
+  syncInventoryFromServer() { return this._invRequest('get'); },
+  // 画廊卡数量（调试=∞）；拿空(<=0)后该卡不再渲染。只读镜像，不在此扣减。
   _galleryCount(key) {
     if (!this._gc) this._gc = {};
     if (!(key in this._gc)) this._gc[key] = this._gcDefault(key);
     return this._gc[key];
   },
+  // 装备取卡：预判只看镜像；实际扣除由服务端核实，回执纠正镜像。
   _decGallery(card) {
     const key = card.type.key + '|' + card.rarity;
     if (window.__debug) return true;
-    if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
-    if (this._gc[key] <= 0) return false;   // 已取完：拒绝再取（防止连点刷出超量卡）
-    this._gc[key] -= 1;
+    if (this._galleryCount(key) <= 0) return false;
+    this._invRequest('take', key, 1);
     return true;
   },
-  // 取消拖拽（回退背包）时恢复数量（+1）；调试模式恒 ∞ 不变
+  // 取消拖拽 / 装备失败回滚：由服务端加回，客户端不改镜像。
   _incGallery(card) {
-    const key = card.type.key + '|' + card.rarity;
     if (window.__debug) return;
-    if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
-    this._gc[key] += 1;
+    this._invRequest('return', card.type.key + '|' + card.rarity, 1);
   },
-  // 拾取掉落：对应卡牌数量 +1（进背包 = all petals）。调试模式恒 ∞，不加不减。
+  // 拾取掉落 / 指令赠卡：服务端 +n，客户端只渲染它的回执。
   addGalleryCount(type, rarity, n) {
-    const key = type.key + '|' + rarity;
-    if (!this._gc) this._gc = {};
-    if (this._gc[key] === undefined) this._gc[key] = this._gcDefault(key);
-    if (this._gc[key] !== Infinity) this._gc[key] += (n > 0 ? n : 1);
-    // 背包开着才实时刷新（关着则下次打开自然读新值，避免无谓重建 900+ 卡）
-    if (this.refs.inv && !this.refs.inv.classList.contains('hidden')) this.renderInventory();
-    // 合成窗口的下半部分就是这份库存的按种类视图：数量变化时同步角标
-    if (this.isCraftVisible()) this._craftSyncList();
+    if (window.__debug) return;
+    this._invRequest('add', type.key + '|' + rarity, n > 0 ? n : 1);
   },
 
   // 生成一个「稀有度分组」：分割条 + 等级名字 + 卡片网格。
@@ -826,13 +849,8 @@ const UI = {
   },
 
   // ---------------- 合成窗口 ----------------
-  // 库存与背包共用同一份 _gc（type.key|rar -> 数量）：合成直接在这份库存上扣/加，
-  // 客户端即权威 —— 与背包/装备完全同一套口径，不引入服务端往返。
-  // 成功率 = 官方合成表（按【目标稀有度】查）；失败损失 1~4 张（四档均分概率）。
-  CRAFT_CHANCE: {
-    unusual: 0.64, rare: 0.38, epic: 0.19, legendary: 0.09, mythic: 0.04,
-    ultra: 0.02, super: 0.01, eternal: 0.001
-  },
+  // 客户端只负责发合成请求 + 播动画：库存增减、成功率判定、结果计算全在服务端。
+  // _gc 是服务端库存的镜像；成功率表在 data.js 的 CRAFT_CHANCE，两端共用同一份。
   // 5 个材料槽：正五边形（一个顶点朝上），stage 内百分比坐标
   _CRAFT_SLOTS: [[50, 16], [69, 41], [62, 76], [38, 76], [31, 41]],
   _CRAFT_PILE: [50, 50],
@@ -842,12 +860,14 @@ const UI = {
   // 末次聚拢后停留 ×1.6，结果在停留结束时展示。
   _CRAFT_CYCLE: 1.25,
   _CRAFT_LAST_K: 1.6,
-  // state: idle（空）/ loaded（槽里有卡）/ anim（聚拢张开循环）
+  // state: idle（空）/ loaded（槽里有卡）/ anim（等服务端结果的聚拢张开循环）/ result
+  // answer = 服务端合成回执；没收到就一直循环，收到且动画时长够了才进入末次停留并结算。
   _craft: {
     state: 'idle', kind: null, target: null, count: 0,
     n: 0, raf: 0, last: 0, acc: 0, close: 0,
-    cycle: 0, cycles: 1, cycT: 0, cycDur: 0.8,
-    batch: 0, auto: false,
+    cycle: 0, cycT: 0, cycDur: 0.8, minCycles: 1,
+    answer: null, reqSeq: 0, nextFinal: false, final: false,
+    holdT: 0, holdDur: 0,
     fx: [], fxRaf: 0, fxLast: 0, fxCtx: null, fxCv: null
   },
   _craftBuilt: false,
@@ -870,17 +890,6 @@ const UI = {
   _craftTargetOf(r) {
     const i = RARITY_ORDER.indexOf(r);
     return (i >= 0 && i + 1 < RARITY_ORDER.length) ? RARITY_ORDER[i + 1] : null;
-  },
-  // 批量合成【一次性算完所有轮】：每轮成功 +1 成品、失败损失 1~4 张且剩余继续复用，
-  // 直到不足 5 张。动画只播一次，结算时直接展示 wins 张（xN 角标）。
-  _craftPlan(count, p) {
-    let left = Math.max(0, count), wins = 0, losses = 0, rounds = 0;
-    while (left >= 5) {
-      rounds++;
-      if (Math.random() < p) { wins++; left -= 5; }
-      else { const lose = 1 + Math.floor(Math.random() * 4); losses += lose; left -= lose; }
-    }
-    return { wins, losses, left, rounds };
   },
 
   renderCraft() {
@@ -911,6 +920,12 @@ const UI = {
       const el = document.createElement('div');
       el.className = 'craft-card';
       el.addEventListener('click', () => this._craftUnload());
+      // 待合成卡与背包卡同款悬浮框：类型从当前装载实时读，换卡后自动跟着变
+      el.addEventListener('mouseenter', () => {
+        const k = this._craft.kind;
+        if (k) this._showTip(k.type, k.rarity, el);
+      });
+      el.addEventListener('mouseleave', () => this._hideTip());
       stage.appendChild(el);
       this._craft.els.push(el);
     }
@@ -940,20 +955,34 @@ const UI = {
     if (this._craft.fxCtx) this._craft.fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
 
-  // UI 层方形粒子：舞台内屏幕坐标，不受世界坐标/相机影响
+  // UI 层方形粒子：舞台内屏幕坐标，不受世界坐标/相机影响。
+  // follow = 绑定的卡片元素：粒子基准点每帧跟着卡走（炸卡飞回期间粒子随行）。
   _craftFxTick(dt) {
     const st = this._craft, ctx = st.fxCtx, cv = st.fxCv;
     if (!ctx || !cv) return;
     ctx.clearRect(0, 0, cv.clientWidth || cv.width, cv.clientHeight || cv.height);
+    const cvr = st.fx.some((p) => p.follow) ? cv.getBoundingClientRect() : null;
+    const decay = Math.pow(0.06, dt);
     for (let i = st.fx.length - 1; i >= 0; i--) {
       const p = st.fx[i];
       p.life -= dt;
       if (p.life <= 0) { st.fx.splice(i, 1); continue; }
-      p.x += p.vx * dt; p.y += p.vy * dt;
-      p.vx *= Math.pow(0.06, dt); p.vy *= Math.pow(0.06, dt);
+      p.ox += p.vx * dt; p.oy += p.vy * dt;
+      p.vx *= decay; p.vy *= decay;
+      let x, y;
+      if (p.follow && cvr && p.follow.style.display !== 'none') {
+        const er = p.follow.getBoundingClientRect();
+        // 记住最后位置：卡片渐小隐藏后粒子留原地飞散，不跳回舞台中心
+        p.lastX = er.left + er.width / 2 - cvr.left;
+        p.lastY = er.top + er.height / 2 - cvr.top;
+      }
+      const bx = p.lastX != null ? p.lastX : p.bx;
+      const by = p.lastY != null ? p.lastY : p.by;
+      x = bx + p.ox;
+      y = by + p.oy;
       ctx.globalAlpha = Math.min(1, p.life / p.max);
       ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+      ctx.fillRect(x - p.s / 2, y - p.s / 2, p.s, p.s);
     }
     ctx.globalAlpha = 1;
   },
@@ -970,23 +999,23 @@ const UI = {
     };
     st.fxRaf = requestAnimationFrame(step);
   },
-  // quick=true：炸卡的短促粒子——从卡所在位置迸发、寿命短（归位结束前消散），
-  // 并且【立刻渲染首帧】，不再等下一帧 rAF（消除"延迟"）。
-  _craftFxBurst(color, n, x, y, quick) {
+  // quick=true：炸卡的短促粒子（寿命短）；follow=卡片元素时粒子随它移动。
+  // 【所有 burst 都立即渲染首帧】，不再等下一帧 rAF —— 成功/失败粒子都不再有延迟。
+  _craftFxBurst(color, n, x, y, quick, follow) {
     const st = this._craft, cv = st.fxCv;
     if (!(n > 0)) return;
-    const cx = x != null ? x : ((cv ? cv.clientWidth : 292) || 292) / 2;
-    const cy = y != null ? y : ((cv ? cv.clientHeight : 178) || 178) / 2;
+    const bx = x != null ? x : ((cv ? cv.clientWidth : 292) || 292) / 2;
+    const by = y != null ? y : ((cv ? cv.clientHeight : 178) || 178) / 2;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * TAU, sp = 40 + Math.random() * 170;
       const life = quick ? (0.08 + Math.random() * 0.1) : (0.3 + Math.random() * 0.45);
       st.fx.push({
-        x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-        life, max: life, s: 2 + Math.random() * 4, color
+        bx, by, ox: 0, oy: 0, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life, max: life, s: 2 + Math.random() * 4, color, follow: follow || null
       });
     }
     this._craftFxStart();
-    if (quick) this._craftFxTick(0);
+    this._craftFxTick(0);
   },
 
   _craftSeat(el, i) {
@@ -995,77 +1024,110 @@ const UI = {
     el.style.transform = '';   // 必须清掉上次合成的旋转/位移，否则"放上去会歪"
   },
 
-  // 切换卡 / 加卡 / 卸下：渐大渐小特效。只作用在【卡面内容 .card】上，
-  // 不碰卡片本体的 transform/left/top（合成动画每帧写它们，被 CSS 动画覆盖会让卡消失）。
+  // 切换卡 / 加卡 / 卸下：渐大渐小特效。作用于卡片内【所有】子元素：
+  // <canvas.card> 与数量角标 <div.card-count> 是兄弟节点，必须同时动，否则角标会滞后突然消失。
+  // 绝不碰 .craft-card 本体的 transform/left/top（合成动画每帧写，被 CSS 覆盖会让卡消失）。
   _craftPop(el, out) {
     if (!el) return;
-    const card = el.firstElementChild;
-    if (!card) return;
+    const kids = Array.prototype.slice.call(el.children);
+    if (!kids.length) return;
     const c = out ? 'craft-pop-out' : 'craft-pop';
     clearTimeout(el._craftPopT);
-    card.classList.remove('craft-pop', 'craft-pop-out');
-    void card.offsetWidth;
-    card.classList.add(c);
+    kids.forEach((k) => k.classList.remove('craft-pop', 'craft-pop-out'));
+    void el.offsetWidth;
+    kids.forEach((k) => k.classList.add(c));
     if (out) {
       el._craftPopT = setTimeout(() => {
-        if (card.parentNode !== el) return;   // 期间被重建过就不再动
-        card.classList.remove(c);
+        if (kids[0].parentNode !== el) return;   // 期间被重建过就不再动
+        kids.forEach((k) => k.classList.remove(c));
         el.style.display = 'none';
       }, 220);
     }
   },
 
-  // 5 槽与卡【同步、丝滑、快速】从中心张开到五边形（成功拿下 / 失败炸卡同时回位 / 点下一拨）
-  // dyingSet：本轮被炸掉、正在渐小的卡——不 seat、不清定时，让它们原地渐小消失。
-  _craftSpread(dyingSet) {
-    const st = this._craft, ms = 120;   // 统一 120ms：卡和槽用同一条曲线同一时长（快速归位）
-    const trans = 'left ' + ms + 'ms ease-out, top ' + ms + 'ms ease-out, transform ' + ms + 'ms ease-out';
+  // 卡与槽【同步、丝滑、快速】从中心张开回五边形；槽从 scale(0)/opacity(0) 渐大渐显。
+  // dyingSet：本轮炸掉的卡——从飞回【这一刻】就渐小，全程跟着卡移动；
+  // 粒子绑定卡片元素逐帧跟随，不持续崩、卡隐藏后留在最后位置飞散。
+  _craftSpread(dyingSet, burstRarity) {
+    const st = this._craft, ms = 120;
+    // 起步很快、尾部减速并轻微过冲 —— 弹簧感；卡与槽共用同一条曲线保证同步。
+    const spring = 'cubic-bezier(.22, 1.45, .36, 1)';
+    const trans = 'left ' + ms + 'ms ' + spring + ', top ' + ms + 'ms ' + spring
+      + ', transform ' + ms + 'ms ' + spring;
     st.els.forEach((el, i) => {
       if (el.style.display === 'none') return;
-      if (dyingSet && dyingSet.has(el)) return;  // 炸卡：原地渐小，不回位、不隐藏定时器
-      clearTimeout(el._craftPopT);               // 防止残留定时把刚回位的卡隐藏
+      clearTimeout(el._craftPopT);
       el.style.transition = trans;
-      this._craftSeat(el, i);                    // 里面会清 transform
+      this._craftSeat(el, i);
     });
-    // 槽位本体和卡同一节奏张开
+    // 槽位：与卡片同一条弹簧曲线渐大 + 渐显
     this._craftSlots.forEach((s, i) => {
-      s.style.transition = trans;
+      s.style.transition = trans + ', opacity ' + ms + 'ms ease-out';
       s.style.left = this._CRAFT_SLOTS[i][0] + '%';
       s.style.top = this._CRAFT_SLOTS[i][1] + '%';
+      s.style.transform = 'scale(1)';
+      s.style.opacity = '1';
     });
     this.refs.craftStage.classList.remove('crafting', 'resulting');
     clearTimeout(st.spreadT);
     st.spreadT = setTimeout(() => {
       st.els.forEach((el) => { el.style.transition = ''; });
-    }, ms + 20);
+    }, ms + 10);
+
+    // 炸卡：立刻开始渐小（220ms，长于 120ms 回位，所以移动期间一直在缩），
+    // 粒子绑定同一张卡逐帧跟随；一次性崩出，不持续。
+    if (dyingSet && dyingSet.size) {
+      const per = Math.max(1, Math.round(st.n * 0.4 / dyingSet.size));
+      const color = this._craftColor(burstRarity || (st.kind && st.kind.rarity));
+      dyingSet.forEach((el) => {
+        this._craftFxBurst(color, per, null, null, true, el);
+        this._craftPop(el, true);
+      });
+    }
   },
 
-  // 卡自动【均摊到 5 个槽】：每槽写 xN（含合成过程）。keepCenter=结果态：只换面、停在中心不张开。
-  // skipSet：正在渐小的炸卡——不重建、不回位，保住它的 pop-out 动画。
-  _craftSyncCards(pop, keepCenter, skipSet) {
+  // 卡【均摊到 5 槽】并写 xN。mode:
+  //   'seat'  = 回五边形；'center' = 结果态停在中心；'keep' = 只换角标，位置交给 _craftSpread 动画。
+  // skipSet：本轮炸掉的卡——不重建/不回位，保住它的渐小动画。
+  // popSlots：只给这些槽播渐大（null = 所有有卡的槽）。用于"补齐时只有新卡闪"。
+  _craftSyncCards(pop, mode, skipSet, popSlots) {
     const st = this._craft;
     const n = Math.max(0, st.count);
     const base = Math.floor(n / 5), rem = n % 5;
     st.els.forEach((el, i) => {
       if (skipSet && skipSet.has(el)) return;
       const cnt = base + (i < rem ? 1 : 0);
-      el.innerHTML = '';
-      if (st.kind && cnt > 0) {
-        el.appendChild(CardRenderer.createCard({
-          rarity: st.kind.rarity, svg: st.kind.type.svg, count: cnt,
-          pad: 0.0756, radius: 0.0588
-        }));
+      const cv = el.firstElementChild;
+      // 正在渐小/已隐藏的旧卡不复用（否则它的 craft-pop-out 会让新卡保持透明）
+      const sameKind = cv && cv._card && st.kind && el._craftKindKey === st.kind.key
+        && el.style.display !== 'none' && !cv.classList.contains('craft-pop-out');
+      if (sameKind && cnt > 0) {
+        // 同种只改角标，绝不重建 canvas —— 重建会让卡面闪一下（素材重绘/角标重排）。
+        CardRenderer.setCount(cv, cnt);
         el.style.display = '';
-        if (pop) this._craftPop(el);
       } else {
-        el.style.display = 'none';
+        el.innerHTML = '';
+        el._craftKindKey = null;
+        if (st.kind && cnt > 0) {
+          const card = CardRenderer.createCard({
+            rarity: st.kind.rarity, svg: st.kind.type.svg, count: cnt,
+            pad: 0.0756, radius: 0.0588
+          });
+          el.appendChild(card);
+          el._craftKindKey = st.kind.key;
+          el.style.display = '';
+        } else {
+          el.style.display = 'none';
+        }
       }
+      if (pop && cnt > 0 && (!popSlots || popSlots.indexOf(i) >= 0)) this._craftPop(el);
+      if (mode === 'keep') return;   // 角标已换，位置/过渡由调用方统一处理
       el.style.transition = '';
       el.style.opacity = '1';
-      if (keepCenter) { el.style.left = '50%'; el.style.top = '50%'; el.style.transform = ''; }
+      if (mode === 'center') { el.style.left = '50%'; el.style.top = '50%'; el.style.transform = ''; }
       else this._craftSeat(el, i);
     });
-    if (!keepCenter) this.refs.craftStage.classList.remove('crafting');
+    if (mode !== 'center') this.refs.craftStage.classList.remove('crafting');
   },
 
   // 成功后中心那张成品卡：原地渐大出现（无蒙版、无右上角多余卡）。
@@ -1082,17 +1144,46 @@ const UI = {
     big.classList.add('grow');
   },
 
-  // 点击中心结果卡 = 直接点回背包（成功时已 +1）：不落槽，5 槽同步张开
+  // 点击中心结果卡 / 被下一拨替下 = 领取：此刻才让服务端把成品计入背包。
   _craftTakeResult() {
     const st = this._craft;
+    this._invRequest('takeResult');
     st.resultPending = false;
-    if (this._craftBigEl) this._craftBigEl.classList.add('hidden');
+    const big = this._craftBigEl;
+    if (big && !big.classList.contains('hidden')) this._craftFlyToBag(big);
+    else if (big) big.classList.add('hidden');
     st.result = null;
     st.state = st.count > 0 ? 'loaded' : 'idle';
     if (!st.count) { st.kind = null; st.target = null; }
     this._craftSpread();
     this._craftSyncTop();
     this._craftSyncList();
+  },
+
+  // 结果卡飞向左下角背包按钮，给出"已返还背包"的可见反馈
+  _craftFlyToBag(big) {
+    const bag = document.getElementById('bagBtn');
+    const from = big.getBoundingClientRect();
+    if (!bag || !from.width) { big.classList.add('hidden'); return; }
+    const to = bag.getBoundingClientRect();
+    const ghost = big.cloneNode(true);
+    ghost.classList.remove('hidden', 'grow');
+    // canvas 克隆不带像素：手动把结果卡面画进克隆体
+    const src = big.querySelector('canvas'), dst = ghost.querySelector('canvas');
+    if (src && dst && src.width) dst.getContext('2d').drawImage(src, 0, 0);
+    ghost.style.cssText = 'position:fixed;margin:0;left:' + from.left + 'px;top:' + from.top
+      + 'px;width:' + from.width + 'px;height:' + from.height
+      + 'px;z-index:9999;pointer-events:none;transition:left .45s cubic-bezier(.25,.8,.3,1),'
+      + 'top .45s cubic-bezier(.25,.8,.3,1),transform .45s ease-in,opacity .45s ease-in';
+    document.body.appendChild(ghost);
+    requestAnimationFrame(() => {
+      ghost.style.left = (to.left + to.width / 2 - from.width / 2) + 'px';
+      ghost.style.top = (to.top + to.height / 2 - from.height / 2) + 'px';
+      ghost.style.transform = 'scale(.3)';
+      ghost.style.opacity = '0';
+    });
+    setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 500);
+    big.classList.add('hidden');
   },
 
   _craftSyncTop() {
@@ -1102,8 +1193,9 @@ const UI = {
     go.textContent = I18N.t('UI/Craft/Button', 'Craft');
     go.disabled = !ready;
     go.classList.toggle('ready', ready);
-    go.style.background = (ready && showT) ? this._craftColor(showT) : '#8a8a8a';
-    const pct = showT ? (Math.round((this.CRAFT_CHANCE[showT] || 0) * 100000) / 1000) : '?';
+    // 可用时上目标稀有度色；不可用时清空 inline，交给 :disabled 的灰色+深描边样式
+    go.style.background = (ready && showT) ? this._craftColor(showT) : '';
+    const pct = showT ? (Math.round((CRAFT_CHANCE[showT] || 0) * 100000) / 1000) : '?';
     this.refs.craftChance.textContent = I18N.tf('UI/Craft/Chance', { 0: pct }, 'Success rate: {0}%');
     let note = I18N.t('UI/Craft/Consume', 'Consume 5 identical petals to craft once.');
     if (st.state === 'loaded') note += '<br>' + I18N.t('UI/Craft/FailNote', 'On failure 1~4 petals are lost.');
@@ -1156,7 +1248,8 @@ const UI = {
             } else CardRenderer.setCount(cell.cv, n);
           }
         }
-        const on = n > 0;
+        // 不足 5 张不可合成：灰色 off（CSS 已有 grayscale + 禁用光标）
+        const on = n >= 5;
         if (cell.on !== on) {
           cell.on = on;
           cell.cell.classList.toggle('on', on);
@@ -1176,7 +1269,7 @@ const UI = {
       const cell = document.createElement('div');
       cell.className = 'craft-cell';
       const rec = { cell, cv: null, n, on: n > 0 };
-      cell.classList.add(n > 0 ? 'on' : 'off');
+      cell.classList.add(n >= 5 ? 'on' : 'off');
       if (n > 0) {
         rec.cv = CardRenderer.createCard({
           rarity: r, svg: t.type.svg, count: n, pad: 0.0756, radius: 0.0588
@@ -1195,86 +1288,86 @@ const UI = {
     return row;
   },
 
-  _craftDec(kind, n) {
+  // 装载材料：点击即扣。refund = 当前已装载、即将被服务端返还的数量。
+  // 预判用镜像 + refund（服务端 load 会先返还旧装载再扣新的 n）。
+  _craftDec(kind, n, refund) {
     if (window.__debug) return true;
-    const cur = this._galleryCount(kind.key);
-    if (cur < n) return false;
-    this._gc[kind.key] = cur - n;
+    if (this._galleryCount(kind.key) + (refund || 0) < n) return false;
+    this._invRequest('load', kind.key, n);
     return true;
   },
 
-  // 点击槽/卡：卸下全部材料返还库存（带渐小特效；动画中不可卸）
+  // 点击槽/卡：卸下全部材料（服务端把已扣的装载返还背包；动画中不可卸）
   _craftUnload() {
     const st = this._craft;
     if (st.state === 'anim') return;
-    if (st.resultPending) this._craftTakeResult();
-    if (st.kind && st.count > 0 && !window.__debug) {
-      this._gc[st.kind.key] = (this._gc[st.kind.key] || 0) + st.count;
-    }
+    // 成功结果还挂着时卸下：也算"被替下"，先领取入包再清装载
+    if (st.resultPending || st.state === 'result') this._craftTakeResult();
+    if (st.kind && st.count > 0) this._invRequest('unload');
     st.els.forEach((el) => { if (el.style.display !== 'none') this._craftPop(el, true); });
     st.state = 'idle'; st.kind = null; st.target = null;
-    st.count = 0; st.batch = 0; st.auto = false; st.wins = 0; st.result = null;
+    st.count = 0; st.result = null;
+    st.answer = null; st.nextFinal = false; st.final = false;
     if (this._craftBigEl) this._craftBigEl.classList.add('hidden');
     this.refs.craftStage.classList.remove('crafting');
     this._craftSyncTop();
     this._craftSyncList();
   },
 
-  // 点击某格卡片：异种替换 / 同种补齐 / 满5继续叠加自动合成 / Shift 全部批量
+  // 点击某格卡片：异种替换 / 同种补齐 / 满5继续叠加 / Shift 全部批量
   _craftLoad(k, opts) {
     opts = opts || {};
     const st = this._craft;
     if (st.state === 'anim') return;
     // 上一把结果还挂着：先收起结果并让 5 槽从中心张开（就是"点击下一拨"）
     if (st.state === 'result' || st.resultPending) this._craftTakeResult();
-    const avail = this._galleryCount(k.key);
-    if (!(avail > 0)) return;
     const same = st.state === 'loaded' && st.kind && st.kind.key === k.key;
+    const before = same ? st.count : 0;                  // 当前装载，服务端会先返还
+    const avail = this._galleryCount(k.key) + before;    // 可用总数（含即将返还的）
+    if (!(avail > 0)) return;
 
     if (opts.shift) {
-      const total = (same ? st.count : 0) + avail;
-      if (total < 5) return;
+      if (avail < 5) return;
       if (same) {
-        if (!this._craftDec(k, avail)) return;
-        st.count = total;
+        if (!this._craftDec(k, avail, before)) return;
+        st.count = avail;
       } else {
         this._craftUnload();
-        if (!this._craftDec(k, avail)) return;
+        if (!this._craftDec(k, avail, 0)) return;
         st.count = avail;
       }
       st.kind = { key: k.key, type: k.type, rarity: k.rarity };
       st.target = this._craftTargetOf(k.rarity);
       st.state = 'loaded';
-      st.batch = Math.max(0, Math.floor(st.count / 5) - 1);
-      st.wins = 0;
-      st.auto = true;
-      this._craftSyncCards(true);
+      // Shift 紧接着就进合成动画，不再额外闪一遍渐大
+      this._craftSyncCards(false, 'seat');
       this._craftSyncTop();
       this._craftSyncList();
-      setTimeout(() => this._craftStart({ auto: true }), 120);
+      setTimeout(() => this._craftStart(), 120);
       return;
     }
 
     if (!same) {
       this._craftUnload();
       if (avail < 5) return;
-      if (!this._craftDec(k, 5)) return;
+      if (!this._craftDec(k, 5, 0)) return;
       st.kind = { key: k.key, type: k.type, rarity: k.rarity };
       st.target = this._craftTargetOf(k.rarity);
       st.count = 5;
       st.state = 'loaded';
-      st.wins = 0;
-      this._craftSyncCards(true);
-    } else if (st.count < 5) {
-      const need = 5 - st.count;
-      if (avail < need || !this._craftDec(k, need)) return;
+      this._craftSyncCards(true, 'seat');
+    } else if (before < 5) {
+      // 不足 5 张补齐：均摊后只有【原来为空】的槽是新卡，只给它们播渐大。
+      if (avail < 5 || !this._craftDec(k, 5, before)) return;
       st.count = 5;
-      this._craftSyncCards(true);
+      const fresh = [];
+      for (let i = before; i < 5; i++) fresh.push(i);
+      this._craftSyncCards(true, 'seat', null, fresh);
     } else {
-      if (avail < 5 || !this._craftDec(k, 5)) return;
-      st.count += 5;
-      // 超过 5 张只是【继续叠加显示 xN】，绝不自动开始——必须玩家点 Craft。
-      this._craftSyncCards(true);
+      if (avail < before + 5 || !this._craftDec(k, before + 5, before)) return;
+      st.count = before + 5;
+      // 同种继续叠加：只更新 xN 角标，不重播渐大；也绝不自动开始，必须点 Craft。
+      this._craftSyncCards(false, 'seat');
     }
     this._craftSyncTop();
     this._craftSyncList();
@@ -1282,71 +1375,87 @@ const UI = {
 
   // 聚拢-张开循环：频率固定，次数随稀有度变化；【末次聚拢到位后停留更久】，不是速度变慢。
   // 结果一定在某次聚拢停留结束后出现：成功原地炸粒子 + 展示成品卡；失败炸掉几张露空槽。
-  _craftStart(opts) {
-    opts = opts || {};
+  // 点 Craft 只做两件事：发合成请求 + 播【等回执】的动画。
+  // 没收到服务端返回就一直聚拢/张开；收到且动画时长够了，下一次聚拢停留更久再结算。
+  _craftStart() {
     const st = this._craft;
     if (st.state !== 'loaded' || !st.kind || !st.target || st.count < 5) return;
-    st.auto = !!opts.auto;
-    // 先一次性算完全部轮次结果：无论装了 5 张还是 50 张，动画只播这一遍。
-    st.plan = this._craftPlan(st.count, this.CRAFT_CHANCE[st.target] || 0);
     st.state = 'anim';
+    st.answer = null;
+    st.final = false;
+    st.nextFinal = false;
+    st.holdT = 0;
     this.refs.craftGo.disabled = true;
     this.refs.craftStage.classList.add('crafting');
+    // 聚拢阶段槽位不显示（缩到 0 + 透明），给回位时的"渐大渐显"留出空间
+    this._craftSlots.forEach((s) => {
+      s.style.transition = '';
+      s.style.opacity = '0';
+      s.style.transform = 'scale(0)';
+    });
     if (this._craftBigEl) this._craftBigEl.classList.add('hidden');
     // 强制清掉上一次卸下 pop-out 的残留：确保参与合成的卡一定可见、transform 归 JS 管
-    st.els.forEach((el, i) => {
-      const cnt = Math.max(0, st.count) > 0;
-      el.style.display = cnt ? '' : 'none';
+    st.els.forEach((el) => {
+      el.style.display = st.count > 0 ? '' : 'none';
       el.style.opacity = '1';
-      if (el.firstElementChild) el.firstElementChild.classList.remove('craft-pop', 'craft-pop-out');
+      Array.prototype.forEach.call(el.children,
+        (k) => k.classList.remove('craft-pop', 'craft-pop-out'));
     });
 
     const period = this._CRAFT_CYCLE;
-    st.cycles = Math.max(1, Math.round(this._craftMeanOf(st.target) / period));
     st.cycle = 0;
     st.cycT = 0;
     st.cycDur = period;
-    // 末次停留时长（聚拢到位后夹紧不动的时间）
+    // 最小动画时长：回执再快也要播够这么多周期，且【下一次聚拢】才停留
+    st.minCycles = Math.max(1, Math.round(this._craftMeanOf(st.target) / period));
     st.holdDur = period * this._CRAFT_LAST_K;
-    st.holding = false;
     st.acc = 0;
     st.close = 0;
     st.last = performance.now();
     st.n = Math.max(1, Math.round(this._craftCountOf(st.target) * (0.75 + Math.random() * 0.5)));
     const color = this._craftColor(st.target);
 
+    // 唯一上行：合成请求。核实/概率/扣加/结果全在服务端，客户端不传 target 或概率。
+    const reqSeq = ++st.reqSeq;
+    this._invRequest('craft', st.kind.key, st.count).then((r) => {
+      if (reqSeq !== st.reqSeq || st.state !== 'anim') return;
+      if (!r) return;   // 网络层无回执：继续聚拢/张开，绝不自行结算
+      // 服务端明确拒绝（如库存被别处消耗）也算回执：按无损原样返回，避免动画卡死。
+      st.answer = (r.wins != null) ? r
+        : { wins: 0, losses: 0, left: st.count, target: st.target, inventory: r.inventory };
+    });
+
     const step = (now) => {
       if (st.state !== 'anim') return;
       const dt = Math.min(0.05, (now - st.last) / 1000);
       st.last = now;
       st.cycT += dt;
-      const isLast = st.cycle === st.cycles - 1;
-      let pr, close, holding = false;
+      let pr = 0, close = 0, holding = false;
 
-      if (isLast) {
-        // 末次：0→0.5 正常聚拢；到 0.5（最紧）后【停留 holdDur】，不再张开
+      if (st.final) {
+        // 末次停留：不再张开，holdDur 结束才结算
+        close = 1;
+        holding = true;
+        st.holdT += dt;
+        if (st.holdT >= st.holdDur) { this._craftResolve(); return; }
+      } else if (st.nextFinal) {
+        // 回执已到且动画时长够：这一轮只走聚拢半程，到最紧后转入停留
         pr = Math.min(1, st.cycT / st.cycDur);
         if (pr >= 0.5) {
-          close = 1;
-          holding = true;
-          if (st.holdT == null) st.holdT = 0;
-          st.holdT += dt;
-          if (st.holdT >= st.holdDur) { this._craftResolve(); return; }
+          st.final = true; st.holdT = 0; close = 1; holding = true;
         } else {
-          close = 0.5 - 0.5 * Math.cos((pr / 0.5) * Math.PI);  // 只做聚拢半程
+          close = 0.5 - 0.5 * Math.cos((pr / 0.5) * Math.PI);
         }
       } else {
+        // 没回执 / 时长不够：一直聚拢-张开，绝不自行结算
         pr = st.cycT / st.cycDur;
         if (pr >= 1) {
-          st.cycle++;
-          st.cycT = 0;
-          pr = 0;
-          close = 0;
+          st.cycle++; st.cycT = 0; pr = 0; close = 0;
+          if (st.answer && st.cycle >= st.minCycles) st.nextFinal = true;
         } else {
           close = 0.5 - 0.5 * Math.cos(pr * TAU);
         }
       }
-      st.holding = holding;
       st.close = close;
       const jAmp = 0.3 + 5.5 * close;
       const jRot = (Math.random() * 2 - 1) * (1 + 5 * close);
@@ -1380,59 +1489,64 @@ const UI = {
     st.raf = requestAnimationFrame(step);
   },
 
-  // 末次聚拢停留结束：一次性结算【全部】轮次——成功直接 xN 展示多张成品，失败炸卡露空槽。
-  // 不管装了 5 张还是 50 张，动画只有刚才那一遍，这里不再重新 _craftStart。
+  // 末次停留结束：只【展示】服务端回执的结果。新背包已由 _invRequest 回执应用。
   _craftResolve() {
     const st = this._craft;
     cancelAnimationFrame(st.raf);
     st.raf = 0;
-    st.holdT = null;
-    const k = st.kind, target = st.target;
-    if (!k || !target) return;
-    const plan = st.plan || { wins: 0, losses: 0, left: st.count, rounds: 1 };
-    st.plan = null;
-    const wins = plan.wins, losses = plan.losses;
+    const ans = st.answer, k = st.kind;
+    if (!ans || !k) return;
+    const wins = ans.wins || 0, losses = ans.losses || 0;
+    const target = ans.target || st.target;
+    // 服务端说最后只剩几张就显示几张（1~4），均摊由 _craftSyncCards 负责。
+    st.count = Math.max(0, ans.left);
+    st.answer = null;
+    st.final = false;
+    st.nextFinal = false;
 
-    if (wins > 0) this.addGalleryCount(k.type, target, wins);
-    st.count = Math.max(0, plan.left);
-    st.wins = wins;
-
+    // 剩余卡固定均摊到【前 left 槽】，所以被炸的必须是【尾部槽】。
+    // 旧版随机选会选中保留槽：那张卡渐小消失后，本该有卡的槽反而空了 —— 看起来多损一张。
+    // 必须先判 losses>0：全成功时 left=0，不看这一条会把所有卡误判成炸卡。
     let dying = null;
-    const vis = st.els.filter((el) => el.style.display !== 'none');
-    if (losses > 0 && vis.length) {
-      // 损失表现（视觉上限 4 张）：粒子从每张卡【当前位置】迸发、短寿命且立即渲染首帧；
-      // 卡本身渐小消失，不参与后续回位/重建，槽位随之露出。
-      dying = new Set();
-      const nDying = Math.min(4, losses, vis.length);
-      const per = Math.max(1, Math.round(st.n * 0.4 / nDying));
-      const rect = this.refs.craftStage.getBoundingClientRect();
-      for (let i = 0; i < nDying; i++) {
-        const idx = Math.floor(Math.random() * vis.length);
-        const el = vis.splice(idx, 1)[0];
-        dying.add(el);
-        const px = (parseFloat(el.style.left) || 50) / 100 * rect.width;
-        const py = (parseFloat(el.style.top) || 50) / 100 * rect.height;
-        this._craftFxBurst(this._craftColor(k.rarity), per, px, py, true);
-        this._craftPop(el, true);
-      }
+    if (losses > 0) {
+      const tail = st.els.filter((el) => el.style.display !== 'none').reverse();
+      const nDying = Math.max(0, tail.length - st.count);
+      if (nDying > 0) dying = new Set(tail.slice(0, nDying));
     }
-    if (wins > 0) this._craftFxBurst(this._craftColor(target), st.n);
 
-    st.batch = 0;
-    st.auto = false;
     if (wins > 0) {
-      // 成功：卡堆保持聚拢在中心（跳过炸卡，避免重建打断渐小），成品带 xN 原地渐大展示；
-      // 5 个空槽先不出现，等点击结果 / 下一拨才从中心张开。
+      this._craftFxBurst(this._craftColor(target), st.n);
+      // 混合批次：损失的那几张也要原地渐小 + 粒子跟随，不能只被跳过一直挂在中心
+      if (dying && dying.size) {
+        const per = Math.max(1, Math.round(st.n * 0.4 / dying.size));
+        const loseColor = this._craftColor(k.rarity);
+        dying.forEach((el) => {
+          this._craftFxBurst(loseColor, per, null, null, true, el);
+          this._craftPop(el, true);
+        });
+      }
       st.resultPending = false;
       st.state = 'result';
-      this._craftSyncCards(false, true, dying);
+      this._craftSyncCards(false, 'center', dying);
       this._craftShowFinal(target, k.type, wins);
     } else {
-      // 失败：炸卡原地渐小 与 剩余卡+槽快速回位 同步开始
       st.resultPending = true;
       st.state = st.count > 0 ? 'loaded' : 'idle';
       if (!st.count) { st.kind = null; st.target = null; }
-      this._craftSpread(dying);
+      // 先只换角标（不动位置），再让剩余卡 + 槽 + 炸卡一起飞回
+      this._craftSyncCards(false, 'keep', dying);
+      // 兜底：保留槽若还留着上一轮的渐小类/透明/display:none，会"剩余卡不显示"，这里强制恢复
+      const base = Math.floor(st.count / 5), rem = st.count % 5;
+      st.els.forEach((el, i) => {
+        if (dying && dying.has(el)) return;
+        if (base + (i < rem ? 1 : 0) <= 0) return;
+        el.style.display = '';
+        el.style.opacity = '1';
+        clearTimeout(el._craftPopT);
+        Array.prototype.forEach.call(el.children,
+          (kid) => kid.classList.remove('craft-pop', 'craft-pop-out'));
+      });
+      this._craftSpread(dying, k.rarity);
     }
     this._craftSyncTop();
     this._craftSyncList();

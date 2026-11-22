@@ -257,8 +257,15 @@ body {
 }
 /* 切卡 / 加卡 / 卸下的渐大渐小：只缩放【卡面内容】，绝不动卡片本体的
    left/top/transform —— 那些每帧由合成动画写，CSS 动画会覆盖导致卡片"消失"。 */
+/* 数量角标是 canvas 的兄弟节点，必须和卡面【同一时刻同一曲线】一起渐大/渐小，
+   否则会出现"卡没了、xN 才突然消失"。 */
 .craft-card > .card.craft-pop { animation: craft-pop .22s cubic-bezier(.3, 1.5, .5, 1); }
-.craft-card > .card.craft-pop-out { animation: craft-pop-out .22s ease-in forwards; }
+.craft-card > .card.craft-pop-out { animation: craft-pop-out .22s cubic-bezier(.3, 1.5, .5, 1) forwards; }
+/* 角标自带 rotate(30deg)，必须用它自己的关键帧保住旋转，否则动画期间会突然摆正 */
+.craft-card > .card-count.craft-pop { animation: craft-pop-count .22s cubic-bezier(.3, 1.5, .5, 1); }
+.craft-card > .card-count.craft-pop-out {
+  animation: craft-pop-out-count .22s cubic-bezier(.3, 1.5, .5, 1) forwards;
+}
 @keyframes craft-pop {
   from { transform: scale(.35); opacity: .4; }
   to   { transform: scale(1); opacity: 1; }
@@ -266,6 +273,14 @@ body {
 @keyframes craft-pop-out {
   from { transform: scale(1); opacity: 1; }
   to   { transform: scale(.2); opacity: 0; }
+}
+@keyframes craft-pop-count {
+  from { transform: rotate(30deg) scale(.35); opacity: .4; }
+  to   { transform: rotate(30deg) scale(1); opacity: 1; }
+}
+@keyframes craft-pop-out-count {
+  from { transform: rotate(30deg) scale(1); opacity: 1; }
+  to   { transform: rotate(30deg) scale(.2); opacity: 0; }
 }
 /* UI 层方形粒子画布：就在合成舞台内，不受世界坐标/相机影响。
    z-index 0 = 位于槽位(1)和卡片(2)【下方】，粒子不会盖住卡面。 */
@@ -289,13 +304,17 @@ body {
 }
 .craft-btn {
   min-width: 56px; padding: 4px 6px; border-radius: 5px; cursor: pointer;
-  border: 2.4px solid #000; background: #8a8a8a; color: #fff;
+  border: 2.4px solid #242424; background: #8a8a8a; color: #fff;
   font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 800;
-  -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;
+  -webkit-text-stroke: 1.2px #1e1e1e; paint-order: stroke fill;
   transition: transform .08s;
 }
 .craft-btn:active { transform: scale(.95); }
-.craft-btn:disabled { cursor: default; }
+/* 不足 5 张：灰色 + 略深描边，明确"不可用"，不再只是不能点 */
+.craft-btn:disabled {
+  cursor: default; background: #5a5a5a; border-color: #3a3a3a;
+  color: #c2c2c2; -webkit-text-stroke-color: #222;
+}
 .craft-chance {
   font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 10.4px; font-weight: 800;
   color: #fff; -webkit-text-stroke: 1.4px #000; paint-order: stroke fill;

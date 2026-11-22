@@ -105,6 +105,8 @@ const BossBar = {
 
   draw(ctx, g) {
     if (!g || !this.items.length) return;
+    // 与生物名牌同一开关：「显示生物血量条」关掉时顶部 Boss 血条一起隐藏。
+    if (typeof Settings !== 'undefined' && Settings.get('showMobHpBar') === false) return;
     for (const it of this.items) {
       if (it.a <= 0.002 || !it.mob) continue;
       this._drawOne(ctx, g, it);

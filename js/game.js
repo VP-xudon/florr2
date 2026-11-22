@@ -1108,7 +1108,11 @@ class Game {
 
 
 
-  spawnText(x, y, text, color) { this.dmgTexts.push(new DamageText(x, y, text, color)); }
+  // 伤害 / 回血反馈数值的唯一出口；图像设置关掉时直接不生成。
+  spawnText(x, y, text, color) {
+    if (typeof Settings !== 'undefined' && Settings.get('showFeedback') === false) return;
+    this.dmgTexts.push(new DamageText(x, y, text, color));
+  }
   spawnParticles(x, y, color, n) {
     for (let i = 0; i < n; i++) this.particles.push(new Particle(x, y, color));
   }
@@ -1331,7 +1335,10 @@ class Game {
     if (me && !me.dead) { try { me.drawOverMobs(ctx); } catch (e) { console.error('[draw over-mob petals]', e); } }
 
     for (const pt of this.particles) pt.draw(ctx);
-    for (const d of this.dmgTexts) d.draw(ctx);
+    // 反馈数值关掉时连已生成的飘字也不画，切换开关立即清屏。
+    if (typeof Settings === 'undefined' || Settings.get('showFeedback') !== false) {
+      for (const d of this.dmgTexts) d.draw(ctx);
+    }
 
     // /pending crash 1：碰撞箱叠加层（世界坐标系，画在实体之上，不影响任何判定）
     this._drawHitboxes(ctx, this._visibleMobs);

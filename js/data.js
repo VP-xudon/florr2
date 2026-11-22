@@ -19,6 +19,17 @@ const RARITIES = {
 };
 const RARITY_ORDER = ['common', 'unusual', 'rare', 'epic', 'legendary', 'mythic', 'ultra', 'super', 'eternal'];
 
+// 合成成功率表（按【目标稀有度】）——服务端权威计算与客户端显示共用同一份，
+// 不允许在 UI 里另存一份。目标一律由服务端从材料稀有度推导，不采信客户端上报。
+const CRAFT_CHANCE = {
+  unusual: 0.64, rare: 0.38, epic: 0.19, legendary: 0.09, mythic: 0.04,
+  ultra: 0.02, super: 0.01, eternal: 0.001
+};
+function craftTargetOf(rarity) {
+  const i = RARITY_ORDER.indexOf(rarity);
+  return (i >= 0 && i + 1 < RARITY_ORDER.length) ? RARITY_ORDER[i + 1] : null;
+}
+
 // 生物护甲（armor）默认表：registry 暂无 armor 字段，按稀有度给默认值；
 // rarityStats.armor / type.armor 存在时优先生效（瓢虫等被动生物也走这条链路）。
 const MOB_ARMOR = { common: 0, unusual: 0, rare: 1, epic: 2, legendary: 3, mythic: 5, ultra: 8, super: 12, eternal: 16 };

@@ -104,7 +104,11 @@
     'UI/Craft/Consume': 'Consume 5 identical petals to craft once.',
     'UI/Craft/FailNote': 'On failure 1~4 petals are lost.',
     'UI/Craft/Chance': 'Success rate: {0}%',
-    'UI/Craft/ShiftNote': 'Shift + click: craft all leftovers automatically.'
+    'UI/Craft/ShiftNote': 'Shift + click: craft all leftovers automatically.',
+    // ---- 设置窗口：图像 ----
+    'UI/Settings/ShowMobHpBar': 'Show mob health bars',
+    'UI/Settings/ShowFeedback': 'Show feedback numbers',
+    'UI/Settings/ApplyNow': 'Changes apply immediately.'
   };
 
   const ZH = {
@@ -197,7 +201,11 @@
     'UI/Craft/Consume': '消耗5个相同的花瓣来进行一次合成',
     'UI/Craft/FailNote': '失败会损失1~4个花瓣',
     'UI/Craft/Chance': '成功率: {0}%',
-    'UI/Craft/ShiftNote': 'Shift + 点击：自动用全部剩余卡片连续合成'
+    'UI/Craft/ShiftNote': 'Shift + 点击：自动用全部剩余卡片连续合成',
+    // ---- 设置窗口：图像 ----
+    'UI/Settings/ShowMobHpBar': '显示生物血量条',
+    'UI/Settings/ShowFeedback': '显示反馈数值',
+    'UI/Settings/ApplyNow': '改动立即生效。'
   };
 
   I18N.addPack('en_US', EN);

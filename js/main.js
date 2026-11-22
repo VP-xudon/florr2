@@ -49,6 +49,8 @@ async function boot() {
     game.start();
     game.syncInventory();   // 初始渲染卡槽（花朵下方快捷栏常驻显示）
     window.__game = game;   // 供 UI 取玩家数据（如物品栏落点）
+    // 背包是服务端权威：启动后拉一次镜像，之后所有增减都走 UI._invRequest 的回执。
+    if (UI && typeof UI.syncInventoryFromServer === 'function') UI.syncInventoryFromServer();
   } catch (e) {
     console.error('[boot] 初始化失败：', e);
   } finally {

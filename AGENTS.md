@@ -35,7 +35,9 @@ python -m http.server 8000
 - URL 参数：`?hp=N`（同时设置当前与最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控层）。
 - 热键：`F3` 调试屏幕、`C` 合成窗口（调试屏幕打开时改为切碰撞箱）、
   `M` 小地图档位、`Z` 背包、`R` 主副槽整排互换、`1~0` 换列。
-- 语言、键盘移动、调试模式在游戏内设置窗口，存 Cookie `florr_settings`。
+- 设置窗口分 Game / Controls / Graphics / Credits，存 Cookie `florr_settings`：
+  语言（重启生效）、键盘移动、调试模式、`showMobHpBar`（显示生物血量条，含顶部 Boss 血条）、
+  `showFeedback`（显示反馈数值，伤害/回血飘字）。后四项当场生效，两个图像开关默认开启。
 - 控制台：`window.__game` 是 `Game` 实例，`window.__queryParams` 是解析后的参数，
   `window.__debug` 是调试开关；`Game.stepFrames(n, dt)` 可按固定步长推进世界。
 
@@ -148,6 +150,18 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   本地玩家在客户端预测，服务端跑同一套物理校验。
 - 上行：`{t:'input'}`、`{t:'loadout'}`、`{t:'respawn'}`、`{t:'chat'}`。
 - 下行：`{t:'snap'}`、`{t:'evt'}`。
+- **背包与合成是服务端权威**：`LocalServer.inventory`（`type.key|rarity -> 数量`）是唯一库存，
+  客户端 `UI._gc` 只是回执镜像（由 `_applyInventory` 整体覆盖）。所有增减都走
+  `net.request('inv', {op, key, n})` → `invRequest`，它核实数量、算完结果后回传**整份**新背包。
+  op：`get` 拉镜像 / `take`·`return`·`add` 装备与拾取 / **`load` 装载（点击就扣料）** /
+  **`unload` 卸下（返还）** / **`craft` 合成** / **`takeResult` 领取结果**（无 key，放在 key 校验前）。
+  `pendingCraft = {key, n}` 是服务端记录的"已扣、待合成"材料：`load` 先返还上一批再扣新的 n；
+  `craft` **只消费 pending**（不采信客户端传来的 n/target），剩余 1~4 张转成新的 pending
+  继续留在装载槽（与客户端 `st.count` 一致），卸下时才返还。
+  `pendingResult = {key, count}` 是**服务端存储的待领取成品**：`craft` 只挂起、不写 inventory，
+  所以背包和合成列表都不会提前显示结果；点结果卡（`takeResult`）或被下一拨/卸下"替下"时
+  才真正计入 inventory。目标由 `craftTargetOf` 从材料稀有度推导，概率取 `data.js` 的 `CRAFT_CHANCE`。
+  启动时 `main.js` 调 `UI.syncInventoryFromServer()` 拉一次镜像。
 - 快照频率 `SNAP_HZ = 25`，`LocalNet.step` 按 `SNAP_DT` 累加并保留余量后下发。
 - 快照内容：`player`、`petals`（按 `petalNetKey` 定位）、`ents`（全量生物 + `FX_FIELDS`）、
   `webs`、`projectiles`。
@@ -438,58 +452,75 @@ EntityFX.hurt(ent, dur);
   每帧 `v = v × exp(-drag×dt) + a×dt`，`a = 目标速度 × MOVE_DRAG_ACTIVE`。
   稳态速度 = `a/drag`，转向保留旧速度一小段（侧滑惯性），松开靠阻尼滑停；
   客户端预测与服务端权威共用 `Player.update`，两端同一份常量，禁止只在单边加力。
-- **合成窗口（Craft）**：纯客户端 —— 库存就是背包的 `_gc`（`type.key|rar -> 数量`），
-  与背包/装备同一份口径。
+- **合成窗口（Craft）**：**服务端权威** —— 客户端只发合成请求 + 播动画；`_gc` 只是服务端
+  库存的**只读镜像**（`type.key|rar -> 数量`）。库存增减、成功率、结果计算全在服务端，
+  插件改本地镜像改不到权威状态。
   · 入口：左下角 `craftBtn`（`assets/ui/btn-party.svg`，与背包同尺寸，位于其下方）或 `C` 键；
     动效与背包一致（主色 #db9d5a，描边 #b17f49）。**窗口宽 432px（背包 1.5×）、
     高 1.3×（max-height 530px），增加的高度全给下方卡片列表**，舞台固定 178px。
   · 舞台 `.craft-stage` 用 `flex: 1 1 auto` 吃满主行剩余宽度（按钮侧栏固定 112px 靠右），
     5 槽不能被挤窄。5 个材料槽按【正五边形】排列（一个顶点朝上），空槽/卡片均 48px。
-    **点击空槽或卡片 = 卸下全部材料并返还库存**（动画中不可卸）。
+    **点击空槽或卡片 = 卸下全部材料**（服务端 `unload` 把已扣的装载返还背包；动画中不可卸）。
   · 多张卡【均摊到 5 个槽】：`base = count/5 | 0`、`rem = count%5`，前 rem 槽 +1，
     每槽卡面带 xN 角标（`CardRenderer.createCard({count})`），合成过程中角标同样保留。
     不再把散卡堆在中心，也不显示损耗。
   · 下半列表：库存按【花瓣种类】分行，同种不同稀有度同一行，每行 8 格 common..super
-    （**Eternal 不计入**）；零库存格 = 图鉴同款灰槽常显；有货格上色可点。
+    （**Eternal 不计入**）；有货格常显，**只有 `n >= 5` 才上色可点，`n = 1~4` 灰化不可点**
+    （`on/off` 类 + `.off .card { filter: grayscale }`），零库存格同样是灰槽。
     悬浮只出 tooltip，无额外 hover 样式。
+  · 点击装材料即【服务端扣料】（`inv{op:'load'}`），背包数量立刻减少；卸下走 `unload` 返还。
+    5 槽待合成卡与背包卡同款悬浮框（类型实时读当前 `st.kind`，换卡自动跟着变）。
   · 点击行为：① 异种 → 退回现有材料再装 5 张；② 同种不足 5 → 补齐；
     ③ 同种已满 5 → 再叠 5 张，只更新 xN 角标，**绝不自动开始，必须点 Craft**；
     ④ **Shift+点击 → 装入全部库存并直接开始**（唯一的自动合成入口）。
-  · 成功率表 `UI.CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1%，按目标稀有度）；
-    失败损失 1~4 张四档均分，**损失的卡不返还、剩余 1~4 张直接留原槽**（不展示损耗）。
-  · 计时：聚拢【周期固定】`_CRAFT_CYCLE = 1.25s`（= 原 0.5s ÷ 0.4，速度降为 0.4×，
-    不随目标稀有度变）；**次数随稀有度变化** `cycles = round(mean/3 / 1.25)`，
-    次数变少但总时长仍 = 旧口径 1/3。
-    末次【不是把周期拉长变慢】，而是 0→0.5 正常聚拢到最紧后**停留** `holdDur = 0.5×1.6`
-    （`holding` 帧 close 固定 1、不再张开、不再迸发中途粒子），停留结束才结算。
+  · Craft 按钮描边深灰 `#242424`（不再是纯黑）；不足 5 张时 `:disabled` 灰底
+    `#5a5a5a` + 略深描边 `#3a3a3a` —— JS 只给可用态写 inline 目标色，不可用态清空 inline 让 CSS 生效。
+  · 成功率表在 `data.js` 的 `CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1%，按目标稀有度），
+    **服务端据此计算，目标由 `craftTargetOf` 从材料稀有度推导，不采信客户端上报**；
+    失败损失 1~4 张四档均分，剩余必定 1~4 张（不展示损耗）。
+  · 计时由服务端回执驱动：`_craftStart` 只发 `inv{op:'craft'}` 请求，**没回执就一直聚拢/张开，
+    绝不自行结算**；收到后先确保动画时长够 `minCycles`，再在【下一次聚拢】走半程到最紧后
+    **停留** `holdDur = 1.25×1.6`，停留结束才 `_craftResolve` 展示回执结果。
+    周期固定 `_CRAFT_CYCLE = 1.25s`（原 0.5s ÷ 0.4，速度 0.4×）。
   · 动画：每周期 `close = 0.5 - 0.5cos(pr·TAU)`（末次只走 0→0.5 的聚拢半程再 hold）；
     抖动幅度 ∝ close；中途粒子只在聚拢段迸发（close>0.55 且相位上升），
     方形、目标稀有度色、unusual 1~2 → eternal ≈500，走 UI 层 canvas `.craft-fx`。
     **5 个槽位本体和卡同步收紧/张开**（不是静态灰槽）：`_craftStart` 逐帧写槽位 left/top
-    到中心，`_craftSpread(dyingSet)` 用【同一条 120ms 过渡】把槽位和卡一起放回五边形。
-    · **批量合成只播一次动画**：`_craftStart` 用 `_craftPlan(count, p)` 一次性算完所有轮
-     （成功 +1 成品、失败损 1~4 且剩余继续复用，直到不足 5 张），`_craftResolve` 一次性应用，
-     **不再逐轮 `setTimeout(_craftStart)` 重播**。成功 N 次 = 一次 `addGalleryCount(+N)` +
-     `.craft-big` 渐变展示带 **xN 角标的成品卡**（动画期间 5 槽本就带 xN 叠加显示）。
-     守恒：`wins*5 + losses + left === count`，且 `left < 5`。
+    到中心，`_craftSpread(dyingSet)` 用【同一条 120ms 弹簧曲线】
+    `cubic-bezier(.22,1.45,.36,1)`（起步快、尾段减速并轻微过冲）把槽位和卡一起放回五边形。
+    · **批量合成**：服务端 `invRequest({op:'craft', key, n})` 一次性算完所有轮（成功 +1、
+      失败损 1~4 且剩余继续复用，直到不足 5 张），扣 n 加 wins 后回传**整份新背包** +
+      `{wins, losses, left, target}`；客户端只展示 `.craft-big` 的 **xN 角标**，不逐轮重播。
+      守恒：`wins*5 + losses + left === n`，且 `left < 5`。
     · 结算表现：成功 = 中心【原地炸粒子】+ 成品卡，卡堆保持聚拢、**不重建卡面（避免闪一下）、
-     5 个空槽先不出现**；点这张结果卡（`_craftTakeResult`）或下一拨卡才从中心张开。
-     失败 = 炸掉 1~4 张（`_craftPop(out)` 渐小露空槽）+ 粒子，**炸卡渐小与剩余卡 + 槽回位同步**：
-     炸卡收进 `dyingSet`，`_craftSpread` 对它不 seat、不清隐藏定时器；其余卡和槽立即回位。
-    · 炸卡粒子【从卡当前位置迸发、短寿命 0.08~0.18s（归位结束前消散）、立即渲染首帧】
-     （`_craftFxBurst(..., quick=true)`），不再统一从中心延迟迸发；`.craft-fx` 的
-     `z-index:0` **低于槽位(1)与卡片(2)**，粒子不盖住卡面。
-    · 成品已自动 +N 进背包；点中心结果卡 `_craftTakeResult` = **直接点回背包/下方**，
-     结果卡收起、**不落到槽里**；不再用 `st.result` / `resultShown` 那套展示卡（已删除）。
+      5 个空槽先不出现**；点结果卡（`_craftTakeResult`）或下一拨才从中心张开。
+      失败 = 炸卡取【尾部槽】：`nDying = 原可见槽数 - left`。旧版随机选会命中前排保留槽，
+      渐小后本该有卡的槽反而空一格（看起来多损一张）。`_craftSyncCards(false,'keep',dying)`
+      只把前 left 槽换成 x1，尾部被炸槽保持可见并随槽飞回；
+      **从飞回这一刻就 `_craftPop(out)` 渐小**（220ms > 120ms 回位，移动全程都在缩），
+      粒子一次性崩出并 `follow` 卡片逐帧跟随，卡隐藏后留在最后位置飞散（不跳回中心、不持续崩）。
+      槽从 scale(0)/opacity(0) 渐大渐显（聚拢阶段槽隐藏）。
+    · 渐小与渐大同为 `.22s` + `cubic-bezier(.3,1.5,.5,1)`（同样弹感）；
+      **所有 `_craftFxBurst` 都立即渲染首帧**（成功粒子也不再有延迟）；
+      炸卡粒子短寿命 0.08~0.18s；`.craft-fx` 的 `z-index:0` 低于槽(1)与卡(2)。
+    · 成品在 `craft` 时只进服务端 `pendingResult`，**不写 inventory**（背包/合成列表不提前显示）；
+     点中心结果卡或被替下时 `_craftTakeResult` 发 `takeResult` 才真正入包，
+     并走 `_craftFlyToBag`：克隆结果卡飞向左下角背包按钮（canvas 克隆不带像素，
+     需 `drawImage` 手动复制），给出"已返还背包"的可见反馈；结果卡收起、**不落到槽里**。
     · 切卡 / 加卡 / 卸下统一走 `_craftPop(el)` 渐大渐小，**渐大渐小同为 220ms**
-     （CSS `.22s` 与 JS 隐藏定时器 220ms 对齐）。**pop class 只加在卡面子元素 `.card` 上**
-     （CSS 选择器 `.craft-card > .card.craft-pop`），绝不作用在 `.craft-card` 本体：
-     本体的 `left/top/transform` 由合成动画逐帧写，被 CSS animation（尤其 `both`）覆盖会
-     把卡锁在 `scale(.35)/opacity .4` 看起来"消失"。`_craftStart` 开头强制清残留 pop 并恢复可见。
-     `_craftSeat` 归位时清 `transform`、`_craftSyncCards` 清 `transition/opacity`，
+     （CSS `.22s` 与 JS 隐藏定时器 220ms 对齐）。**pop class 同时加在 `.card` 与数量角标
+     `.card-count` 上**：角标是 canvas 的兄弟节点，只动 canvas 会出现"卡没了、xN 才突然消失"；
+     角标自带 `rotate(30deg)`，用专用 `craft-pop-count` 关键帧保住旋转。
+     pop 绝不作用在 `.craft-card` 本体：本体的 `left/top/transform` 由合成动画逐帧写，
+     被 CSS animation 覆盖会把卡锁在 `scale(.35)/opacity .4` 看起来"消失"。
+    · **点击不闪**：`_craftSyncCards` 对同种卡（`el._craftKindKey === st.kind.key` 且未在渐小）
+     只 `CardRenderer.setCount` 改角标、**不重建 canvas**；异种才重建。
+     ① 异种装载 = 全部渐大；② 不足 5 补齐 = 只给原来为空的槽（`before..4`）播渐大；
+     ③ 同种已满再加 5 张 = 只换角标、完全不播动画；④ Shift 装载也不额外闪。
+     `_craftStart` 开头强制清残留 pop 并恢复可见；`_craftSeat` 归位清 `transform`，
      防止上次合成的旋转/位移残留导致"放卡会歪"；`_craftPop` 用 `clearTimeout(el._craftPopT)`
-     + 重建后 `card.parentNode !== el` 判据防止旧定时器把新装的卡隐藏。
-     **没有蒙版、没有右上角多余结果卡**（旧 `.craft-out` 已删）。成品自动 +1 进背包；
+     + `children[0].parentNode !== el` 判据防止旧定时器把新装的卡隐藏。
+     **没有蒙版、没有右上角多余结果卡**（旧 `.craft-out` 已删）。成品由服务端加进背包并回传；
      `craftGo` 绑定 `click -> _craftStart`；`_craftSyncTop` 显示成功率，空槽显示 `?`。
 - Antennae 的 `sight` 为官方视野比例，相机缩放 `1/(1+sight)`；
   所有以屏幕尺寸计算视口的位置都要除以缩放值。

@@ -9,7 +9,7 @@ const ASSET_VER = 20;  // 20: mob-shapes 增加 '5_body' / '6_body'（幼蚁/工
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
 // ---------------- 用户设置（Cookie 持久化） ----------------
-// 只存"重启后生效"的选项：语言、键盘移动、调试模式。
+// 语言重启后生效；其余选项（移动方式 / 调试 / 图像开关）当场生效。
 // 之所以用 Cookie 而不是 URL 参数：这些是用户偏好，不该每次开游戏都拼一遍查询串。
 // 读取时机必须早于 lang.js（语言包要在 data.js 之前定下来），所以放在最靠前的 util.js。
 window.Settings = (function () {
@@ -17,7 +17,9 @@ window.Settings = (function () {
   const DEFAULTS = {
     lang: 'en_US',        // 语言包代码（assets/i18n/<code>/<code>.js 的 <code>）
     keyboardMove: false,  // false = 鼠标移动（默认），true = 键盘移动
-    debug: false          // 开发者模式（原 ?mode=debug）
+    debug: false,         // 开发者模式（原 ?mode=debug）
+    showMobHpBar: true,   // 图像：显示生物血量条（含顶部 Boss 血条）
+    showFeedback: true    // 图像：显示反馈数值（伤害 / 回血飘字）
   };
   function load() {
     let raw = '';
