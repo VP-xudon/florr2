@@ -133,6 +133,13 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   （`UI.js` 的 `LOADING_SPIDER_WORKER` 复刻 `assets/ui/spider_loading_sequenced.svg` 的 8 条腿与 4.8s 关键帧，
   直接画白蛛；主线程同步预热不再冻住它）。不支持 `transferControlToOffscreen` 时退回内联 SVG + `invert(1)`。
   动画与文字间距 40px，下方 36px Ubuntu 白字「Loading...」。蒙版【至少展示 5s】（不足则补等）。
+- 加载完成的退场序列（`UI.hideLoading()`，蒙版【先不撤】）：
+  ① `#loading.fade-out`：蜘蛛动画与 Loading 文案整体渐隐（450ms）；
+  ② 内联 `assets/ui/studio-logo.svg`（已翻成白色，居中 220px 适当缩放）播放一次，
+     等内部最长关键帧 `sunrise` 结束（animationend，8.5s 定时器兜底，reduced-motion 也不挂死）；
+  ③ 停留 2s；
+  ④ `#loading.gone` 整块蒙版渐隐 450ms 后才 `display:none`，露出已在跑的游戏画面。
+  logo 的 SVG 文本在 `UI.init` 时预取（`_studioLogoSvg`），退场时不再等网络。
 - 预热任务全部【协作式让帧】：`boot()` 的 `yieldFrame()` 在每个阶段之间、瓦片每 8 组、
   生物位图每 8 项、卡面每 8 张、背包每个稀有度分组后各 `await requestAnimationFrame`。
   同步长任务会占满主线程让 SVG 动画"播一下就冻住"；末尾不再 `repaintAll`（会再堵一次）。
@@ -485,19 +492,32 @@ EntityFX.hurt(ent, dur);
     每槽卡面带 xN 角标（`CardRenderer.createCard({count})`），合成过程中角标同样保留。
     不再把散卡堆在中心，也不显示损耗。
   · 下半列表：库存按【花瓣种类】分行，同种不同稀有度同一行，每行 8 格 common..super
-    （**Eternal 不计入**）；有货格常显，**只有 `n >= 5` 才上色可点，`n = 1~4` 灰化不可点**
-    （`on/off` 类 + `.off .card { filter: grayscale }`），零库存格同样是灰槽。
+    （**Eternal 不计入**）；有货格常显，**库存 + 同种同稀有度已装载的剩余张数 ≥ 5 才上色可点**
+    （`_craftCellOn`：失败后装载槽里剩的 1~4 张会被下一次 `load` 先返还，所以能补齐一炉），
+    否则灰化不可点（`on/off` 类 + `.off .card { filter: grayscale }`），零库存格同样是灰槽。
+    库存被扣到 0 时直接隐藏该格卡面，不留旧角标的幽灵卡。
     悬浮只出 tooltip，无额外 hover 样式。
   · 点击装材料即【服务端扣料】（`inv{op:'load'}`），背包数量立刻减少；卸下走 `unload` 返还。
+    服务端 `load` 的够不够判定必须把【同种上一批 pending 的返还量】算进去（`_invCount(key) + refund`），
+    否则"装载 3 张 + 库存 2 张"要装 5 张会被误拒，客户端却按补齐显示 —— 既不扣料也能反复点。
+    **调试模式不跳过 `load`**（`_craftDec` 一律上行）：`craft` 只消费服务端 `pendingCraft`，
+    跳过装载就永远拿到 `no pending craft`，表现为"既不成功也不损耗"。
+    调试库存是 ∞，Shift 批量装料只发有限批次（5.0k 张，均摊到 5 槽 = 每槽 1.0k）；服务端入口拒绝非有限 `n`
+    （`Infinity` 会让 `craft` 的 `while (left >= 5)` 永远退不出去）。
+    服务端 `_invCount/_invSet` **实时读 `window.__debug`**（不缓存字段）：设置里关掉调试后
+    立刻恢复真实库存，不会残留"无限库存、怎么扣都不掉"的状态。
     5 槽待合成卡与背包卡同款悬浮框（类型实时读当前 `st.kind`，换卡自动跟着变）。
   · 点击行为：① 异种 → 退回现有材料再装 5 张；② 同种不足 5 → 补齐；
     ③ 同种已满 5 → 再叠 5 张，只更新 xN 角标，**绝不自动开始，必须点 Craft**；
-    ④ **Shift+点击 → 装入全部库存并直接开始**（唯一的自动合成入口）。
+    ④ **Shift+点击 → 批量装入全部库存**（调试 ∞ 按 5.0k，均摊每槽 1.0k），
+    **仍需自己点 Craft** —— Shift 不再自动合成，全 UI 没有任何自动合成入口。
   · Craft 按钮描边深灰 `#242424`（不再是纯黑）；不足 5 张时 `:disabled` 灰底
     `#5a5a5a` + 略深描边 `#3a3a3a` —— JS 只给可用态写 inline 目标色，不可用态清空 inline 让 CSS 生效。
   · 成功率表在 `data.js` 的 `CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1%，按目标稀有度），
     **服务端据此计算，目标由 `craftTargetOf` 从材料稀有度推导，不采信客户端上报**；
-    失败损失 1~4 张四档均分，剩余必定 1~4 张（不展示损耗）。
+    失败损失 1~4 张四档均分（`1 + floor(random*4)`），剩余必定 1~4 张留在装载槽里，
+    损耗在合成窗里以"尾部槽炸卡 + 剩余张数变少"体现；调试模式下库存是 ∞，但 `left` 仍按
+    真实损耗减少（合成窗里看得到掉卡），成功结果照常进 `pendingResult`。
   · 计时由服务端回执驱动：`_craftStart` 只发 `inv{op:'craft'}` 请求，**没回执就一直聚拢/张开，
     绝不自行结算**；收到后先确保动画时长够 `minCycles`，再在【下一次聚拢】走半程到最紧后
     **停留** `holdDur = 1.25×1.6`，停留结束才 `_craftResolve` 展示回执结果。
@@ -536,11 +556,12 @@ EntityFX.hurt(ent, dur);
     · **点击不闪**：`_craftSyncCards` 对同种卡（`el._craftKindKey === st.kind.key` 且未在渐小）
      只 `CardRenderer.setCount` 改角标、**不重建 canvas**；异种才重建。
      ① 异种装载 = 全部渐大；② 不足 5 补齐 = 只给原来为空的槽（`before..4`）播渐大；
-     ③ 同种已满再加 5 张 = 只换角标、完全不播动画；④ Shift 装载也不额外闪。
+     ③ 同种已满再加 5 张 = 只换角标、完全不播动画；④ Shift 批量装载也不额外闪、不自动合成。
      `_craftStart` 开头强制清残留 pop 并恢复可见；`_craftSeat` 归位清 `transform`，
      防止上次合成的旋转/位移残留导致"放卡会歪"；`_craftPop` 用 `clearTimeout(el._craftPopT)`
      + `children[0].parentNode !== el` 判据防止旧定时器把新装的卡隐藏。
      **没有蒙版、没有右上角多余结果卡**（旧 `.craft-out` 已删）。成品由服务端加进背包并回传；
+     中心成品卡 `.craft-big` 同样绑【卡牌悬浮框】（类型/稀有度实时读 `st.result`，成功后才出现）；
      `craftGo` 绑定 `click -> _craftStart`；`_craftSyncTop` 显示成功率，空槽显示 `?`。
 - Antennae 的 `sight` 为官方视野比例，相机缩放 `1/(1+sight)`；
   所有以屏幕尺寸计算视口的位置都要除以缩放值。

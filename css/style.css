@@ -1,5 +1,5 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #0e1a14; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 body {
   font-family: 'Ubuntu', -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-weight: 400;  /* 字体正常粗细，不加粗 */
@@ -516,6 +516,20 @@ body {
 #loadAnim { width: 120px; height: 120px; flex: 0 0 auto; }
 #loadAnim svg, #loadAnim canvas { display: block; width: 100%; height: 100%; }
 #loadText { flex: 0 0 auto; }
+/* 加载完成后的退场序列：蜘蛛 + 文案先渐隐 -> 播放一次映界 logo -> 停留 -> 整块蒙版渐隐。
+   蒙版在 #loadAnim/#loadText 改写 opacity 时不能整块跟着变，所以只给子元素加过渡。 */
+#loading.fade-out #loadAnim,
+#loading.fade-out #loadText { opacity: 0; transition: opacity .45s ease; }
+#loading.gone { opacity: 0; transition: opacity .45s ease; pointer-events: none; }
+/* studio logo：居中、放大到 220px（"适当缩放"），原本是黑的，素材已翻成白字适配纯黑蒙版 */
+#studioLogo {
+  position: absolute; left: 50%; top: 50%; width: 220px; height: 220px;
+  transform: translate(-50%, -50%); opacity: 0;
+  transition: opacity .5s ease; pointer-events: none;
+}
+#studioLogo.on { opacity: 1; }
+#studioLogo.hidden { display: none; }
+#studioLogo svg { display: block; width: 100%; height: 100%; }
 /* 加载过慢提示：定格于正上方中央的悬浮框（不随页面滚动，不阻塞交互） */
 #loadWarn {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%);

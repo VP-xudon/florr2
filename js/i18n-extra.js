@@ -104,7 +104,7 @@
     'UI/Craft/Consume': 'Consume 5 identical petals to craft once.',
     'UI/Craft/FailNote': 'On failure 1~4 petals are lost.',
     'UI/Craft/Chance': 'Success rate: {0}%',
-    'UI/Craft/ShiftNote': 'Shift + click: craft all leftovers automatically.',
+    'UI/Craft/ShiftNote': 'Shift + click: load all leftovers at once (press Craft to start).',
     // ---- 设置窗口：图像 ----
     'UI/Settings/ShowMobHpBar': 'Show mob health bars',
     'UI/Settings/ShowFeedback': 'Show feedback numbers',
@@ -201,7 +201,7 @@
     'UI/Craft/Consume': '消耗5个相同的花瓣来进行一次合成',
     'UI/Craft/FailNote': '失败会损失1~4个花瓣',
     'UI/Craft/Chance': '成功率: {0}%',
-    'UI/Craft/ShiftNote': 'Shift + 点击：自动用全部剩余卡片连续合成',
+    'UI/Craft/ShiftNote': 'Shift + 点击：一次性装入全部剩余卡片（仍需点 Craft 合成）',
     // ---- 设置窗口：图像 ----
     'UI/Settings/ShowMobHpBar': '显示生物血量条',
     'UI/Settings/ShowFeedback': '显示反馈数值',

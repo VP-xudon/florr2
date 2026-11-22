@@ -373,7 +373,7 @@ const UI = {
         </div>
       </div>
 
-      <div id="loading"><div id="loadAnim"></div><span id="loadText">${I18N.t('UI/Title/Loading', 'Loading...')}</span></div>
+      <div id="loading"><div id="loadAnim"></div><span id="loadText">${I18N.t('UI/Title/Loading', 'Loading...')}</span><div id="studioLogo" class="hidden"></div></div>
     `;
     document.body.appendChild(root);
     this.root = root;
@@ -390,9 +390,11 @@ const UI = {
       setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
       setShowHpBar: $('setShowHpBar'), setShowFeedback: $('setShowFeedback'),
       slotRow: $('slotRow'), subRow: $('subRow'), statusRow: $('statusRow'),
-      loading: $('loading'), loadAnim: $('loadAnim'), loadText: $('loadText')
+      loading: $('loading'), loadAnim: $('loadAnim'), loadText: $('loadText'),
+      studioLogo: $('studioLogo')
     };
     this._initLoadAnim();
+    this._studioLogoSvg();   // 预取：加载完成后的退场序列要用（不阻塞 Loading）
     this._initOverlay();   // 悬浮框 / 卡牌覆盖层：纯 canvas
     this._mmInit();        // 小地图三档模式 + 地图名标签
     // 全局聊天：DOM 由 chat.js 建（挂在 #ui 下）；Enter 热键在这里统一管理
@@ -597,9 +599,62 @@ const UI = {
     if (vig) { vig.classList.remove('on'); setTimeout(() => vig.remove(), 450); }
   },
 
-  hideLoading() {
-    if (this.refs.loading) this.refs.loading.style.display = 'none';
+  // 加载完成后的退场序列（蒙版【先不撤】）：
+  //   ① 蜘蛛动画 + Loading 文案整体渐隐；
+  //   ② 播放一次映界 studio logo（适当缩放，内部关键帧随插入自动播一次）；
+  //   ③ 停留 2s；
+  //   ④ 最后才撤蒙版（蒙版自身渐隐，露出已经跑起来的游戏画面）。
+  async hideLoading() {
+    if (this._loadingHiding) return;
+    this._loadingHiding = true;
     this.hideLoadingWarn();
+    const el = this.refs.loading;
+    if (!el) return;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const logo = this.refs.studioLogo;
+    const html = await this._studioLogoSvg();
+    el.classList.add('fade-out');           // 现有内容先渐隐
+    await wait(450);
+    if (logo && html) {
+      logo.innerHTML = html;
+      logo.classList.remove('hidden');
+      void logo.offsetWidth;                // 强制重排：opacity 过渡与内部动画都要从头播
+      logo.classList.add('on');
+      await this._studioLogoPlayed(logo);   // 等最后一笔（太阳升起）画完
+      await wait(2000);                     // 停留 2s
+      logo.classList.remove('on');
+    }
+    el.classList.add('gone');               // 撤蒙版 = 整块渐隐后移出布局
+    await wait(450);
+    el.style.display = 'none';
+  },
+
+  // studio logo 的 SVG 文本只取一次（init 时预取，hideLoading 直接用缓存）。
+  _studioLogoSvg() {
+    if (!this._studioLogoP) {
+      this._studioLogoP = fetch('assets/ui/studio-logo.svg?v=' + ASSET_VER)
+        .then((r) => (r.ok ? r.text() : ''))
+        .catch(() => '');
+    }
+    return this._studioLogoP;
+  },
+
+  // 等 logo 内部最长的一段动画（sunrise: delay 2.6s + 5.333s ≈ 7.93s）结束。
+  // animationend 会从内部 rect 冒泡上来；prefers-reduced-motion / 动画被禁用时
+  // 永远不会触发，所以再用一个略长的定时器兜底，绝不让蒙版挂死。
+  _studioLogoPlayed(el) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        el.removeEventListener('animationend', onEnd);
+        resolve();
+      };
+      const onEnd = (e) => { if (e.animationName === 'sunrise') finish(); };
+      el.addEventListener('animationend', onEnd);
+      setTimeout(finish, 8500);
+    });
   },
 
   // 加载动画放在 Worker 的 OffscreenCanvas 上跑：主线程做同步预热时它照常 60fps。
@@ -877,6 +932,9 @@ const UI = {
   syncInventoryFromServer() { return this._invRequest('get'); },
   // 画廊卡数量（调试=∞）；拿空(<=0)后该卡不再渲染。只读镜像，不在此扣减。
   _galleryCount(key) {
+    // 调试模式统一走 ∞：服务端回执里的真实数字（例如初始 Basic 的 1）会覆盖镜像，
+    // 不能再让它把"调试库存"压成有限值 —— 否则合成列表会显示 x1、连 5 张都装不进去。
+    if (window.__debug) return Infinity;
     if (!this._gc) this._gc = {};
     if (!(key in this._gc)) this._gc[key] = this._gcDefault(key);
     return this._gc[key];
@@ -1036,6 +1094,12 @@ const UI = {
     const big = document.createElement('div');
     big.className = 'craft-big hidden';
     big.addEventListener('click', () => this._craftTakeResult());
+    // 成功的成品卡同样给卡牌悬浮框：类型/稀有度实时读 st.result（成功后才有）
+    big.addEventListener('mouseenter', () => {
+      const r = this._craft.result;
+      if (r) this._showTip(r.type, r.rarity, big);
+    });
+    big.addEventListener('mouseleave', () => this._hideTip());
     stage.appendChild(big);
     this._craftBigEl = big;
 
@@ -1232,6 +1296,7 @@ const UI = {
   _craftShowFinal(rarity, type, count) {
     const big = this._craftBigEl;
     if (!big) return;
+    this._craft.result = { type, rarity };   // 供结果卡悬浮框读取
     big.innerHTML = '';
     big.appendChild(CardRenderer.createCard({
       rarity, svg: type.svg, count: count > 1 ? count : 0, pad: 0.0756, radius: 0.0588
@@ -1300,6 +1365,18 @@ const UI = {
     this.refs.craftNote.innerHTML = note;
   },
 
+  // 可点判据：本格库存 + 【同种同稀有度已装载的剩余张数】 ≥ 5。
+  // 失败后装载槽里会剩 1~4 张（服务端 pendingCraft），它们会被下一次 load 先返还，
+  // 所以库存 2 张 + 装载 3 张其实能补齐一炉 —— 只按库存判会把它误灰化成不可点，
+  // 但点击其实能装（看起来禁用却能点、还不扣料）。
+  _craftCellOn(key, n) {
+    const st = this._craft;
+    const loaded = (st.kind && st.kind.key === key && st.count > 0) ? st.count : 0;
+    // 装载不足 5：库存 + 装载能补齐一炉就算可点；
+    // 已满 5（继续叠加）：多装一批还是要 5 张库存，不足就仍然是灰的。
+    return loaded >= 5 ? n >= 5 : n + loaded >= 5;
+  },
+
   // 下半部分 = 背包库存按【花瓣种类】分行（同种不同稀有度同一行，eternal 不计入）
   _craftSyncList(force) {
     const host = this.refs.craftList;
@@ -1342,11 +1419,15 @@ const UI = {
                 this._craftLoad({ key: t.type.key + '|' + r, type: t.type, rarity: r },
                   { shift: !!(e && e.shiftKey) }));
               this._bindTip(cell.cell, t.type, r);
-            } else CardRenderer.setCount(cell.cv, n);
+            } else {
+              CardRenderer.setCount(cell.cv, n);
+            }
           }
+          // 库存被扣到 0（装载/合成）时把卡面藏掉，否则会留着一张旧角标的"幽灵卡"
+          if (cell.cv) cell.cv.style.display = n > 0 ? '' : 'none';
         }
-        // 不足 5 张不可合成：灰色 off（CSS 已有 grayscale + 禁用光标）
-        const on = n >= 5;
+        // 凑不齐 5 张（本格库存 + 同种已装载剩余都算上）不可合成：灰色 off
+        const on = this._craftCellOn(t.type.key + '|' + r, n);
         if (cell.on !== on) {
           cell.on = on;
           cell.cell.classList.toggle('on', on);
@@ -1365,8 +1446,9 @@ const UI = {
       const r = rars[i], n = t.counts[r];
       const cell = document.createElement('div');
       cell.className = 'craft-cell';
-      const rec = { cell, cv: null, n, on: n > 0 };
-      cell.classList.add(n >= 5 ? 'on' : 'off');
+      const on = this._craftCellOn(t.type.key + '|' + r, n);
+      const rec = { cell, cv: null, n, on };
+      cell.classList.add(on ? 'on' : 'off');
       if (n > 0) {
         rec.cv = CardRenderer.createCard({
           rarity: r, svg: t.type.svg, count: n, pad: 0.0756, radius: 0.0588
@@ -1388,7 +1470,8 @@ const UI = {
   // 装载材料：点击即扣。refund = 当前已装载、即将被服务端返还的数量。
   // 预判用镜像 + refund（服务端 load 会先返还旧装载再扣新的 n）。
   _craftDec(kind, n, refund) {
-    if (window.__debug) return true;
+    // 调试模式也必须真的向服务端 load：合成只消费服务端的 pendingCraft，
+    // 跳过这一步会让 craft 永远返回 no pending craft（既不结算也不损耗）。
     if (this._galleryCount(kind.key) + (refund || 0) < n) return false;
     this._invRequest('load', kind.key, n);
     return true;
@@ -1420,10 +1503,13 @@ const UI = {
     if (st.state === 'result' || st.resultPending) this._craftTakeResult();
     const same = st.state === 'loaded' && st.kind && st.kind.key === k.key;
     const before = same ? st.count : 0;                  // 当前装载，服务端会先返还
-    const avail = this._galleryCount(k.key) + before;    // 可用总数（含即将返还的）
+    let avail = this._galleryCount(k.key) + before;      // 可用总数（含即将返还的）
     if (!(avail > 0)) return;
 
     if (opts.shift) {
+      // 调试库存是 ∞：Shift 不能把 Infinity 发上去（服务端 craft 的 while 永远退不出去），
+      // 统一按 5.0k 张的有限批次装载 —— 均摊到 5 个槽正好每槽 1.0k。
+      if (!Number.isFinite(avail)) avail = 5000;
       if (avail < 5) return;
       if (same) {
         if (!this._craftDec(k, avail, before)) return;
@@ -1436,11 +1522,10 @@ const UI = {
       st.kind = { key: k.key, type: k.type, rarity: k.rarity };
       st.target = this._craftTargetOf(k.rarity);
       st.state = 'loaded';
-      // Shift 紧接着就进合成动画，不再额外闪一遍渐大
+      // Shift 只负责批量装料（不额外闪渐大）；**绝不自动开始**，必须自己点 Craft。
       this._craftSyncCards(false, 'seat');
       this._craftSyncTop();
       this._craftSyncList();
-      setTimeout(() => this._craftStart(), 120);
       return;
     }
 

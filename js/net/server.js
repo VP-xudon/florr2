@@ -31,7 +31,6 @@ class LocalServer {
     // 背包权威：type.key|rarity -> 数量。客户端 _gc 只是它的镜像，
     // 任何增减都必须经 invRequest，插件改本地镜像改不到这里。
     this.inventory = Object.create(null);
-    this._debugInv = false;
     // 已扣下、等待合成的装载材料（key + 数量）。客户端不能自带数量，
     // craft 只能消费这份服务端记录，避免"装载不扣/重复扣/伪造数量"。
     this.pendingCraft = null;
@@ -73,7 +72,6 @@ class LocalServer {
     p.resetForSpawn(playerTemplate);
     p.webSink = this.fields;        // 玩家生成的网（Web 花瓣）统一进 server.fields（场级实体单源）
     // 调试模式给一张"取之不尽"的库存（用大数代替 Infinity，保证可 JSON 序列化）。
-    this._debugInv = !!(typeof window !== 'undefined' && window.__debug);
     const sk = (typeof STARTER_INV_KEY !== 'undefined') ? STARTER_INV_KEY : null;
     if (sk && !(sk in this.inventory)) this.inventory[sk] = 1;
     this._slotSig = '';
@@ -2425,8 +2423,11 @@ class LocalServer {
     for (const k in this.inventory) o[k] = this.inventory[k];
     return o;
   }
-  _invCount(key) { return this._debugInv ? Infinity : (this.inventory[key] || 0); }
-  _invSet(key, n) { if (!this._debugInv) this.inventory[key] = Math.max(0, n); }
+  // 调试开关是【用户设置】，运行中随时可能切换，所以这里必须实时读 window.__debug：
+  // 缓存成字段的话"开过调试再关掉"会让此后所有扣料/损耗都变成空操作（合成失败看不到消耗）。
+  _invDebug() { return !!(typeof window !== 'undefined' && window.__debug); }
+  _invCount(key) { return this._invDebug() ? Infinity : (this.inventory[key] || 0); }
+  _invSet(key, n) { if (!this._invDebug()) this.inventory[key] = Math.max(0, n); }
 
   invRequest(a) {
     const op = a.op;
@@ -2454,6 +2455,9 @@ class LocalServer {
     if (typeof key !== 'string' || !key) return Object.assign({ error: 'bad key' }, snap());
     const n = Math.max(1, Math.floor(Number(a.n) || 1));
     const fail = (err) => Object.assign({ error: err }, snap());
+    // 数量必须是有限正整数：Infinity（调试模式下 Shift 装全部）会让 craft 的
+    // `while (left >= 5)` 永远退不出去，必须在入口就拒掉。
+    if (!Number.isFinite(n)) return fail('bad n');
 
     if (op === 'take') {
       if (this._invCount(key) < n) return fail('not enough');
@@ -2462,8 +2466,11 @@ class LocalServer {
       this._invSet(key, this._invCount(key) + n);
     } else if (op === 'load') {
       // 装载合成材料：点击时就扣（库存立刻减少）；换卡/叠加先返还上一批。
-      if (this._invCount(key) < n) return fail('not enough');
+      // 同种补齐时上一批会被先返还：可用量必须算上它，否则"装载 3 张 + 库存 2 张"
+      // 要装 5 张会被误判 not enough（客户端却按补齐显示，表现为点了不扣料、可无限刷）。
       const prev = this.pendingCraft;
+      const refund = (prev && prev.key === key) ? prev.n : 0;
+      if (this._invCount(key) + refund < n) return fail('not enough');
       if (prev) this._invSet(prev.key, this._invCount(prev.key) + prev.n);
       this._invSet(key, this._invCount(key) - n);
       this.pendingCraft = { key, n };
