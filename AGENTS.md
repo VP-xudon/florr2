@@ -129,6 +129,13 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   小地图位图（含 `_mmFullPx` 全图大图，不再用 800ms 定时器）。
 - 字体回调（`cards.js` / `ui/tooltip.js` 的 `document.fonts.load().then(repaintAll)`）用 `window.__uiBooted`
   拦住 Loading 期间的重复全量重绘；迟到字体才在撤蒙版后补一次。
+- 加载蒙版：纯黑底，上方 120px 蜘蛛动画由 Worker + OffscreenCanvas 在【独立线程】绘制
+  （`UI.js` 的 `LOADING_SPIDER_WORKER` 复刻 `assets/ui/spider_loading_sequenced.svg` 的 8 条腿与 4.8s 关键帧，
+  直接画白蛛；主线程同步预热不再冻住它）。不支持 `transferControlToOffscreen` 时退回内联 SVG + `invert(1)`。
+  动画与文字间距 40px，下方 36px Ubuntu 白字「Loading...」。蒙版【至少展示 5s】（不足则补等）。
+- 预热任务全部【协作式让帧】：`boot()` 的 `yieldFrame()` 在每个阶段之间、瓦片每 8 组、
+  生物位图每 8 项、卡面每 8 张、背包每个稀有度分组后各 `await requestAnimationFrame`。
+  同步长任务会占满主线程让 SVG 动画"播一下就冻住"；末尾不再 `repaintAll`（会再堵一次）。
 - 全部完成才 `UI.hideLoading()`；30 秒未完成显示慢加载提示但继续等待。
 - 卡面有两套独立缓存：`SpriteStore.images`（世界实体）与 `CardRenderer` 的 `_raw/_tinted/_imgCache`（卡面）；
   只加载前者仍会在首次开背包时集中 fetch + 强制重排，所以两者都必须预热。

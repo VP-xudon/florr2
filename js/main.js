@@ -30,6 +30,9 @@ for (const [k, v] of _params) window.__queryParams[k.toLowerCase()] = v;
 window.__debug = !!(typeof Settings !== 'undefined' && Settings.get('debug'));
 
 async function boot() {
+  const bootStart = performance.now();
+  // 预热的循环之间主动让出一帧：否则同步构建会占满主线程，SVG 动画只播一下就冻住。
+  const yieldFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
   let game = null;
   try {
     UI.init();
@@ -38,7 +41,7 @@ async function boot() {
       ASSET_LIST.push(...window.GARDEN_DATA.assets);
     } catch (e) {
       console.error('[loadGardenData]', e);
-      UI.refs.loading.textContent = 'Failed to load garden.tmj. Open the game through a local HTTP server.';
+      if (UI.refs.loadText) UI.refs.loadText.textContent = 'Failed to load garden.tmj. Open the game through a local HTTP server.';
       return;
     }
     // 碰撞箱数据必须在实体创建前就位（生物/花瓣/F3 全读同一份 .crb）
@@ -66,19 +69,23 @@ async function boot() {
     // 1) 卡面 / 世界实体素材：fetch + getBBox + dataURL + Image 解码一次做完。
     //    同时也消除了第一次打开背包/合成时的集中卡顿。
     if (typeof CardRenderer !== 'undefined' && typeof CardRenderer.prewarm === 'function') {
-      await CardRenderer.prewarm(PETAL_TYPES.map((p) => String(p.svg)));
+      await CardRenderer.prewarm(PETAL_TYPES.map((p) => String(p.svg)), yieldFrame);
     }
+    await yieldFrame();
     // 2) 生物派生素材：Hornet 空壳 / 无触角身体 / Pollen，以及蜘蛛步态与蚂蚁分件。
     await MobFX.prepareAssets();
     if (typeof SpiderGait !== 'undefined' && SpiderGait.prewarm) await SpiderGait.prewarm();
     if (typeof AntArt !== 'undefined' && AntArt.prewarm) await AntArt.prewarm();
+    await yieldFrame();
     // 3) 清单素材 + 派生素材（data URL / 动态部件）一并校验：失败/超时自动重试。
     const derived = Object.keys(SpriteStore.sources || {}).map((k) => [k, SpriteStore.sources[k]]);
     await SpriteStore.loadAll(ASSET_LIST.concat(derived));
+    await yieldFrame();
     // 3b) 瓦片位图：loadAll 只把 SVG 解码成 Image，首帧才逐格建 288² canvas。
     //     这里把地图实际用到的 svg + 翻转组合一次性栅格化。
     try {
       const seen = new Set();
+      let n = 0;
       for (const layer of (window.GARDEN_DATA && window.GARDEN_DATA.layers) || []) {
         for (const t of layer.tiles || []) {
           if (!t || t === -1) continue;
@@ -91,14 +98,19 @@ async function boot() {
           if (seen.has(sig)) continue;
           seen.add(sig);
           SpriteStore.canvasFlip('tile' + name, GARDEN_TILE, flags);
+          if (++n % 8 === 0) await yieldFrame();
         }
       }
+      await yieldFrame();
     } catch (e) { /* 瓦片预热失败不影响进入游戏 */ }
     // 3c) 生物位图 / 轴心 / 轮廓：按首屏实体的实际 drawSize 建缓存，
     //     避免撤蒙版后第一帧集中做 2× 超采样、裁剪与轮廓提取。
     try {
       const g = window.__game;
-      if (g && g.mobs && typeof SpriteStore.prewarmMobs === 'function') SpriteStore.prewarmMobs(g.mobs);
+      if (g && g.mobs && typeof SpriteStore.prewarmMobs === 'function') {
+        await SpriteStore.prewarmMobs(g.mobs, yieldFrame);
+      }
+      await yieldFrame();
     } catch (e) { /* 生物预热失败不影响进入游戏 */ }
     // 4) 字体就绪后统一重绘卡面；网络异常时最多等 5s，不让蒙版挂死。
     await Promise.race([
@@ -108,17 +120,25 @@ async function boot() {
       })(),
       new Promise((r) => setTimeout(r, 5000))
     ]);
+    await yieldFrame();
     // 5) 背包/合成窗口的 DOM、canvas、事件绑定全部建好，首次打开零构建。
-    if (UI && typeof UI.prewarmWindows === 'function') await UI.prewarmWindows();
+    if (UI && typeof UI.prewarmWindows === 'function') await UI.prewarmWindows(yieldFrame);
+    await yieldFrame();
     // 6) 小地图位图预热：覆盖过渡中会用到的全部尺寸（含大档的 _mmFullPx 全图位图）。
     const g = window.__game;
     if (g && g.map && typeof g.map.minimapCanvas === 'function') {
       const px = [192, 512];
       if (typeof UI._mmFullPx === 'function') px.push(UI._mmFullPx());
       if (typeof UI._mmBmpPx === 'function') px.push(UI._mmBmpPx(160 * 1.2));
-      for (const s of new Set(px)) g.map.minimapCanvas(s);
+      for (const s of new Set(px)) {
+        g.map.minimapCanvas(s);
+        await yieldFrame();
+      }
     }
   } catch (e) { console.error('[boot] 预热阶段失败：', e); }
+  // 蒙版至少展示 5s：素材命中缓存时预热会瞬间完成，不兜底就看不到蜘蛛动画。
+  const left = 5000 - (performance.now() - bootStart);
+  if (left > 0) await new Promise((r) => setTimeout(r, left));
   clearTimeout(slowWarn);
   if (window.GARDEN_DATA) UI.hideLoading();
   window.__uiBooted = true;

@@ -908,26 +908,30 @@ const CardRenderer = (function () {
 
   // Loading 阶段一次做完：卡面素材的 fetch + getBBox + dataURL + Image 解码，
   // 以及世界实体素材的 128/256px 位图。第一次开背包/合成时这些链已全部命中缓存。
-  async function prewarm(ids) {
+  async function prewarm(ids, yieldFn) {
     const list = Array.isArray(ids) ? ids : [];
-    await Promise.all(list.map(async (id) => {
-      try {
-        const cardUrl = await asset(id);
-        if (cardUrl) await decode(cardUrl);
-        const artTxt = await artSvg(id);
-        if (!artTxt) return;
-        const url = 'data:image/svg+xml,' + encodeURIComponent(artTxt);
-        const im = await decode(url);
-        if (!im || !(im.naturalWidth > 0)) return;
-        for (const px of [128, 256]) {
-          const key = id + '|' + px;
-          if (_artCv[key] !== undefined) continue;
-          const c = document.createElement('canvas');
-          c.width = c.height = px;
-          try { c.getContext('2d').drawImage(im, 0, 0, px, px); _artCv[key] = c; } catch (e) { /* 忽略 */ }
-        }
-      } catch (e) { /* 单张失败不影响其它素材 */ }
-    }));
+    // 每 8 张让出一帧：measureBox 会强制重排，整批同步做完会冻住加载动画。
+    for (let start = 0; start < list.length; start += 8) {
+      await Promise.all(list.slice(start, start + 8).map(async (id) => {
+        try {
+          const cardUrl = await asset(id);
+          if (cardUrl) await decode(cardUrl);
+          const artTxt = await artSvg(id);
+          if (!artTxt) return;
+          const url = 'data:image/svg+xml,' + encodeURIComponent(artTxt);
+          const im = await decode(url);
+          if (!im || !(im.naturalWidth > 0)) return;
+          for (const px of [128, 256]) {
+            const key = id + '|' + px;
+            if (_artCv[key] !== undefined) continue;
+            const c = document.createElement('canvas');
+            c.width = c.height = px;
+            try { c.getContext('2d').drawImage(im, 0, 0, px, px); _artCv[key] = c; } catch (e) { /* 忽略 */ }
+          }
+        } catch (e) { /* 单张失败不影响其它素材 */ }
+      }));
+      if (yieldFn) await yieldFn();
+    }
   }
 
   return {

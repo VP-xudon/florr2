@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="25.081 23.756 61.077 62.402"
+     preserveAspectRatio="xMidYMid meet"
+     role="img" aria-label="Black spider loading animation">
+  <title>Spider loading animation</title>
+  <desc>The body completes a jelly-like bounce first. Then all eight legs draw outward along their original paths, pause, and erase back along the same paths. The next bounce starts only after every leg has disappeared.</desc>
+  <style>
+    /* One shared clock enforces strict, non-overlapping animation phases. */
+    .leg {
+      fill: none;
+      stroke: #000;
+      stroke-width: 3.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      opacity: 0;
+      animation: leg-cycle 4.8s linear infinite;
+    }
+    @keyframes leg-cycle {
+      0%, 29.9% { stroke-dashoffset: 1; opacity: 0; }
+      30%       { stroke-dashoffset: 1; opacity: 1; }
+      48%       { stroke-dashoffset: 0; opacity: 1; }
+      65%       { stroke-dashoffset: 0; opacity: 1; }
+      83%       { stroke-dashoffset: 1; opacity: 1; }
+      83.1%, 100% { stroke-dashoffset: 1; opacity: 0; }
+    }
+
+    /* Jelly bounce is confined to the first quarter of the cycle. */
+    .body {
+      transform-box: view-box;
+      transform-origin: 55px 55px;
+      animation: jelly-bounce 4.8s linear infinite;
+    }
+    @keyframes jelly-bounce {
+      0%   { transform: translateY(0) scale(.94, 1.08); }
+      3%   { transform: translateY(1px) scale(1.09, .87); }
+      8%   { transform: translateY(-2.5px) scale(.93, 1.13); }
+      13%  { transform: translateY(.8px) scale(1.14, .82); }
+      17%  { transform: translateY(-.55px) scale(.97, 1.045); }
+      21%  { transform: translateY(.18px) scale(1.025, .98); }
+      25%  { transform: translateY(0) scale(1, 1); }
+      100% { transform: translateY(0) scale(1, 1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .leg, .body { animation: none; }
+      .leg { stroke-dashoffset: 0; opacity: 1; }
+      .body { transform: none; }
+    }
+  </style>
+  <rect x="25.081" y="23.756" width="61.077" height="62.402" fill="#fff"/>
+  <g>
+    <path class="leg" d="M55 55q6.514 19.334 3.335 28.975" pathLength="1"/>
+    <path class="leg" d="M55 55q-1.14 16.96-8.212 27.987" pathLength="1"/>
+    <path class="leg" d="M55 55q-14.727 4.976-25.798 13.608" pathLength="1"/>
+    <path class="leg" d="M55 55q-19.382-10.027-27.735-9.025" pathLength="1"/>
+    <path class="leg" d="M55 55q19.334 6.514 28.975 3.335" pathLength="1"/>
+    <path class="leg" d="M55 55q11.908-8.613 22.58-18.462" pathLength="1"/>
+    <path class="leg" d="M55 55q4.976-14.727 13.608-25.798" pathLength="1"/>
+    <path class="leg" d="M55 55q-2.742-18.516 2.488-29.06" pathLength="1"/>
+  </g>
+  <circle class="body" cx="55" cy="55" r="11.5" fill="#000"/>
+</svg>

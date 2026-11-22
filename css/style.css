@@ -504,12 +504,18 @@ body {
   color: #fff; -webkit-text-stroke: 1.65px #000; paint-order: stroke fill;
   white-space: nowrap; line-height: 1; pointer-events: none; z-index: 46;
 }
-/* 加载：纯黑底 + 标志性 Ubuntu 白色大字（原 18px × 5） */
+/* 加载：纯黑底 + 内联蜘蛛动画 + 标志性 Ubuntu 白色大字（原 18px × 2） */
 #loading {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 40px;
   background: #000; font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-weight: 700;
-  font-size: 90px; color: #fff; z-index: 50; line-height: 1; text-align: center;
+  font-size: 36px; color: #fff; z-index: 50; line-height: 1; text-align: center;
 }
+/* Worker 在 OffscreenCanvas 上直接画白蛛（透明底），不再需要 invert；
+   不支持 Worker 时退回内联 SVG（此时 CSS filter 由 JS 补 invert）。 */
+#loadAnim { width: 120px; height: 120px; flex: 0 0 auto; }
+#loadAnim svg, #loadAnim canvas { display: block; width: 100%; height: 100%; }
+#loadText { flex: 0 0 auto; }
 /* 加载过慢提示：定格于正上方中央的悬浮框（不随页面滚动，不阻塞交互） */
 #loadWarn {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%);

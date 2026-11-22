@@ -351,7 +351,7 @@ const SpriteStore = {
   // Loading 阶段预热：把首帧会用到的生物位图/轴心/轮廓提前建好。
   // 这些缓存都是按 key@size 建的，而 drawSize 随物种 × 稀有度 × 等级变化；
   // 只解码 Image 不够，撤蒙版后第一帧会集中做 2× 超采样 + 裁剪 + 轮廓提取而卡顿。
-  prewarmMobs(mobs) {
+  async prewarmMobs(mobs, yieldFn) {
     if (!this._cropRatio()) return 0;   // 顺带完成全局 160px 裁剪框标定（一次性像素扫描）
     let built = 0;
     const seen = new Set();
@@ -372,11 +372,13 @@ const SpriteStore = {
       one('mob' + m.svg, size);
       const bodyKey = 'mob' + m.svg + '_body';
       if (this.ready(bodyKey)) one(bodyKey, size);
+      if (yieldFn && built % 8 === 0) await yieldFn();
     }
     // 动态部件（蚂蚁分层、去腿身体、尾针空壳等）：按常见渲染尺寸预热。
     for (const key of Object.keys(this.sources)) {
       if (!/^(mob|ant)/.test(key) || !this.ready(key)) continue;
       for (const size of [96, 160, 256]) one(key, size);
+      if (yieldFn && built % 8 === 0) await yieldFn();
     }
     return built;
   },

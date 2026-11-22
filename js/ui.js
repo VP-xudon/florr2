@@ -20,6 +20,55 @@ function darken(color, amt) {
   return `rgb(${f(r)},${f(g)},${f(b)})`;
 }
 
+// 加载动画的 Worker 源码：在独立线程用 OffscreenCanvas 重绘 assets/ui/spider_loading_sequenced.svg
+// 的同一套几何与 4.8s 关键帧。主线程同步预热时不会冻住它。
+const LOADING_SPIDER_WORKER = [
+  "self.onmessage = function(e) {",
+  "  var canvas = e.data.canvas, dpr = e.data.dpr || 1;",
+  "  canvas.width = canvas.height = Math.round(120 * dpr);",
+  "  var ctx = canvas.getContext('2d');",
+  "  var VB = { x: 25.081, y: 23.756, w: 61.077, h: 62.402 };",
+  "  var legs = [[6514,19334,3335,28975],[-1140,16960,-8212,27987],[-14727,4976,-25798,13608],[-19382,-10027,-27735,-9025],[19334,6514,28975,3335],[11908,-8613,22580,-18462],[4976,-14727,13608,-25798],[-2742,-18516,2488,-29060]];",
+  "  var bf = [[0,0,.94,1.08],[3,1,1.09,.87],[8,-2.5,.93,1.13],[13,.8,1.14,.82],[17,-.55,.97,1.045],[21,.18,1.025,.98],[25,0,1,1],[100,0,1,1]];",
+  "  var S = canvas.width, k = Math.min(S / VB.w, S / VB.h);",
+  "  var ox = (S - VB.w * k) / 2 - VB.x * k, oy = (S - VB.h * k) / 2 - VB.y * k;",
+  "  var t0 = null;",
+  "  function next(cb) { if (self.requestAnimationFrame) self.requestAnimationFrame(cb); else setTimeout(function(){ cb(performance.now()); }, 16); }",
+  "  function draw(ts) {",
+  "    if (t0 === null) t0 = ts;",
+  "    var pc = ((((ts - t0) % 4800) + 4800) % 4800) / 48;",
+  "    ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,S,S);",
+  "    ctx.setTransform(k,0,0,k,ox,oy);",
+  "    var i = 0; while (i < bf.length - 2 && pc >= bf[i + 1][0]) i++;",
+  "    var a = bf[i], b = bf[i + 1], f = Math.max(0, Math.min(1, (pc - a[0]) / (b[0] - a[0])));",
+  "    var ty = a[1] + (b[1] - a[1]) * f, sx = a[2] + (b[2] - a[2]) * f, sy = a[3] + (b[3] - a[3]) * f;",
+  "    var u = 0;",
+  "    if (pc >= 30 && pc <= 83) {",
+  "      if (pc < 48) u = (pc - 30) / 18;",
+  "      else if (pc <= 65) u = 1;",
+  "      else u = 1 - (pc - 65) / 18;",
+  "    }",
+  "    ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff';",
+  "    ctx.lineWidth = 3.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';",
+  "    if (u > 0.001) {",
+  "      for (var j = 0; j < legs.length; j++) {",
+  "        var L = legs[j], x1 = 55 + L[0] / 1e3, y1 = 55 + L[1] / 1e3, x2 = 55 + L[2] / 1e3, y2 = 55 + L[3] / 1e3;",
+  "        var q0x = 55 + (x1 - 55) * u, q0y = 55 + (y1 - 55) * u;",
+  "        var q1x = x1 + (x2 - x1) * u, q1y = y1 + (y2 - y1) * u;",
+  "        var rx = q0x + (q1x - q0x) * u, ry = q0y + (q1y - q0y) * u;",
+  "        ctx.beginPath(); ctx.moveTo(55,55); ctx.quadraticCurveTo(q0x,q0y,rx,ry); ctx.stroke();",
+  "      }",
+  "    }",
+  "    ctx.save();",
+  "    ctx.translate(55, 55 + ty); ctx.scale(sx, sy); ctx.translate(-55, -55);",
+  "    ctx.beginPath(); ctx.arc(55,55,11.5,0,Math.PI*2); ctx.fill();",
+  "    ctx.restore();",
+  "  }",
+  "  var tick = function(ts) { draw(ts); next(tick); };",
+  "  next(tick);",
+  "};"
+].join('\n');
+
 // 圆角矩形路径统一由 render/render-util.js 提供：本文件加载更早，但调用发生在运行时。
 
 // 卡牌数据悬浮框整体缩放（相对 info.png 基准尺寸）
@@ -324,7 +373,7 @@ const UI = {
         </div>
       </div>
 
-      <div id="loading">${I18N.t('UI/Title/Loading', 'Loading...')}</div>
+      <div id="loading"><div id="loadAnim"></div><span id="loadText">${I18N.t('UI/Title/Loading', 'Loading...')}</span></div>
     `;
     document.body.appendChild(root);
     this.root = root;
@@ -341,8 +390,9 @@ const UI = {
       setLang: $('setLang'), setDebug: $('setDebug'), setKeyboard: $('setKeyboard'),
       setShowHpBar: $('setShowHpBar'), setShowFeedback: $('setShowFeedback'),
       slotRow: $('slotRow'), subRow: $('subRow'), statusRow: $('statusRow'),
-      loading: $('loading')
+      loading: $('loading'), loadAnim: $('loadAnim'), loadText: $('loadText')
     };
+    this._initLoadAnim();
     this._initOverlay();   // 悬浮框 / 卡牌覆盖层：纯 canvas
     this._mmInit();        // 小地图三档模式 + 地图名标签
     // 全局聊天：DOM 由 chat.js 建（挂在 #ui 下）；Enter 热键在这里统一管理
@@ -552,20 +602,49 @@ const UI = {
     this.hideLoadingWarn();
   },
 
+  // 加载动画放在 Worker 的 OffscreenCanvas 上跑：主线程做同步预热时它照常 60fps。
+  // 不支持 transferControlToOffscreen 的浏览器退回内联 SVG（关键帧仍会播放，只是会卡）。
+  _initLoadAnim() {
+    const el = this.refs.loadAnim;
+    if (!el) return;
+    const fallback = () => {
+      fetch('assets/ui/spider_loading_sequenced.svg?v=' + ASSET_VER)
+        .then((r) => (r.ok ? r.text() : null))
+        .then((txt) => { if (txt) { el.innerHTML = txt; el.style.filter = 'invert(1)'; } })
+        .catch(() => { /* 动画失败不影响 Loading 文案 */ });
+    };
+    try {
+      if (typeof Worker === 'undefined' || typeof HTMLCanvasElement === 'undefined' ||
+          typeof HTMLCanvasElement.prototype.transferControlToOffscreen !== 'function') {
+        fallback();
+        return;
+      }
+      const cv = document.createElement('canvas');
+      el.appendChild(cv);
+      const url = URL.createObjectURL(new Blob([LOADING_SPIDER_WORKER], { type: 'text/javascript' }));
+      const worker = new Worker(url);
+      const off = cv.transferControlToOffscreen();
+      worker.postMessage({ canvas: off, dpr: window.devicePixelRatio || 1 }, [off]);
+      worker.addEventListener('error', () => { el.innerHTML = ''; fallback(); });
+    } catch (e) { el.innerHTML = ''; fallback(); }
+  },
+
   // Loading 阶段一次性建好背包/合成窗口的 DOM、canvas 与事件绑定。
   // 两个渲染入口都有"窗口关着就早退"的保护（见 renderInventory / _craftSyncList），
   // 所以预热必须直接调底层构建函数；卡面素材此时已由 CardRenderer.prewarm 解码完毕。
-  async prewarmWindows() {
+  async prewarmWindows(yieldFn) {
     try {
-      if (!this._invBuilt) this._buildInventory();
+      if (!this._invBuilt) await this._buildInventory(yieldFn);
+      if (yieldFn) await yieldFn();
       this._syncInventoryCounts();
       this._craftBuildTop();
+      if (yieldFn) await yieldFn();
       this._craftSyncList(true);
-      // createCard 里的 asset().then 要几个微任务才把 img 挂上；等一帧后再同步重绘，
-      // 保证蒙版撤掉时背包/合成里的卡已经是带素材的最终画面。
+      // createCard 的 asset().then → schedulePaint 已在上面每次让帧时增量画完。
+      // 不再 repaintAll：那会把 216 张卡一次性重画，又冻住加载动画一次。
       await Promise.resolve();
-      await new Promise((r) => requestAnimationFrame(r));
-      CardRenderer.repaintAll();
+      if (yieldFn) await yieldFn();
+      else await new Promise((r) => requestAnimationFrame(r));
     } catch (e) { console.error('[UI] 窗口预热失败：', e); }
   },
 
@@ -732,7 +811,7 @@ const UI = {
     this._syncInventoryCounts();
   },
 
-  _buildInventory() {
+  async _buildInventory(yieldFn) {
     const g = this.refs.invGallery;
     if (!g) return;
     g.innerHTML = '';
@@ -746,6 +825,7 @@ const UI = {
       if (!grp) continue;
       g.appendChild(grp);
       this._invGroups.set(rar, grp);
+      if (yieldFn) await yieldFn();   // 一组一帧，卡面的 schedulePaint 也在帧间增量完成
     }
     this._invBuilt = true;
   },
