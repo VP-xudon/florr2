@@ -3,7 +3,8 @@
 
 Object.assign(UI, {
   // ---------------- 小地图：三档模式 + 平滑切换 ----------------
-  // 0 小（局部）：直径 = 0.5×原(160)；"一个瓦片 = 0.5×直径"（即直径跨 2 个瓦片）；
+  // 0 小（局部，第 1 档）：基准直径 = 0.5×原(160)，跨 6 个瓦片；随 Antennae 视野按
+  //               1/camZoom 等比放大（边长与覆盖瓦片数同步），保持"屏幕 → 小地图"同一比例尺；
   //               以人物白点为中心，贴边时自动偏移，不显示边界外内容。
   // 1 中（全图）：直径 = 1.2×原；全图 + 人物绝对位置白点。[M] 第一下；小档悬浮临时进入。
   // 2 大（全图）：屏幕居中、0.6 半透明、直径 = 0.6×屏高；圆点等比放大。[M] 第二下。
@@ -29,7 +30,8 @@ Object.assign(UI, {
     // 命中区域 = 二档地图的矩形（与一档同锚点、尺寸更大）。
     window.addEventListener('mousemove', (e) => {
       if (this._mmMode !== 0) { this._mmHover = false; return; }
-      const size = 160 * 0.5;   // 命中区域按【最小档】尺寸判定：指针碰到小地图才展开，不再提前到中档
+      // 命中区域跟随当前第 1 档尺寸（含 Antennae 视野缩放），指针碰到小地图才展开。
+      const size = this._mm ? this._mm.size : 160 * 0.5;
       const left = window.innerWidth - size - 12, top = 12;
       this._mmHover = e.clientX >= left - 4 && e.clientX <= left + size + 4
                    && e.clientY >= top - 4 && e.clientY <= top + size + 4;
@@ -66,7 +68,17 @@ Object.assign(UI, {
     let size, span, alpha, centered, full;
     if (eff === 2) { size = H * 0.6; span = 2 * half; alpha = 0.8; centered = true; full = true; }
     else if (eff === 1) { size = 160 * 1.2; span = 2 * half; alpha = 1; centered = false; full = true; }
-    else { size = 160 * 0.5; span = tile * 6; alpha = 1; centered = false; full = false; }
+    else {
+      // 第 1 档显示人物周围的局部视野：Antennae 拉远相机（camZoom < 1）后，
+      // 边长与覆盖的瓦片数一起按 1/camZoom 放大，比例尺保持不变。
+      // 量化到 0.05 档：阻尼中的 camZoom 每帧都在变，直接进 key 会不断重置 0.6s 过渡。
+      const zoom = Math.max(0.01, g.camZoom || 1);
+      const base = 160 * 0.5;
+      const maxK = Math.max(1, Math.min(W, H) * 0.45 / base);
+      const viewK = clamp(Math.round((1 / zoom) * 20) / 20, 1, maxK);
+      size = base * viewK; span = tile * 6 * viewK;
+      alpha = 1; centered = false; full = false;
+    }
     const tx = centered ? (W - size) / 2 : (W - size - 12);
     const ty = centered ? (H - size) / 2 : 12;
     const key = [size, span, tx, ty, alpha, full ? 1 : 0].join('|');
@@ -152,7 +164,9 @@ Object.assign(UI, {
     const span = Math.max(1, m.span);
     const tileNow = map.tile || GARDEN_TILE;
     // 局部模式：视野中心直接取「人物当前坐标」（不经动画插值）—— 保证小档永远跟着人物。
-    const local = (span <= 7 * tileNow) && typeof map.drawCollisionRegion === 'function';
+    // 判据不能再用 span 阈值：第 1 档的 span 现在会随 Antennae 视野放大。
+    // _mmEase 就是"全图视角"的插值量（0=局部、1=全图），是这里的唯一口径。
+    const local = this._mmEase < 0.5 && typeof map.drawCollisionRegion === 'function';
     // 局部档：视图随人物移动，但【夹紧在地图范围内】—— 贴边时环境停住、人物小点在框内继续移动，
     // 绝不显示地图之外的内容（与主屏幕相机的行为一致）。span < 2*half，所以区间恒有效。
     let vx = (local ? player.x : m.cx) - span / 2;

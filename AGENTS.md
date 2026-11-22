@@ -63,7 +63,7 @@ python dev/check_versions.py   # 引用、重名、i18n、版本号、跨文件�
 | `js/ui/minimap.js` | 小地图三档模式与过渡 |
 | `js/ui/touch.js` | 触控层：浮动摇杆 + `A`(reach) / `B`(detect)，桌面不创建元素 |
 | `js/ui/debug-screen.js` | `F3` 分栏调试屏幕，控制碰撞箱与小地图生物点 |
-| `js/ui/bossbar.js` | 顶部 Boss 血条（仅 `eternal` / `super`） |
+| `js/ui/bossbar.js` | 顶部 Boss 血条（视野内离玩家最近的 `eternal` / `super`，最多 3 条） |
 | `js/map.js` | `garden.tmj` / `.tsj` 解析、翻转、碰撞、检查点、生成区、瓦片与小地图位图 |
 | `js/ai.js` | `MobAI`：按 `type.slug` 注册的物种 AI 引擎 |
 | `js/petal-effects.js` | `PetalFX`：花瓣主动/被动特效、脱轨、飞行、硬碰撞、仇恨吸引 |
@@ -612,7 +612,8 @@ EntityFX.hurt(ent, dur);
 - 渲染顺序：草地 → 瓦片 → 地面卡/掉落粒子/掉落卡 → 传送标记 → 尸体 → 生物（按 y 排序）
   → 花瓣光环粒子 → 活玩家（花瓣在其内部绘制）→ 普通粒子/飘字 → 调试 → 小地图。
 - 视口裁剪：先筛可见集合再按 y 排序；屏幕外余量按半屏。
-- 小地图 3 档，`M` 切换；生物点仅在 F3 打开时绘制。
+- 小地图 3 档，`M` 切换；生物点仅在 F3 打开时绘制。第 1 档（局部）的边长与覆盖瓦片数随
+  Antennae 视野按 `1/camZoom` 同步放大（量化到 0.05 档后复用同一套 0.6s 过渡），悬浮热区跟随。
 - 复活落点 `map.checkpointSpawnPoint(cp, r)` 在检查点矩形内随机取 `canStandAt` 为真的位置，
   失败时网格扫描，最后才用中心 + 碰撞推离。
 - 蜘蛛本体素材由 `SpiderGait.bodyUrl()` 去掉腿部路径后缓存，红闪与步态同源。

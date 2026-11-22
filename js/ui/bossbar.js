@@ -2,9 +2,9 @@
 // 'use strict';
 //
 // 规则：
-//   · 只显示 Eternal 与 Super，Eternal 永远优先于 Super（先按稀有度分层，层内按距离）；
-//   · 1~3 只全部显示，沿屏幕中轴线上下排布；超过 3 只取前 3；
-//   · 仅在视野内或视野外 150% 距离内显示（矩形口径：半宽 = W*0.75）；
+//   · 只显示 Eternal 与 Super，最多 3 只，沿屏幕中轴线上下排布；
+//   · 候选只取【当前视野内】的个体（矩形口径随相机缩放变化，不再外扩固定半径）；
+//   · 排序按【离玩家的距离】从近到远（不是离屏幕中心），距离相同才 Eternal 优先；
 //   · 每条：正中央上方是名称，正下方是稀有度；
 //   · 显示 / 隐藏与换位都由阻尼驱动，不硬切。
 //
@@ -14,7 +14,6 @@ const BossBar = {
   game: null,
   items: [],          // [{ id, mob, a, slot, y, targetY }]，按显示槽位排列
   MAX: 3,             // 最多同时显示 3 条
-  REACH: 1.5,         // 视野外扩比例：1.5 = 视野外 150% 距离内
   // 文字：名称 16×1.8 = 28.8（压在条顶边上，上半截出条），稀有度 10×1.8×0.9 = 16.2
   // （压在条底边上，下半截出血条）。一整条文字的纵向跨度约 58px —— 行距必须跟着放大，
   // 否则上一行的稀有度会压住下一行的名称。
@@ -42,26 +41,29 @@ const BossBar = {
     return this.TOP + bhv / 2 + i * (bhv + this.GAP);
   },
 
-  // 选取要展示的 Boss 列表：范围过滤 -> 稀有度优先 -> 距离排序 -> 截断到 MAX
+  // 选取要展示的 Boss：视野过滤 -> 按【离玩家的距离】排序 -> 截断到 MAX。
+  // 视野口径与主渲染一致：屏幕 W/H 除以相机缩放才是世界里的可见范围（Antennae 会拉远）。
+  // 玩家在地图边缘时相机会被夹紧，所以"离屏幕中心最近"≠"离玩家最近"，必须分开算。
   _pick() {
     const g = this.game;
-    if (!g || !g.camera) return [];
-    const hw = g.W * 0.5 * this.REACH;
-    const hh = g.H * 0.5 * this.REACH;
+    if (!g || !g.camera || !g.player) return [];
+    const z = Math.max(0.01, g.camZoom || 1);
+    const hw = g.W / (2 * z), hh = g.H / (2 * z);
     const camX = g.camera.x, camY = g.camera.y;
+    const px = g.player.x, py = g.player.y;
     const list = [];
     for (const m of g.mobs) {
       if (!m || m.dead || m.gone) continue;
-      // 稀有度优先级：数字越小越优先（Eternal 永远排在 Super 前面）。
-      // 这里内联字符串判断，避免每帧对 4000+ 视图做函数调用。
+      // 稀有度优先级只在【距离完全相同】时才用；这里内联判断，避免每帧对大量视图做函数调用。
       const rank = (m.rarity === 'eternal') ? 0 : (m.rarity === 'super' ? 1 : -1);
       if (rank < 0) continue;
       const dx = m.x - camX, dy = m.y - camY;
-      if (Math.abs(dx) > hw || Math.abs(dy) > hh) continue;   // 视野 + 外扩 150% 之外
-      list.push({ m, rank, d: dx * dx + dy * dy });
+      if (Math.abs(dx) > hw || Math.abs(dy) > hh) continue;   // 严格视野内，不再外扩半径
+      const ox = m.x - px, oy = m.y - py;
+      list.push({ m, rank, d: ox * ox + oy * oy });
     }
-    // 关键：先 rank（Eternal 0 < Super 1），再距离 —— 不是"距离优先再比稀有度"。
-    list.sort((a, b) => (a.rank - b.rank) || (a.d - b.d));
+    // 最近优先；等距时 Eternal（0）排在 Super（1）前面。
+    list.sort((a, b) => (a.d - b.d) || (a.rank - b.rank));
     return list.slice(0, this.MAX).map((x) => x.m);
   },
 

@@ -735,9 +735,9 @@ class Mob {
     // 文字统一 Ubuntu 800 + 纯黑描边（与卡牌/悬浮框同款漫画字）；名称白色，稀有度用其本色。
     // 名牌模式：'classic'（普通生物 / 蜈蚣【头节】）= 名称 + 血条 + 稀有度，常显；
     //           'player' （蜈蚣【非头节】）= 只有血条、满血不显示、无名称无稀有度（见下方分支）。
-    // 图像设置「显示生物血量条」关掉时只隐藏血条本体，名称与稀有度名牌保留。
+    // 图像设置「显示生物血量条」关掉时整块名牌（名称 + 血条 + 稀有度）一起隐藏。
     const showHpBar = (typeof Settings === 'undefined') || Settings.get('showMobHpBar') !== false;
-    if (!this.dead && !this.hiddenHpBar && (this.plateStyle || 'classic') === 'classic') {
+    if (showHpBar && !this.dead && !this.hiddenHpBar && (this.plateStyle || 'classic') === 'classic') {
       // 名牌（血条/名称/稀有度）一律用【common 等级的基准尺寸】，不随稀有度缩放 ——
       // 这样大怪小怪的名牌大小一致，远看也读得清。只有"比 common 还小"的生物才按比例收一点，
       // 免得血条比身体还宽。（当前所有生物都 ≥ common，所以实际上就是固定大小。）
@@ -747,8 +747,7 @@ class Mob {
       const bodyBottom = this.y + this.r;                  // 图案实际底边（半径即 r）
       const nameY = bodyBottom + fs * 1.05;                // 名称基线（血条上方）
       const barY = nameY + fs * 0.34;                      // 血条顶
-      // 稀有度基线（血条下方；血条被设置隐藏时紧跟名称，不留空档）
-      const rarY = (showHpBar ? barY + bh : nameY) + fs * 1.0;
+      const rarY = barY + bh + fs * 1.0;                   // 稀有度基线（血条下方）
       const bx = this.x - bw / 2, br = this.x + bw / 2;    // 血条左右边界
 
       const rarCol = (typeof RARITIES !== 'undefined' && RARITIES[this.rarity])
@@ -769,32 +768,30 @@ class Mob {
       ctx.fillStyle = '#fff';
       ctx.fillText(this.name, bx, nameY);
 
-      if (showHpBar) {
-        // 血条：圆角 + 深色描边，填充色随比例 绿→黄→红。
-        // 黑框内先画淡灰缓冲条（慢速跟随、轻微过冲），再画主条（快速跟随）；
-        // 两者平时重合，掉血瞬间缓冲条才露出来 —— 由 _tickHpSmooth 驱动。
-        const rad = Math.min(bh / 2, 6);
-        roundRectPath(ctx, bx, barY, bw, bh, rad);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      // 血条：圆角 + 深色描边，填充色随比例 绿→黄→红。
+      // 黑框内先画淡灰缓冲条（慢速跟随、轻微过冲），再画主条（快速跟随）；
+      // 两者平时重合，掉血瞬间缓冲条才露出来 —— 由 _tickHpSmooth 驱动。
+      const rad = Math.min(bh / 2, 6);
+      roundRectPath(ctx, bx, barY, bw, bh, rad);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill();
+      const gRatio = clamp((this.ghostHp == null ? this.hp : this.ghostHp) / this.maxHp, 0, 1);
+      const dRatio = clamp((this.dispHp == null ? this.hp : this.dispHp) / this.maxHp, 0, 1);
+      if (gRatio > 0) {
+        roundRectPath(ctx, bx, barY, Math.max(bh, bw * gRatio), bh, rad);
+        ctx.fillStyle = '#b9bec8';
         ctx.fill();
-        const gRatio = clamp((this.ghostHp == null ? this.hp : this.ghostHp) / this.maxHp, 0, 1);
-        const dRatio = clamp((this.dispHp == null ? this.hp : this.dispHp) / this.maxHp, 0, 1);
-        if (gRatio > 0) {
-          roundRectPath(ctx, bx, barY, Math.max(bh, bw * gRatio), bh, rad);
-          ctx.fillStyle = '#b9bec8';
-          ctx.fill();
-        }
-        if (dRatio > 0) {
-          roundRectPath(ctx, bx, barY, Math.max(bh, bw * dRatio), bh, rad);
-          // 剩余血量：绿 -> 红 连续渐变（与主角血条同一 helper）
-          ctx.fillStyle = hpBarColor(dRatio);
-          ctx.fill();
-        }
-        ctx.lineWidth = Math.max(1.2, bh * 0.22);
-        ctx.strokeStyle = '#000';
-        roundRectPath(ctx, bx, barY, bw, bh, rad);
-        ctx.stroke();
       }
+      if (dRatio > 0) {
+        roundRectPath(ctx, bx, barY, Math.max(bh, bw * dRatio), bh, rad);
+        // 剩余血量：绿 -> 红 连续渐变（与主角血条同一 helper）
+        ctx.fillStyle = hpBarColor(dRatio);
+        ctx.fill();
+      }
+      ctx.lineWidth = Math.max(1.2, bh * 0.22);
+      ctx.strokeStyle = '#000';
+      roundRectPath(ctx, bx, barY, bw, bh, rad);
+      ctx.stroke();
 
       // 稀有度（本色，右对齐到血条右端）
       ctx.textAlign = 'right';
