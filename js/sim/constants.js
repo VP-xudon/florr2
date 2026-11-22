@@ -67,8 +67,8 @@ const PEAS_FLIGHT_T = 2.0;            // Peas 喷射后的存活时长（s）：
 // 从基础 wanderSpeed 推出 0.65×，并记录 _centSpeedCap 供引擎做硬上限。
 // 新增物种的移速口径同理 —— 写在各自 AI 的 init 里，不再往这张常量表里堆特判。
 // 主角【标准】半径（不含 Soil 之类的额外半径）。
-// 花瓣的轨道距离 / 吸附范围一律以它为基准：装上改变本体半径的装备时，
-// 只有花朵本体变大，花瓣与人物的距离保持标准状况不变（用户口径）。
+// 主角标准半径（未含 Soil 加成的基准）。花瓣轨道半径按 Player.r（当前实际半径）算，
+// 让花瓣到主角【边缘】的距离保持设计比例：本体变大时花瓣跟着边缘一起外移。
 const PLAYER_R_STD = 22 * 0.6;        // ≈13.2
 // 花瓣【自转】：独立于公转（绕主角的轨道运动），从实体加载好那一刻起持续、缓慢地转。
 // 绘制朝向 = 公转朝向(阵型基准) + 自转；普通花瓣则完全用自转（不再由轨道位置反推）。
@@ -175,10 +175,18 @@ const CHAIN_KB_SHARE = 0.45;        // 冲量转给段首的比例（其余留�
 const CHAIN_PUSH_MAX = 1.2;         // 单节局部偏移上限（× 节半径，防止穿进邻节）
 const CHAIN_PUSH_RECOVER = 6;       // 局部偏移的弹性回位速率（1/s）
 
+// 生物被击退的总位移硬上限（px）：固定为当前花瓣对 common 生物单次击退的 1/4，
+// 不随稀有度 / 等级 / 装备变化 —— 否则低等级生物被一撞就飞出好几个身位。
+// 基准 = PETAL_KB_BASE(26) × common 生物份额(0.85) × PETAL_KB_MASS_LEGENDARY(1.8)
+//      × PETAL_KB_IMPACT(1.5) × common 档 kbBoost 上限(1.5) ≈ 89.5px，取其 1/4。
+const MOB_KB_MAX = 22.4;
+
 // 施加反弹冲量：ux/uy 为单位方向，total 为希望的总位移（世界像素）
 function applyKnockback(ent, ux, uy, total) {
   // 障碍型 / 无穷重量的实体不吃击退（数据表 MOB_TRAITS 声明 immovable）。
   if (!ent || ent.immovable || ent.noKnockback) return;
+  // 生物（有 type.slug）统一钳到硬上限；玩家本体不吃这个上限。
+  if (ent.type && ent.type.slug && total > MOB_KB_MAX) total = MOB_KB_MAX;
   const v = total * KNOCKBACK_DECAY;
   ent.kbX = (ent.kbX || 0) + ux * v;
   ent.kbY = (ent.kbY || 0) + uy * v;
@@ -275,6 +283,12 @@ let ROT_SCALE = 1;                // 花瓣转速缩放（/rot-speed 0.0~1.0；�
 // 用全局而不是每个 Player 实例各存一份：客户端预测副本与服务端权威副本必须同速，
 // 否则两边位移不一致（表现为持续被快照拉回/橡皮筋）。
 let MOVE_MULT = 1;
+
+// ---- 玩家移动的"推进加速度 + 阻尼"模型（惯性/物理感）----
+// 每帧沿输入方向加一份速度增量，旧速度按阻尼保留：转向有一小段侧滑，松开靠阻尼滑停。
+// 稳态速度 = 加速度 / 阻尼 = 目标速度，加减速时间常数 = 1/阻尼（两端同一份代码，预测一致）。
+const MOVE_DRAG_ACTIVE = 5;    // 有输入时的阻尼(1/s)：加速 / 转向时间常数 ≈0.2s
+const MOVE_DRAG_IDLE = 3.5;    // 松开输入时的阻尼：滑行时间常数 ≈0.29s
 
 // ---- 花瓣吸附（果冻手感）----
 // 生物边缘到花瓣的距离 ≤ 0.75 倍花瓣直径 -> 强力吸过去（吸力远大于回轨力，吸上就难回来）；

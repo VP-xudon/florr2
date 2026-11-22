@@ -510,13 +510,13 @@ const PETAL_TRAITS = {
   },
   // Soil（泥土）：普通攻击花瓣（伤害/血量按稀有度，见 PETAL_RARITY_OVERRIDES.soil），
   // 装备即生效的属性（不依赖是否装填）：
-  //   · soil.radius = +10：主人物半径平滑增加（多件叠加）；
+  //   · soil.radius = +5：主人物半径平滑增加（多件叠加）；
   //   · flowerHp（按稀有度）= 花朵生命上限增加，现有生命等比放大（血条百分比不变）；
   //   · soil.speedMul = 0.75：最大移速 ×0.75，多件【按乘积】叠加。
   // 三个数值都走 PetalFX.bonus -> Player.recompute 求和/求积，行为层不判断 slug。
   soil: {
     reload: 2.5, reloadText: '2.5s', sticky: false,
-    soil: { radius: 10, speedMul: 0.75 }
+    soil: { radius: 5, speedMul: 0.75 }
   },
   // Shovel（铲子）：不参与任何实体碰撞/结算（与 Basil 同口径：noDamage + noHealth +
   // noPush + noKnockback + overMobs），只有一个"使用"效果：

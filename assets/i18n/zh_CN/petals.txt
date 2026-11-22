@@ -473,10 +473,6 @@ Petals/mjolnir/default/FullName=碎片
 Petals/mjolnir/default/Description=也许这能锻造出一些神秘的东西？
 Petals/mjolnir/default/Py=suipian
 
-Petals/mjolnir/unique/Name=雷神之锤
-Petals/mjolnir/unique/FullName=雷神之锤
-Petals/mjolnir/unique/Description=整个宇宙中最强大的锤子。
-Petals/mjolnir/unique/Py=leishenzhichui
 
 Petals/mecha_missile/Name=导弹
 Petals/mecha_missile/FullName=机械导弹
@@ -582,7 +578,6 @@ Petals/splitter/Name=分裂
 Petals/splitter/FullName=灵魂分裂
 Petals/splitter/Description/default=将你的灵魂一分为二。
 Petals/splitter/Description/eternal=将你的灵魂一分为三。
-Petals/splitter/Description/unique={#Petals/splitter/Description/eternal}
 Petals/splitter/Description={#Petals/splitter/Description/{0:rarity}#Petals/splitter/Description/default}<n/><n/><c val="{#Colors/generic}">再次选择此花瓣以控制另一份灵魂。</c>
 Petals/splitter/Py=fenlie
 

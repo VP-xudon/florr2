@@ -103,7 +103,8 @@
     'UI/Craft/Button': 'Craft',
     'UI/Craft/Consume': 'Consume 5 identical petals to craft once.',
     'UI/Craft/FailNote': 'On failure 1~4 petals are lost.',
-    'UI/Craft/Chance': 'Success rate: {0}%'
+    'UI/Craft/Chance': 'Success rate: {0}%',
+    'UI/Craft/ShiftNote': 'Shift + click: craft all leftovers automatically.'
   };
 
   const ZH = {
@@ -195,7 +196,8 @@
     'UI/Craft/Button': '合成',
     'UI/Craft/Consume': '消耗5个相同的花瓣来进行一次合成',
     'UI/Craft/FailNote': '失败会损失1~4个花瓣',
-    'UI/Craft/Chance': '成功率: {0}%'
+    'UI/Craft/Chance': '成功率: {0}%',
+    'UI/Craft/ShiftNote': 'Shift + 点击：自动用全部剩余卡片连续合成'
   };
 
   I18N.addPack('en_US', EN);

@@ -5,8 +5,6 @@ December 21st 2025
 	- A mysterious rift has opened in the garden. It seems to take flowers back to a simpler time.
 
 November 26th 2025
-	- Unique forging mechanic has been reworked.
-	  They will now always require 5 Supers to forge, but you will permanently lose one of them when another player forges that same Unique.
 	  There's a global cooldown per petal type to prevent your petal from getting immediately stolen.
 	  The global cooldown duration depends on how often that petal is forged.
 
@@ -200,7 +198,6 @@ January 29th 2023
 	- We've rebalanced all mobs and petals. The idea is extending the early game a little bit, as it was too easy to get legendary petals in the first hour of gameplay.
 
 January 28th 2023
-	- Nicknames are now permanent and unique. You'll be prompted for one the first time you play.
 	- Mobs are no longer constrained by mere physical space limits. Their hitbox against the map has been decreased significantly.
 
 January 21st 2023

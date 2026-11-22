@@ -288,11 +288,10 @@ class Player {
     this.ghostV += (gk * (this.dispHp - this.ghostHp) - gd * this.ghostV) * dt;
     this.ghostHp = clamp(this.ghostHp + this.ghostV * dt, 0, this.maxHp);
     const len = Math.hypot(dir.x, dir.y);
-    let tx = 0, ty = 0;
+    let ax = 0, ay = 0;
     if (len > 0) {
       // dir 模长 = 目标速度占比(0..1)：鼠标移动模式用"指针距离"映射速度；
-      // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。据此缩放目标速度，
-      // 并复用下方同一套 rate 9/4 指数平滑加减速。
+      // 键盘 dir 恒 ≥1（单键=1、对角=√2），min(len,1)=1 对键盘零影响。
       const sc = Math.min(len, 1);
       // 减速瓦片：×0.4；遁地（Shovel）期间同样按这个系数减速（用户口径：幅度与树丛一致）。
       // /speed 的倍率再整体乘上来（客户端/服务端共用同一个 MOVE_MULT）；
@@ -300,12 +299,18 @@ class Player {
       const spd = this.speed * MOVE_MULT
         * ((this.slowTile || this.burrowT > 0) ? SLOW_TILE_SPEED : 1)
         * ((typeof StatusFX !== 'undefined') ? StatusFX.speedMul(this) : 1);
-      tx = dir.x / len * spd * sc;
-      ty = dir.y / len * spd * sc;
+      // 目标速度换成"推进加速度"：稳态 v = spd×sc，但转向时旧速度会保留一小段。
+      // k = 1-exp(-drag×dt) 是离散阻尼系数；a = spd×k/dt 保证稳态精确等于 spd。
+      const k = 1 - Math.exp(-MOVE_DRAG_ACTIVE * dt);
+      const a = spd * k / Math.max(dt, 1e-4);
+      ax = dir.x / len * a * sc;
+      ay = dir.y / len * a * sc;
     }
-    const rate = (len > 0) ? 9 : 4;   // 加速到默认速度约 0.3s（rate 9）；松开方向键沿用约 0.5s 减速（rate 4）
-    this.vx = damp(this.vx, tx, rate, dt);
-    this.vy = damp(this.vy, ty, rate, dt);
+    // 速度 = 旧速度按阻尼保留 + 本帧加速度增量（物理惯性，不再直接把速度设为目标值）。
+    const drag = len > 0 ? MOVE_DRAG_ACTIVE : MOVE_DRAG_IDLE;
+    const keep = Math.exp(-drag * dt);
+    this.vx = this.vx * keep + ax * dt;
+    this.vy = this.vy * keep + ay * dt;
     tickKnockback(this, dt);          // 反弹冲量衰减（必须在 moveEntity 之前：本帧的位移要带上它）
     moveEntity(this, dt, map);
     this.moving = len > 0;
@@ -511,7 +516,12 @@ class Player {
           b.nBlend = 0;
         }
         b.vx = ns.vx || 0; b.vy = ns.vy || 0;
-        // 飞行朝向不在这里写：实体推进里每帧由速度统一重算（唯一一处）。
+        // 飞行朝向由速度唯一决定。快照刚把 vx/vy 换成服务端权威值，必须【当场】
+        // 同步重算 flightRot：否则要等下一帧 player.update 才对齐，发射瞬间会歪一下。
+        if (b.flightRot != null && (b.vx || b.vy) && typeof PetalFX !== 'undefined') {
+          const tip = PetalFX.artTip(b.card && b.card.type);
+          if (tip != null) b.flightRot = Math.atan2(b.vy, b.vx) - tip;
+        }
       }
       // 受伤红闪取"更亮"的那个，避免本地已衰减到一半时被覆盖掉
       if (ns.hurtT > (b.hurtT || 0)) b.hurtT = ns.hurtT;
@@ -911,9 +921,9 @@ class Player {
     let reachMult = 1;
     if (this.mode === 'reach') reachMult = 1 + this.modeT;              // 1 -> 2
     else if (this.mode === 'detect') reachMult = 1 - (1 - PETAL_DETECT) * this.modeT;  // 1 -> 0.5
-    // 轨道半径用【标准半径】而不是 this.r：Soil 只让花朵本体变大，
-    // 花瓣与人物的距离保持标准状况（否则 +10 半径会把整圈花瓣一起推远，看起来像整只放大了）。
-    const baseReach = PLAYER_R_STD * (1 + PETAL_REACH) * 1.105;
+    // 轨道半径按【当前实际半径】算：花瓣到主角【边缘】的距离与变化幅度保持设计比例，
+    // 人物因 Soil 变大时花瓣跟着边缘一起外移（旧版用固定 PLAYER_R_STD 会让花瓣挤到身上）。
+    const baseReach = this.r * (1 + PETAL_REACH) * 1.105;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
     // 吸附候选：先在玩家附近筛一遍（轨道半径 + 触发距离 + 余量），
     // 避免全图 1600+ 只生物时每片花瓣都扫全表。

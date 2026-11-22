@@ -3,8 +3,6 @@ Petals/AnnouncementPrefix={#Rarities/{0:rarity}/ArticleUpper} {#Rarities/{0:rari
 
 Chat/PetalCraftedUnnamed={#Chat/PetalCraftedUnnamed/{0:rarity}#Chat/PetalCraftedUnnamed/default}
 Chat/PetalCraftedNamed={#Chat/PetalCraftedNamed/{0:rarity}#Chat/PetalCraftedNamed/default}
-Chat/PetalCraftedUnnamed/unique=The {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName} has been forged!
-Chat/PetalCraftedNamed/unique=The {#Rarities/{0:rarity}/Name} {#Petals/{0:base}/FullName} has been forged by {1}!
 Chat/PetalCraftedUnnamed/default={#Petals/AnnouncementPrefix:0} has been crafted!
 Chat/PetalCraftedNamed/default={#Petals/AnnouncementPrefix:0} has been crafted by {1}!
 
@@ -202,7 +200,6 @@ Chat/Oracle/Idle/38=Again, again, and once again
 Chat/Oracle/Idle/39=Precisely as planned
 Chat/Oracle/Idle/40=I cannot be held responsible for all the outcomes
 
-# When a Super/Unique petal is about to be crafted
 Chat/Oracle/Prediction={#Chat/Oracle/Prediction/{!math:{0}:%:3}}
 Chat/Oracle/Prediction/0=Ah yes, the prophecy... it should happen any time now...
 Chat/Oracle/Prediction/1=It was foretold, this is the moment...

@@ -33,8 +33,8 @@ python -m http.server 8000
 ```
 
 - URL 参数：`?hp=N`（同时设置当前与最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控层）。
-- 热键：`F3` 调试屏幕、`C` 碰撞箱（屏幕打开时）、`M` 小地图档位、`Z` 背包、
-  `R` 主副槽整排互换、`1~0` 换列。
+- 热键：`F3` 调试屏幕、`C` 合成窗口（调试屏幕打开时改为切碰撞箱）、
+  `M` 小地图档位、`Z` 背包、`R` 主副槽整排互换、`1~0` 换列。
 - 语言、键盘移动、调试模式在游戏内设置窗口，存 Cookie `florr_settings`。
 - 控制台：`window.__game` 是 `Game` 实例，`window.__queryParams` 是解析后的参数，
   `window.__debug` 是调试开关；`Game.stepFrames(n, dt)` 可按固定步长推进世界。
@@ -332,6 +332,9 @@ EntityFX.hurt(ent, dur);
   （`PETAL_KB_MASS_LEGENDARY` = 1.8，速度不参与），生物一侧按稀有度份额 `KNOCKBACK_SHARE`
   × 质量悬殊 `kbBoost` × 等级衰减 `1/(1+(level-1)×KB_LEVEL_FALLOFF)` 递减。
   花瓣自身的稀有度/等级/血量/速度一律不得进入击退公式。
+  【生物击退硬上限】`MOB_KB_MAX = 22.4`（px 总位移）= 当前花瓣对 common 生物击退的 1/4，
+  在 `applyKnockback` 里对有 `type.slug` 的生物统一钳制，不随稀有度/等级/装备变化；
+  玩家本体不吃这个上限。低等级生物不再被一撞飞出好几个身位。
 - 脱战只有一条规则：`Mob.canChase(ent)` = 距离 ≤ `sightR × MOB_DEAGGRO_K`（=2）且视线不被墙挡；
   `topThreat()` 用它逐条筛仇恨表。超范围的目标【只在本帧失效】，仇恨记录永不抹除 ——
   超范围时自动改选范围内下一个有效目标，没有有效目标就返回 null 让 AI 游走；
@@ -423,30 +426,71 @@ EntityFX.hurt(ent, dur);
   Wing 的自转轴心 = 半月形外弧的圆心（`spinOrigin` 按"实体窗口边长"归一化，见 data.js）。
 - Soil（泥土）：伤害/血量/Flower Health 按稀有度在 `PETAL_RARITY_OVERRIDES.soil`；
   装备即生效的三项加成走 `PetalFX.bonus` → `Player.recompute`：
-  `extraRadius`（+10/件，叠加）、`flowerHp`（按稀有度相加）、`speedMul`（0.75/件，**乘积**）。
+  `extraRadius`（+5/件，叠加）、`flowerHp`（按稀有度相加）、`speedMul`（0.75/件，**乘积**）。
   `Player._tickSoil(dt)` 用指数阻尼平滑逼近半径与生命上限（速率 3 = 半径变化速度的 0.5×）；
   改生命上限时当前血量与 `dispHp/ghostHp` 按**同一比例**缩放 → 血条百分比恒定。
   `baseR / baseMaxHp` 是不含 Soil 的基准，`?hp=`/attach/重置 三处必须同步维护。
-  【花瓣轨道距离与本体半径解耦】：轨道半径一律用 `PLAYER_R_STD`（≈13.2）算，
-  不用 `this.r` —— 否则 Soil 的 +10 会把整圈花瓣一起推远（视觉上像整只放大）。
+  【花瓣轨道按当前实际半径】：`baseReach = this.r × (1 + PETAL_REACH) × 1.105`，
+  花瓣到主角【边缘】的距离/变化幅度保持设计比例，本体变大时花瓣跟着边缘一起外移；
+  旧版用固定 `PLAYER_R_STD` 会让花瓣挤到变大的身上。吸附预筛 `pullR` 随之同步。
   Wax 落点仍用 `p.r`（蜡块不能落在变大的花朵内部）。
+- 玩家移动是"推进加速度 + 阻尼"模型（`MOVE_DRAG_ACTIVE = 5` / `MOVE_DRAG_IDLE = 3.5`）：
+  每帧 `v = v × exp(-drag×dt) + a×dt`，`a = 目标速度 × MOVE_DRAG_ACTIVE`。
+  稳态速度 = `a/drag`，转向保留旧速度一小段（侧滑惯性），松开靠阻尼滑停；
+  客户端预测与服务端权威共用 `Player.update`，两端同一份常量，禁止只在单边加力。
 - **合成窗口（Craft）**：纯客户端 —— 库存就是背包的 `_gc`（`type.key|rar -> 数量`），
-  装入时一次性扣 5、失败返还、成功 +1 目标稀有度，与背包/装备同一份口径。
-  · 入口：左下角 `craftBtn`（`assets/ui/btn-party.svg`，与背包同尺寸，位于其下方，
-    `#dockBtns` 从底部锚定所以背包整体上移一格）；窗口尺寸/动效与背包一致
-    （主色 = btn-party 内板 #db9d5a，描边 #b17f49）。
-  · 下半列表 = 库存按 (花瓣 × 稀有度) 分行，一种一行、数量 0 整行不显示；
-    第一格卡面带 xN 角标，其余是图鉴同款灰槽。**数量 > 5 才上色可点**（点 = 装 5 张），
-    不足的置灰不可点；点击是否有效按【实时数量】判断（行角标可能滞后）。
-  · 成功率表 `UI.CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1/0.1%，按目标稀有度）；
-    失败概率均分 4 份 = 损失 1~4 张。
-  · 抖动时长均值随目标稀有度线性过渡（unusual 1s -> eternal 13s），取样
-    `mean × [0.6, 1.4]` 再钳 [1,18] —— 全档合计正好落在用户口径的 1~18s。
-  · 粒子：抖动期速率 = 最终迸发数 × 0.5 × 已过百分比 / 时长（总量 N/4，封顶一半），
-    最终迸发 unusual 1~2 个 -> eternal ≈500 个（线性过渡），颜色 = 目标稀有度色；
-    失败的损失卡迸发【源稀有度】色后分开缩小消失。粒子统一走
-    `UI.onCraftBurst(color, n)` → `Game.spawnParticles`（花朵世界坐标）。
-  · 成功后成品卡展示在聚拢中心：点击拿下来、或装下一组自动替换；背包界面始终 +1。
+  与背包/装备同一份口径。
+  · 入口：左下角 `craftBtn`（`assets/ui/btn-party.svg`，与背包同尺寸，位于其下方）或 `C` 键；
+    动效与背包一致（主色 #db9d5a，描边 #b17f49）。**窗口宽 432px（背包 1.5×）、
+    高 1.3×（max-height 530px），增加的高度全给下方卡片列表**，舞台固定 178px。
+  · 舞台 `.craft-stage` 用 `flex: 1 1 auto` 吃满主行剩余宽度（按钮侧栏固定 112px 靠右），
+    5 槽不能被挤窄。5 个材料槽按【正五边形】排列（一个顶点朝上），空槽/卡片均 48px。
+    **点击空槽或卡片 = 卸下全部材料并返还库存**（动画中不可卸）。
+  · 多张卡【均摊到 5 个槽】：`base = count/5 | 0`、`rem = count%5`，前 rem 槽 +1，
+    每槽卡面带 xN 角标（`CardRenderer.createCard({count})`），合成过程中角标同样保留。
+    不再把散卡堆在中心，也不显示损耗。
+  · 下半列表：库存按【花瓣种类】分行，同种不同稀有度同一行，每行 8 格 common..super
+    （**Eternal 不计入**）；零库存格 = 图鉴同款灰槽常显；有货格上色可点。
+    悬浮只出 tooltip，无额外 hover 样式。
+  · 点击行为：① 异种 → 退回现有材料再装 5 张；② 同种不足 5 → 补齐；
+    ③ 同种已满 5 → 再叠 5 张，只更新 xN 角标，**绝不自动开始，必须点 Craft**；
+    ④ **Shift+点击 → 装入全部库存并直接开始**（唯一的自动合成入口）。
+  · 成功率表 `UI.CRAFT_CHANCE`（64/38/19/9/4/2/1/0.1%，按目标稀有度）；
+    失败损失 1~4 张四档均分，**损失的卡不返还、剩余 1~4 张直接留原槽**（不展示损耗）。
+  · 计时：聚拢【周期固定】`_CRAFT_CYCLE = 1.25s`（= 原 0.5s ÷ 0.4，速度降为 0.4×，
+    不随目标稀有度变）；**次数随稀有度变化** `cycles = round(mean/3 / 1.25)`，
+    次数变少但总时长仍 = 旧口径 1/3。
+    末次【不是把周期拉长变慢】，而是 0→0.5 正常聚拢到最紧后**停留** `holdDur = 0.5×1.6`
+    （`holding` 帧 close 固定 1、不再张开、不再迸发中途粒子），停留结束才结算。
+  · 动画：每周期 `close = 0.5 - 0.5cos(pr·TAU)`（末次只走 0→0.5 的聚拢半程再 hold）；
+    抖动幅度 ∝ close；中途粒子只在聚拢段迸发（close>0.55 且相位上升），
+    方形、目标稀有度色、unusual 1~2 → eternal ≈500，走 UI 层 canvas `.craft-fx`。
+    **5 个槽位本体和卡同步收紧/张开**（不是静态灰槽）：`_craftStart` 逐帧写槽位 left/top
+    到中心，`_craftSpread(dyingSet)` 用【同一条 120ms 过渡】把槽位和卡一起放回五边形。
+    · **批量合成只播一次动画**：`_craftStart` 用 `_craftPlan(count, p)` 一次性算完所有轮
+     （成功 +1 成品、失败损 1~4 且剩余继续复用，直到不足 5 张），`_craftResolve` 一次性应用，
+     **不再逐轮 `setTimeout(_craftStart)` 重播**。成功 N 次 = 一次 `addGalleryCount(+N)` +
+     `.craft-big` 渐变展示带 **xN 角标的成品卡**（动画期间 5 槽本就带 xN 叠加显示）。
+     守恒：`wins*5 + losses + left === count`，且 `left < 5`。
+    · 结算表现：成功 = 中心【原地炸粒子】+ 成品卡，卡堆保持聚拢、**不重建卡面（避免闪一下）、
+     5 个空槽先不出现**；点这张结果卡（`_craftTakeResult`）或下一拨卡才从中心张开。
+     失败 = 炸掉 1~4 张（`_craftPop(out)` 渐小露空槽）+ 粒子，**炸卡渐小与剩余卡 + 槽回位同步**：
+     炸卡收进 `dyingSet`，`_craftSpread` 对它不 seat、不清隐藏定时器；其余卡和槽立即回位。
+    · 炸卡粒子【从卡当前位置迸发、短寿命 0.08~0.18s（归位结束前消散）、立即渲染首帧】
+     （`_craftFxBurst(..., quick=true)`），不再统一从中心延迟迸发；`.craft-fx` 的
+     `z-index:0` **低于槽位(1)与卡片(2)**，粒子不盖住卡面。
+    · 成品已自动 +N 进背包；点中心结果卡 `_craftTakeResult` = **直接点回背包/下方**，
+     结果卡收起、**不落到槽里**；不再用 `st.result` / `resultShown` 那套展示卡（已删除）。
+    · 切卡 / 加卡 / 卸下统一走 `_craftPop(el)` 渐大渐小，**渐大渐小同为 220ms**
+     （CSS `.22s` 与 JS 隐藏定时器 220ms 对齐）。**pop class 只加在卡面子元素 `.card` 上**
+     （CSS 选择器 `.craft-card > .card.craft-pop`），绝不作用在 `.craft-card` 本体：
+     本体的 `left/top/transform` 由合成动画逐帧写，被 CSS animation（尤其 `both`）覆盖会
+     把卡锁在 `scale(.35)/opacity .4` 看起来"消失"。`_craftStart` 开头强制清残留 pop 并恢复可见。
+     `_craftSeat` 归位时清 `transform`、`_craftSyncCards` 清 `transition/opacity`，
+     防止上次合成的旋转/位移残留导致"放卡会歪"；`_craftPop` 用 `clearTimeout(el._craftPopT)`
+     + 重建后 `card.parentNode !== el` 判据防止旧定时器把新装的卡隐藏。
+     **没有蒙版、没有右上角多余结果卡**（旧 `.craft-out` 已删）。成品自动 +1 进背包；
+     `craftGo` 绑定 `click -> _craftStart`；`_craftSyncTop` 显示成功率，空槽显示 `?`。
 - Antennae 的 `sight` 为官方视野比例，相机缩放 `1/(1+sight)`；
   所有以屏幕尺寸计算视口的位置都要除以缩放值。
 - 一卡多体的显示口径由 `PETAL_STAT_DISPLAY` 声明：`each` 单体值 / `total` 合计值，
@@ -473,8 +517,8 @@ EntityFX.hurt(ent, dur);
   `/summon` 等非自然生成不经过它。
 - Glass：穿透实体、没有血量，接触生物时每一片实体每 `interval` 秒结算一次单向伤害；
   图层在生物之上（`overMobs` + `Player.drawOverMobs`）。
-- Basil：`healBonus` 只有 Mythic+ 四档（Mythic 45% / Ultra 50% / Super 55% / Eternal 60%，
-  Unique 同 Eternal）；没有伤害、没有血量、没有碰撞（`noDamage + noHealth + noPush +
+- Basil：`healBonus` 只有 Mythic+ 四档（Mythic 45% / Ultra 50% / Super 55% / Eternal 60%）；
+  没有伤害、没有血量、没有碰撞（`noDamage + noHealth + noPush +
   noKnockback`），也不结算伤害；装填 2.5s。悬浮框只有 `Healing Bonus: +45%` 一行，
   标签色与 Heal 属性完全相同（`STAT_LABEL_COLORS.heal`）。
 - Orange：三实体阵型，伤害按目标上次实际受伤追加计算，上限 `Max Damage`。

@@ -255,13 +255,6 @@ UI/OracleCraft/Delay=You'll be able to craft again in {0:time}
 UI/Plinko/Title=Plinko
 UI/Plinko/Auto=Auto
 
-UI/UniqueCraft/Title=Forge
-UI/UniqueCraft/Button=Forge
-UI/UniqueCraft/Instructions=Unique petals will last until another player forges the same petal.<n/>When that happens, you will receive your Super petals back,<n/>but one will be permanently destroyed.
-UI/UniqueCraft/NoSupers=You do not have any Super petals to attempt this.
-UI/UniqueCraft/Cooldown=Cannot be forged again for {0:time}.
-UI/UniqueCraft/OwnerNamed="Ah I remember forging that petal for a flower named {0}..."
-UI/UniqueCraft/OwnerUnnamed="Ah I remember forging that petal... I can't recall their name..."
 
 UI/AssemblerCraft/Title=Assemble
 UI/AssemblerCraft/Button=Assemble

@@ -131,7 +131,7 @@ window.REGISTRY = {
    },
    "identified": true,
    "note": ""
-   },
+  },
   {
    "id": 3,
    "file": "assets/petals/3.svg",
@@ -233,11 +233,6 @@ window.REGISTRY = {
      "heal": 5467.5
     },
     "eternal": {
-     "dmg": 32805,
-     "hp": 32805,
-     "heal": 9500
-    },
-    "unique": {
      "dmg": 32805,
      "hp": 32805,
      "heal": 9500
@@ -2921,12 +2916,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 6800000,
-     "type": "Obstacle"
     }
    },
    "ai": {
@@ -3008,12 +2997,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 229635,
-     "dmg": 0,
-     "exp": 9300000,
      "type": "Obstacle"
     }
    },
@@ -3106,13 +3089,6 @@ window.REGISTRY = {
      "armor": 583,
      "exp": 12951125,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 1574640000,
-     "dmg": 65610,
-     "armor": 583,
-     "exp": 12951125,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -3194,12 +3170,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 328050,
-     "dmg": 0,
-     "exp": 13000000,
      "type": "Neutral"
     }
    },
@@ -3283,12 +3253,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Passive"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 20000000,
-     "type": "Passive"
     }
    },
    "ai": {
@@ -3370,12 +3334,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 9300000,
      "type": "Neutral"
     }
    },
@@ -3459,12 +3417,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 14000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -3546,12 +3498,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 16000000,
      "type": "Hostile"
     }
    },
@@ -3635,12 +3581,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Summon"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 0,
-     "exp": 12000000,
-     "type": "Summon"
     }
    },
    "ai": {
@@ -3722,12 +3662,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 15000000,
      "type": "Hostile"
     }
    },
@@ -3811,12 +3745,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 328050,
-     "dmg": 1953125,
-     "exp": 16000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -3846,16 +3774,69 @@ window.REGISTRY = {
    "desc": "It's just there doing its thing.",
    "spawn": "A Super Centipede has spawned somewhere!",
    "rarities": {
-    "common": { "hp": 25, "dmg": 10, "armor": 1, "exp": 1, "type": "Passive" },
-    "unusual": { "hp": 93.8, "dmg": 30, "armor": 2, "exp": 1, "type": "Passive" },
-    "rare": { "hp": 337.5, "dmg": 90, "armor": 7, "exp": 2, "type": "Passive" },
-    "epic": { "hp": 1350, "dmg": 270, "armor": 22, "exp": 14, "type": "Neutral" },
-    "legendary": { "hp": 8100, "dmg": 810, "armor": 65, "exp": 133, "type": "Neutral" },
-    "mythic": { "hp": 78975, "dmg": 2430, "armor": 194, "exp": 2038, "type": "Neutral" },
-    "ultra": { "hp": 3645000, "dmg": 7290, "armor": 583, "exp": 59386, "type": "Neutral" },
-    "super": { "hp": 109350000, "dmg": 21870, "armor": 583, "exp": 3895257, "type": "Neutral" },
-    "eternal": { "hp": 656100000, "dmg": 65610, "armor": 583, "exp": 3895257, "type": "Neutral" },
-    "unique": { "hp": 656100000, "dmg": 65610, "armor": 583, "exp": 3895257, "type": "Neutral" }
+    "common": {
+     "hp": 25,
+     "dmg": 10,
+     "armor": 1,
+     "exp": 1,
+     "type": "Passive"
+    },
+    "unusual": {
+     "hp": 93.8,
+     "dmg": 30,
+     "armor": 2,
+     "exp": 1,
+     "type": "Passive"
+    },
+    "rare": {
+     "hp": 337.5,
+     "dmg": 90,
+     "armor": 7,
+     "exp": 2,
+     "type": "Passive"
+    },
+    "epic": {
+     "hp": 1350,
+     "dmg": 270,
+     "armor": 22,
+     "exp": 14,
+     "type": "Neutral"
+    },
+    "legendary": {
+     "hp": 8100,
+     "dmg": 810,
+     "armor": 65,
+     "exp": 133,
+     "type": "Neutral"
+    },
+    "mythic": {
+     "hp": 78975,
+     "dmg": 2430,
+     "armor": 194,
+     "exp": 2038,
+     "type": "Neutral"
+    },
+    "ultra": {
+     "hp": 3645000,
+     "dmg": 7290,
+     "armor": 583,
+     "exp": 59386,
+     "type": "Neutral"
+    },
+    "super": {
+     "hp": 109350000,
+     "dmg": 21870,
+     "armor": 583,
+     "exp": 3895257,
+     "type": "Neutral"
+    },
+    "eternal": {
+     "hp": 656100000,
+     "dmg": 65610,
+     "armor": 583,
+     "exp": 3895257,
+     "type": "Neutral"
+    }
    },
    "ai": {
     "aggro": false,
@@ -3936,12 +3917,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 3900000,
      "type": "Neutral"
     }
    },
@@ -4025,12 +4000,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 3900000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -4112,12 +4081,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Technical"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 3900000,
      "type": "Technical"
     }
    },
@@ -4201,12 +4164,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 6600000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -4288,12 +4245,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 6600000,
      "type": "Neutral"
     }
    },
@@ -4377,12 +4328,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Passive"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 1,
-     "type": "Passive"
     }
    },
    "ai": {
@@ -4464,12 +4409,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 9900000,
      "type": "Neutral"
     }
    },
@@ -4553,12 +4492,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 28000000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -4640,12 +4573,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 262440,
-     "exp": 13000000,
      "type": "Hostile"
     }
    },
@@ -4729,12 +4656,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 1953125,
-     "exp": 13000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -4816,12 +4737,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 14000000,
      "type": "Hostile"
     }
    },
@@ -4905,12 +4820,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Summon"
-    },
-    "unique": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 16000000,
-     "type": "Summon"
     }
    },
    "ai": {
@@ -4992,12 +4901,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Passive"
-    },
-    "unique": {
-     "hp": 262440,
-     "dmg": 0,
-     "exp": 10000000,
      "type": "Passive"
     }
    },
@@ -5081,12 +4984,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Passive"
-    },
-    "unique": {
-     "hp": 32805,
-     "dmg": 0,
-     "exp": 16000000,
-     "type": "Passive"
     }
    },
    "ai": {
@@ -5168,12 +5065,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Passive"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 1953125,
-     "exp": 24000000,
      "type": "Passive"
     }
    },
@@ -5257,12 +5148,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 19531250,
-     "exp": 12000000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -5344,12 +5229,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 10000000,
      "type": "Hostile"
     }
    },
@@ -5433,12 +5312,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 164025,
-     "dmg": 0,
-     "exp": 8400000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -5520,12 +5393,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 164025,
-     "dmg": 45927,
-     "exp": 11000000,
      "type": "Hostile"
     }
    },
@@ -5609,12 +5476,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Friendly"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 9300000,
-     "type": "Friendly"
     }
    },
    "ai": {
@@ -5696,12 +5557,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 9900000,
      "type": "Obstacle"
     }
    },
@@ -5785,12 +5640,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 45927,
-     "exp": 13000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -5872,12 +5721,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Technical"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 45927,
-     "exp": 1,
      "type": "Technical"
     }
    },
@@ -5961,12 +5804,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 9765625,
-     "exp": 7100000,
-     "type": "Obstacle"
     }
    },
    "ai": {
@@ -6048,12 +5885,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Passive"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 20000000,
      "type": "Passive"
     }
    },
@@ -6137,12 +5968,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 9300000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -6224,12 +6049,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 16000000,
      "type": "Hostile"
     }
    },
@@ -6313,12 +6132,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Summon"
-    },
-    "unique": {
-     "hp": 19683,
-     "dmg": 0,
-     "exp": 6500000,
-     "type": "Summon"
     }
    },
    "ai": {
@@ -6400,12 +6213,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Summon"
-    },
-    "unique": {
-     "hp": 19683,
-     "dmg": 0,
-     "exp": 6500000,
      "type": "Summon"
     }
    },
@@ -6489,12 +6296,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 90,
-     "exp": 16000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -6576,12 +6377,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 13000000,
      "type": "Neutral"
     }
    },
@@ -6665,12 +6460,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 13122,
-     "exp": 13000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -6752,12 +6541,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Passive"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 8400000,
      "type": "Passive"
     }
    },
@@ -6841,12 +6624,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 6600000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -6928,12 +6705,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 8400000,
      "type": "Hostile"
     }
    },
@@ -7017,12 +6788,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 28000000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -7104,12 +6869,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Technical"
-    },
-    "unique": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 17000000,
      "type": "Technical"
     }
    },
@@ -7193,12 +6952,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Summon"
-    },
-    "unique": {
-     "hp": 19683,
-     "dmg": 0,
-     "exp": 8400000,
-     "type": "Summon"
     }
    },
    "ai": {
@@ -7280,12 +7033,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 15000000,
      "type": "Obstacle"
     }
    },
@@ -7369,12 +7116,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 8400000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -7456,12 +7197,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 13000000,
      "type": "Neutral"
     }
    },
@@ -7545,12 +7280,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Neutral"
-    },
-    "unique": {
-     "hp": 32805,
-     "dmg": 85293,
-     "exp": 15000000,
-     "type": "Neutral"
     }
    },
    "ai": {
@@ -7632,12 +7361,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 4800000,
      "type": "Hostile"
     }
    },
@@ -7721,12 +7444,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 328050,
-     "dmg": 1953125,
-     "exp": 19000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -7808,12 +7525,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "NPC"
-    },
-    "unique": {
-     "hp": 65600,
-     "dmg": 0,
-     "exp": 1,
      "type": "NPC"
     }
    },
@@ -7897,12 +7608,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 524880,
-     "exp": 4500000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -7984,12 +7689,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 613000,
      "type": "Hostile"
     }
    },
@@ -8073,12 +7772,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 613000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -8160,12 +7853,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 328050,
-     "dmg": 32805,
-     "exp": 14000000,
      "type": "Hostile"
     }
    },
@@ -8249,12 +7936,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "NPC"
-    },
-    "unique": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 1,
-     "type": "NPC"
     }
    },
    "ai": {
@@ -8336,12 +8017,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "NPC"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 0,
-     "exp": 36000000,
      "type": "NPC"
     }
    },
@@ -8425,12 +8100,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "NPC"
-    },
-    "unique": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 1,
-     "type": "NPC"
     }
    },
    "ai": {
@@ -8512,12 +8181,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 32805,
-     "dmg": 85293,
-     "exp": 17000000,
      "type": "Neutral"
     }
    },
@@ -8601,12 +8264,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "NPC"
-    },
-    "unique": {
-     "hp": 131220,
-     "dmg": 0,
-     "exp": 1,
-     "type": "NPC"
     }
    },
    "ai": {
@@ -8688,12 +8345,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 12000000,
      "type": "Neutral"
     }
    },
@@ -8777,12 +8428,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 8100000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -8864,12 +8509,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 32805,
-     "dmg": 0,
-     "exp": 1,
      "type": "Obstacle"
     }
    },
@@ -8953,12 +8592,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 12000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -9040,12 +8673,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 328050,
-     "dmg": 1953125,
-     "exp": 20000000,
      "type": "Hostile"
     }
    },
@@ -9129,12 +8756,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 12000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -9216,12 +8837,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 16000000,
      "type": "Neutral"
     }
    },
@@ -9305,12 +8920,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 98415,
-     "dmg": 32805,
-     "exp": 20000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -9392,12 +9001,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "NPC"
-    },
-    "unique": {
-     "hp": 0,
-     "dmg": 0,
-     "exp": 1,
      "type": "NPC"
     }
    },
@@ -9481,12 +9084,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 26244,
-     "dmg": 98415,
-     "exp": 7700000,
-     "type": "Obstacle"
     }
    },
    "ai": {
@@ -9568,12 +9165,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 9,
-     "exp": 13000000,
      "type": "Hostile"
     }
    },
@@ -9657,12 +9248,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 9,
-     "exp": 20000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -9744,12 +9329,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 19683,
-     "dmg": 0,
-     "exp": 25000000,
      "type": "Obstacle"
     }
    },
@@ -9833,12 +9412,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 196830,
-     "dmg": 0,
-     "exp": 16000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -9920,12 +9493,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Obstacle"
-    },
-    "unique": {
-     "hp": 19683,
-     "dmg": 0,
-     "exp": 13000000,
      "type": "Obstacle"
     }
    },
@@ -10009,12 +9576,6 @@ window.REGISTRY = {
      "dmg": 0,
      "exp": 0,
      "type": "Hostile"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 20000000,
-     "type": "Hostile"
     }
    },
    "ai": {
@@ -10096,12 +9657,6 @@ window.REGISTRY = {
      "hp": 0,
      "dmg": 0,
      "exp": 0,
-     "type": "Neutral"
-    },
-    "unique": {
-     "hp": 65610,
-     "dmg": 0,
-     "exp": 1,
      "type": "Neutral"
     }
    },

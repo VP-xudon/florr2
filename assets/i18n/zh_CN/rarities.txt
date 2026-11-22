@@ -43,7 +43,3 @@ Rarities/eternal/ArticleUpper=一个
 Rarities/eternal/Article=一个
 Rarities/eternal/NameColored=<c val="{#Colors/eternal}">{#Rarities/eternal/Name}</c>
 
-Rarities/unique/Name=唯一
-Rarities/unique/ArticleUpper=一个
-Rarities/unique/Article=一个
-Rarities/unique/NameColored=<c val="{#Colors/unique}">{#Rarities/unique/Name}</c>

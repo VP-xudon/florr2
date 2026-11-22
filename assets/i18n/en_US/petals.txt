@@ -378,9 +378,6 @@ Petals/mjolnir/default/Name=Fragment
 Petals/mjolnir/default/FullName=Fragment
 Petals/mjolnir/default/Description=Perhaps this could be used to forge something great?
 
-Petals/mjolnir/unique/Name=Mjölnir
-Petals/mjolnir/unique/FullName=Mjölnir
-Petals/mjolnir/unique/Description=Only the most powerful hammer in the universe.
 
 Petals/mecha_missile/Name=Missile
 Petals/mecha_missile/FullName=Mecha Missile
@@ -467,7 +464,6 @@ Petals/splitter/FullName=Soul Splitter
 Petals/splitter/Description={#Petals/splitter/Description/{0:rarity}#Petals/splitter/Description/default}
 Petals/splitter/Description/default=Fractures your soul into two.<n/><n/><c val="{#Colors/generic}">Select this petal again to control the other half.</c>
 Petals/splitter/Description/eternal=Fractures your soul into three.<n/><n/><c val="{#Colors/generic}">Select this petal again to control a different third.</c>
-Petals/splitter/Description/unique={#Petals/splitter/Description/eternal}
 
 Petals/goggles/Name=Goggles
 Petals/goggles/FullName=Paranormal Goggles

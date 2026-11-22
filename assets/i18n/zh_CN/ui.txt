@@ -253,13 +253,6 @@ UI/OracleCraft/Delay=你可以{0:time:left}继续合成
 UI/Plinko/Title=弹珠游戏
 UI/Plinko/Auto=自动
 
-UI/UniqueCraft/Title=锻造
-UI/UniqueCraft/Button=锻造
-UI/UniqueCraft/Instructions=唯一品质的花瓣将会留存，直至另一名玩家锻造出相同的花瓣。<n/>届时，你的超级花瓣会被返还，<n/>但你会损失其中一个花瓣。
-UI/UniqueCraft/NoSupers=你还没有任何超级花瓣可以尝试此操作。
-UI/UniqueCraft/Cooldown={0:time:left}才能再次锻造这种花瓣。
-UI/UniqueCraft/OwnerNamed=“啊，我记得我为一朵名叫{0}的花锻造过那种花瓣……”
-UI/UniqueCraft/OwnerUnnamed=“啊，我记得我为一朵花锻造过那种花瓣……但我想不起来那朵花的名字了……”
 
 UI/AssemblerCraft/Title=重构
 UI/AssemblerCraft/Button=重构

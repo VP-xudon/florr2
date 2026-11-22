@@ -233,39 +233,67 @@ body {
 
 /* ---- 合成窗口 ----
    主色 = 合成按钮（btn-party.svg）的内板 #db9d5a，描边 = darken 0.18 = #b17f49。
-   尺寸/位置/动效与背包窗口一致；上半是 5 个材料槽 + 合成按钮，下半是背包卡按种类分行。 */
-#craft { width: 288px; background: #db9d5a; border-color: #b17f49; }
+   位置/动效与背包窗口一致，宽度 = 背包 1.5×（288 → 432）；
+   上半是 5 个材料槽 + 合成按钮，下半是背包卡按种类分行（同种不同稀有度同一行）。 */
+#craft { width: 432px; max-height: 530px; background: #db9d5a; border-color: #b17f49; }
 #craft .win-body {
   display: flex; flex-direction: column; overflow: hidden;
   padding: 0 8px 8px; gap: 2px;
 }
 .craft-top { display: flex; align-items: stretch; gap: 4px; }
-.craft-stage { position: relative; flex: 1 1 auto; height: 178px; }
-/* 空材料槽：与生物图鉴空格同款（半透明灰）。聚拢/展示阶段整组隐藏（与截图一致） */
+/* 舞台吃满主行剩余宽度（按钮侧栏固定宽），5 槽不再被挤；高度固定，增量全给下方列表 */
+.craft-stage { position: relative; flex: 1 1 auto; min-width: 0; height: 178px; }
+/* 空材料槽：正五边形五个，尺寸与下方卡片一致；点击 = 卸下全部材料 */
 .craft-slot {
-  position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px;
-  border-radius: 3.2px; background: rgba(96, 96, 96, .38);
+  position: absolute; width: 48px; height: 48px; margin: -24px 0 0 -24px;
+  border-radius: 3.2px; background: rgba(96, 96, 96, .38); cursor: pointer;
+  z-index: 1;
 }
-.craft-stage.crafting .craft-slot { display: none; }
-/* 待合成卡：初始停在各自槽位上，点合成后 0.24s 聚拢到中心（left/top 过渡），
-   抖动/分开都写在 transform 上 —— 与定位互不打架 */
+.craft-stage.crafting .craft-slot { opacity: .32; }
+/* 待合成卡：每帧直接写 left/top/transform，绝不能加 CSS 过渡（会拖慢聚拢张开） */
 .craft-card {
-  position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px;
-  transition: left .24s ease, top .24s ease; z-index: 2;
+  position: absolute; width: 48px; height: 48px; margin: -24px 0 0 -24px;
+  z-index: 2; cursor: pointer;
+}
+/* 切卡 / 加卡 / 卸下的渐大渐小：只缩放【卡面内容】，绝不动卡片本体的
+   left/top/transform —— 那些每帧由合成动画写，CSS 动画会覆盖导致卡片"消失"。 */
+.craft-card > .card.craft-pop { animation: craft-pop .22s cubic-bezier(.3, 1.5, .5, 1); }
+.craft-card > .card.craft-pop-out { animation: craft-pop-out .22s ease-in forwards; }
+@keyframes craft-pop {
+  from { transform: scale(.35); opacity: .4; }
+  to   { transform: scale(1); opacity: 1; }
+}
+@keyframes craft-pop-out {
+  from { transform: scale(1); opacity: 1; }
+  to   { transform: scale(.2); opacity: 0; }
+}
+/* UI 层方形粒子画布：就在合成舞台内，不受世界坐标/相机影响。
+   z-index 0 = 位于槽位(1)和卡片(2)【下方】，粒子不会盖住卡面。 */
+.craft-fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+/* 最终结果：中心渐大一张更大的卡面，点击即"拿下来"（收起 + 5 槽从中心张开） */
+.craft-big {
+  position: absolute; left: 50%; top: 50%; width: 74px; height: 74px;
+  margin: -37px 0 0 -37px; z-index: 5; cursor: pointer;
+}
+.craft-big.grow { animation: craft-grow .42s cubic-bezier(.2, 1.5, .5, 1) both; }
+.craft-big .card { width: 100%; height: 100%; pointer-events: none; }
+.craft-big.hidden { display: none !important; }
+@keyframes craft-grow {
+  from { transform: scale(.15); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }
 .craft-card .card { width: 100%; height: 100%; }
 .craft-side {
-  flex: 0 0 92px; display: flex; flex-direction: column;
+  flex: 0 0 112px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 5px;
 }
 .craft-btn {
-  min-width: 72px; padding: 5px 8px; border-radius: 5px; cursor: pointer;
+  min-width: 56px; padding: 4px 6px; border-radius: 5px; cursor: pointer;
   border: 2.4px solid #000; background: #8a8a8a; color: #fff;
-  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 14px; font-weight: 800;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 800;
   -webkit-text-stroke: 1.2px #000; paint-order: stroke fill;
-  transition: filter .1s, transform .08s;
+  transition: transform .08s;
 }
-.craft-btn.ready:hover { filter: brightness(1.12); }
 .craft-btn:active { transform: scale(.95); }
 .craft-btn:disabled { cursor: default; }
 .craft-chance {
@@ -278,7 +306,9 @@ body {
   font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 11px; font-weight: 800;
   color: #fff; -webkit-text-stroke: 1.4px #000; paint-order: stroke fill;
 }
-/* 下半：一种 (花瓣×稀有度) 一行，行内 8 格（首格 = 卡面 + xN 角标，其余空槽） */
+/* 下半：一种花瓣一行，行内 8 格 = 8 个可合成稀有度（common..super，eternal 不计入）；
+   有货的格上色可点（装 5 张 / 补齐 / 叠加触发自动合成），空槽 = 生物图鉴同款灰槽；
+   Shift+点击 = 全部库存自动多次合成。悬浮只出 tooltip。 */
 .craft-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .craft-list::-webkit-scrollbar { width: 8px; }
 .craft-list::-webkit-scrollbar-track { background: transparent; }
@@ -289,19 +319,9 @@ body {
   background: rgba(96, 96, 96, .38);
 }
 .craft-cell.on { background: transparent; cursor: pointer; }
-.craft-cell.on:hover { filter: brightness(1.12); }
 .craft-cell.off { cursor: default; }
 .craft-cell.off .card { filter: grayscale(.85) brightness(.82); }   /* 凑不齐 5 张：置灰不可点 */
 .craft-cell .card { position: absolute; inset: 0; }
-/* 成品展示卡：成功后停在聚拢中心，点击收起（卡本身已自动进背包） */
-.craft-result {
-  position: absolute; left: 46%; top: 48%; width: 40px; height: 40px;
-  margin: -20px 0 0 -20px; z-index: 3; cursor: pointer;
-  animation: slot-pop .3s cubic-bezier(.3, 1.4, .5, 1) both;
-}
-.craft-result.hidden { display: none !important; }
-.craft-result .card { width: 100%; height: 100%; }
-
 /* 分栏标签：四等分的小按钮，选中项用白底深字 */
 .set-tabs { display: flex; gap: 4px; padding: 2px 12px 0; }
 .set-tab {

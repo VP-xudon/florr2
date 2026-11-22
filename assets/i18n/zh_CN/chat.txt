@@ -3,8 +3,6 @@ Petals/AnnouncementPrefix={#Rarities/{0:rarity}/ArticleUpper}{#Rarities/{0:rarit
 
 Chat/PetalCraftedUnnamed={#Chat/PetalCraftedUnnamed/{0:rarity}#Chat/PetalCraftedUnnamed/default}
 Chat/PetalCraftedNamed={#Chat/PetalCraftedNamed/{0:rarity}#Chat/PetalCraftedNamed/default}
-Chat/PetalCraftedUnnamed/unique=有人锻造了{#Rarities/{0:rarity}/Name}品质的{#Petals/{0:base}/FullName}！
-Chat/PetalCraftedNamed/unique={1}锻造了{#Rarities/{0:rarity}/Name}品质的{#Petals/{0:base}/FullName}！
 Chat/PetalCraftedUnnamed/default=有人合成了{#Petals/AnnouncementPrefix:0}！
 Chat/PetalCraftedNamed/default={1}合成了{#Petals/AnnouncementPrefix:0}！
 
@@ -202,7 +200,6 @@ Chat/Oracle/Idle/38=复之，复之，亦复如是
 Chat/Oracle/Idle/39=诚然如此预言
 Chat/Oracle/Idle/40=诸般后果，吾难负其责
 
-# When a Super/Unique petal is about to be crafted
 Chat/Oracle/Prediction={#Chat/Oracle/Prediction/{!math:{0}:%:3}}
 Chat/Oracle/Prediction/0=诚然如此预言……料不久便会应验……
 Chat/Oracle/Prediction/1=早有预言，应验之刻……

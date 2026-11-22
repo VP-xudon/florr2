@@ -126,10 +126,14 @@ class Game {
         e.preventDefault();
         if (typeof DebugScreen !== 'undefined') DebugScreen.toggle();
       }
-      // C：只切碰撞箱（调试屏幕关闭时也可单独看）
-      if (k === 'c' && (typeof DebugScreen === 'undefined' || DebugScreen.on)) {
+      // C：调试屏幕打开时切碰撞箱；平时开关合成窗口（与左下角图标同一入口）
+      if (k === 'c') {
         e.preventDefault();
-        this.showHitbox = !this.showHitbox;
+        if (typeof DebugScreen !== 'undefined' && DebugScreen.on) {
+          this.showHitbox = !this.showHitbox;
+        } else {
+          this.toggleCraft();
+        }
       }
       // 背包热键：Z；生物图鉴没有热键，只能点左下角按钮。
       if (k === 'z') { e.preventDefault(); this.toggleBag(); }
