@@ -18,6 +18,7 @@ const SpiderGait = {
 
   _text: null,       // 原始 SVG 文本
   _loading: false,
+  _promise: null,    // Loading 阶段等待解析完成用
   _legs: null,       // 8 条腿的曲线参数
   _vb: null,         // viewBox [x, y, w, h]
   _bodyUrl: undefined,
@@ -29,7 +30,7 @@ const SpiderGait = {
     if (this.ready()) return true;
     if (!this._loading) {
       this._loading = true;
-      fetch(this.SRC + '?v=' + (typeof ASSET_VER !== 'undefined' ? ASSET_VER : 1))
+      this._promise = fetch(this.SRC + '?v=' + (typeof ASSET_VER !== 'undefined' ? ASSET_VER : 1))
         .then((r) => (r.ok ? r.text() : null))
         .then((t) => {
           if (!t) return;
@@ -39,9 +40,23 @@ const SpiderGait = {
           this._vb = vb[1].split(/[\s,]+/).map(Number);
           this._text = t;
         })
-        .catch(() => { /* 本地直接打开等场景：退回静态贴图 */ });
+        .catch(() => { /* 本地直接打开等场景：退回静态贴图 */ })
+        .then(() => { this._loading = false; });
     }
     return false;
+  },
+
+  // Loading 阶段调用：等步态解析完，并让无腿身体图真正解码好。
+  // 少了这一步，新机子进游戏的前几帧蜘蛛会退回整张贴图（八条腿画两遍）。
+  async prewarm() {
+    this.ensure();
+    if (this._promise) { try { await this._promise; } catch (e) { /* 已吞掉 */ } }
+    if (!this.ready()) return false;
+    if (typeof SpriteStore !== 'undefined' && typeof SpriteStore.load === 'function') {
+      const url = this.bodyUrl();
+      if (url) await SpriteStore.load('mob21_body', url);
+    }
+    return true;
   },
 
   // 八条腿都是 "M55 55q x1 y1 x2 y2"（相对控制点），把后面两组坐标捞出来。

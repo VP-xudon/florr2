@@ -117,8 +117,21 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `sim/constants.js` 先于所有读取 `SNAP_DT` 的模块。
 - `net/protocol.js` 先于 `server.js` / `client.js` / `game.js`：`FX_FIELDS` 与 `petalNetKey` 的唯一声明。
 - `i18n-extra.js` 先于 `game.js`：`DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 读取这些键。
-- `main.js` 末尾 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 后台素材。
-- 素材全部完成才 `UI.hideLoading()`；20 秒未完成显示慢加载提示但继续等待。
+- `main.js` 末尾 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 等待服务端库存镜像。
+- Loading 蒙版【绝不提前撤】，依次等待：
+  `CardRenderer.prewarm`（全部花瓣的 fetch / `getBBox` / dataURL / Image 解码 + 128/256px 实体位图）→
+  `MobFX.prepareAssets`（尾针空壳 / 无触角身体 / Pollen，内部 fetch 自带超时且派生素材改为 await）→
+  `SpiderGait.prewarm` / `AntArt.prewarm`（步态与蚂蚁分件图真正解码）→
+  `SpriteStore.loadAll`（清单素材 + 所有派生素材，失败自动重试 3 次，判定必须 `naturalWidth > 0`）→
+  瓦片位图（地图实际用到的 `svg#flags` 组合全部 `canvasFlip` 到 288px）→
+  首屏生物位图/轴心/轮廓（`SpriteStore.prewarmMobs`，按实体真实 `drawSize`；同时完成全局裁剪框标定）→
+  字体就绪（最多 5s）→ `UI.prewarmWindows`（背包整表与合成舞台/列表在隐藏窗口里建好并统一重绘）→
+  小地图位图（含 `_mmFullPx` 全图大图，不再用 800ms 定时器）。
+- 字体回调（`cards.js` / `ui/tooltip.js` 的 `document.fonts.load().then(repaintAll)`）用 `window.__uiBooted`
+  拦住 Loading 期间的重复全量重绘；迟到字体才在撤蒙版后补一次。
+- 全部完成才 `UI.hideLoading()`；30 秒未完成显示慢加载提示但继续等待。
+- 卡面有两套独立缓存：`SpriteStore.images`（世界实体）与 `CardRenderer` 的 `_raw/_tinted/_imgCache`（卡面）；
+  只加载前者仍会在首次开背包时集中 fetch + 强制重排，所以两者都必须预热。
 
 主要全局：`RARITIES`、`RARITY_ORDER`、`PETAL_TYPES`、`MOB_TYPES`、`PETAL_BY_ID`、`MOB_BY_ID`、
 `I18N`、`SpriteStore`、`CardRenderer`、`UI`、`PetalFX`、`MobFX`、`InvulnFX`、`EntityFX`、

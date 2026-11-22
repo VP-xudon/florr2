@@ -49,6 +49,7 @@ const AntArt = {
       baseKey: 'mob' + svgId + '_base',    // 贴图底层（翅膀之下）
       topKey: 'ant' + svgId + '_top',      // 贴图顶层（翅膀之上的身体）
       loading: false,
+      promise: null,                       // Loading 阶段等待分层图全部解码
       vb: null, head: '', tail: '',
       base: null, top: null, mid: null,
     };
@@ -68,12 +69,24 @@ const AntArt = {
     const r = this._rec(slug);
     if (!r || r.mid || r.loading) return !!(r && r.mid);
     r.loading = true;
-    fetch(r.src + '?v=' + (typeof ASSET_VER !== 'undefined' ? ASSET_VER : 1))
+    r.promise = fetch(r.src + '?v=' + (typeof ASSET_VER !== 'undefined' ? ASSET_VER : 1))
       .then((res) => (res.ok ? res.text() : null))
-      .then((t) => { if (t && this._parse(r, t)) this._build(r); })
+      .then((t) => { if (t && this._parse(r, t)) return this._build(r); return null; })
       .catch(() => { /* 本地直接打开等场景：退回静态贴图 */ })
       .then(() => { r.loading = false; });
     return false;
+  },
+
+  // Loading 阶段调用：等所有蚂蚁物种的底层/顶层/翅膀/小牙分层图真正解码好。
+  async prewarm() {
+    const waits = [];
+    for (const slug of Object.keys(this.SPECIES)) {
+      const r = this._rec(slug);
+      if (!r) continue;
+      this.ensure(slug);
+      if (r.promise) waits.push(r.promise);
+    }
+    await Promise.all(waits);
   },
 
   _parse(r, txt) {
@@ -129,13 +142,15 @@ const AntArt = {
   _url(txt) { return 'data:image/svg+xml,' + encodeURIComponent(txt); },
 
   _build(r) {
-    if (typeof SpriteStore === 'undefined' || !SpriteStore.load) return;
+    if (typeof SpriteStore === 'undefined' || !SpriteStore.load) return Promise.resolve();
+    const waits = [];
     // 碰撞素材：全部身体（所有体节都在），翅膀/小牙不在里面
-    SpriteStore.load(r.bodyKey, this._url(this._html(r, r.base.concat(r.top))));
+    waits.push(SpriteStore.load(r.bodyKey, this._url(this._html(r, r.base.concat(r.top)))));
     // 贴图底层 / 顶层（翅膀与小牙夹在中间）
-    SpriteStore.load(r.baseKey, this._url(this._html(r, r.base)));
-    SpriteStore.load(r.topKey, this._url(this._html(r, r.top)));
-    for (const p of r.mid) SpriteStore.load(p.key, this._url(this._html(r, [p.el])));
+    waits.push(SpriteStore.load(r.baseKey, this._url(this._html(r, r.base))));
+    waits.push(SpriteStore.load(r.topKey, this._url(this._html(r, r.top))));
+    for (const p of r.mid) waits.push(SpriteStore.load(p.key, this._url(this._html(r, [p.el]))));
+    return Promise.all(waits);
   },
 
   // SVG 坐标 → artCanvas 局部坐标（与 SpiderGait._map 完全同一套换算）

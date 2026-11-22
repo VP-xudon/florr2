@@ -552,6 +552,23 @@ const UI = {
     this.hideLoadingWarn();
   },
 
+  // Loading 阶段一次性建好背包/合成窗口的 DOM、canvas 与事件绑定。
+  // 两个渲染入口都有"窗口关着就早退"的保护（见 renderInventory / _craftSyncList），
+  // 所以预热必须直接调底层构建函数；卡面素材此时已由 CardRenderer.prewarm 解码完毕。
+  async prewarmWindows() {
+    try {
+      if (!this._invBuilt) this._buildInventory();
+      this._syncInventoryCounts();
+      this._craftBuildTop();
+      this._craftSyncList(true);
+      // createCard 里的 asset().then 要几个微任务才把 img 挂上；等一帧后再同步重绘，
+      // 保证蒙版撤掉时背包/合成里的卡已经是带素材的最终画面。
+      await Promise.resolve();
+      await new Promise((r) => requestAnimationFrame(r));
+      CardRenderer.repaintAll();
+    } catch (e) { console.error('[UI] 窗口预热失败：', e); }
+  },
+
   // 加载过慢提示：定格于「正上方中央」的悬浮框（只提示，不影响后台继续加载）。
   // 文案一律从 i18N 提取（UI/Title/LoadingSlow），不硬编码。
   showLoadingWarn() {
@@ -1204,9 +1221,9 @@ const UI = {
   },
 
   // 下半部分 = 背包库存按【花瓣种类】分行（同种不同稀有度同一行，eternal 不计入）
-  _craftSyncList() {
+  _craftSyncList(force) {
     const host = this.refs.craftList;
-    if (!host || !this.isCraftVisible()) return;
+    if (!host || !(force || this.isCraftVisible())) return;
     const rars = RARITY_ORDER.slice(0, 8);
     const types = [];
     for (const p of PETAL_TYPES) {

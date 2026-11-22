@@ -558,7 +558,7 @@ Object.assign(UI, {
                 document.fonts.load('700 26px Ubuntu'),
                 document.fonts.load('400 15px Ubuntu'),
                 document.fonts.load('700 15px Ubuntu')
-              ]).catch(() => {}).then(() => CardRenderer.repaintAll());
+              ]).catch(() => {}).then(() => { if (window.__uiBooted) CardRenderer.repaintAll(); });
             }
       const loop = () => {
         // 小地图动画推进（三档切换 = 0.6s 平滑过渡）

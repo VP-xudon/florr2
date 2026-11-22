@@ -7,6 +7,7 @@ const ARTCROP_REF_KEY = 'mob3';
 const SpriteStore = {
   _cropR: 0,     // 固定裁剪框比例（相对画布边长）；0 = 还没标定出来
   images: {},   // key -> Image | null   (null = 已尝试但失败)
+  sources: {},  // key -> src（派生素材重试时用）
   cache: {},    // key -> { size: canvas }
   white: {},    // key -> { size: canvas }  白色剪影
   artBox: {},   // 'key@size' -> [minX, minY, w, h] | null（实际图案的像素包围盒）
@@ -21,6 +22,9 @@ const SpriteStore = {
   load(key, src, timeout = 8000) {
     return new Promise((resolve) => {
       if (!src) { this.images[key] = null; resolve(null); return; }
+      // 同一份素材已就绪就不再重复创建 Image（预热与重试会多次调用同一键）
+      if (this.ready(key) && this.sources[key] === src) { resolve(this.images[key]); return; }
+      this.sources[key] = src;
       let settled = false;
       const done = (v) => {
         if (settled) return; settled = true;
@@ -38,7 +42,23 @@ const SpriteStore = {
   getImage(key) { return this.images[key]; },
   // map.js / 其它地方可能用 get() 取图，做别名以防调用到不存在的方法
   get(key) { return this.images[key]; },
-  ready(key) { const v = this.images[key]; return !!(v && v.complete); },
+  // 【真正就绪】判定：加载失败时 complete 也会变成 true，必须再看 naturalWidth。
+  // 旧版只看 complete，慢网络超时兜底成 null 后仍被当成"已加载"，蒙版会提前撤掉。
+  ready(key) {
+    const v = this.images[key];
+    return !!(v && v.complete && v.naturalWidth > 0);
+  },
+  // 等待整份清单真正就绪：单张超时/失败自动重试，返回是否全部成功。
+  async loadAll(list, timeout = 5000, tries = 3) {
+    let pending = (list || []).slice();
+    for (let i = 0; i < tries && pending.length; i++) {
+      await Promise.all(pending.map(([k, s]) => this.load(k, s, timeout)));
+      pending = pending.filter(([k]) => !this.ready(k));
+      if (pending.length && i < tries - 1) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (pending.length) console.warn('[SpriteStore] 重试后仍缺失的素材：', pending.map((x) => x[0]));
+    return pending.length === 0;
+  },
 
   // 返回以 size×size 渲染好的 canvas（首次构建并缓存）
   canvas(key, size) {
@@ -326,6 +346,39 @@ const SpriteStore = {
       }
     } catch (e) { poly = null; }
     return (poly && poly.length >= 3) ? poly : null;
+  },
+
+  // Loading 阶段预热：把首帧会用到的生物位图/轴心/轮廓提前建好。
+  // 这些缓存都是按 key@size 建的，而 drawSize 随物种 × 稀有度 × 等级变化；
+  // 只解码 Image 不够，撤蒙版后第一帧会集中做 2× 超采样 + 裁剪 + 轮廓提取而卡顿。
+  prewarmMobs(mobs) {
+    if (!this._cropRatio()) return 0;   // 顺带完成全局 160px 裁剪框标定（一次性像素扫描）
+    let built = 0;
+    const seen = new Set();
+    const one = (key, size) => {
+      if (!key || !(size > 0)) return;
+      const ck = key + '@' + size;
+      if (seen.has(ck)) return;
+      seen.add(ck);
+      this.artCanvas(key, size);        // 内部会建 2× 底图 + 白色剪影 + 裁剪框
+      this.mobPivot(key);
+      this.contour(key, size);
+      built++;
+    };
+    for (const m of mobs || []) {
+      if (!m || m.dead) continue;
+      const size = Math.round(m.drawSize || (m.r || 16) * 2) || 32;
+      one('mob' + (m.artSvg || m.svg), size);
+      one('mob' + m.svg, size);
+      const bodyKey = 'mob' + m.svg + '_body';
+      if (this.ready(bodyKey)) one(bodyKey, size);
+    }
+    // 动态部件（蚂蚁分层、去腿身体、尾针空壳等）：按常见渲染尺寸预热。
+    for (const key of Object.keys(this.sources)) {
+      if (!/^(mob|ant)/.test(key) || !this.ready(key)) continue;
+      for (const size of [96, 160, 256]) one(key, size);
+    }
+    return built;
   },
 
   // 按 Tiled 翻转标志（H=1, V=2, D=4）返回一个已翻转并缓存的画布。

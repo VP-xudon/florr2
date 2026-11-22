@@ -57,10 +57,19 @@ const MobFX = {
     // 先设兜底：确保即使下面精确解析失败，尾针也能显示（不缺失、不全透明）
     this._assetsReady = true;
     this.hornetTail = this.hornetTail || HORNET_TAIL_FALLBACK;
+    // fetch 必须自带超时：Loading 现在会等 prepareAssets 真正跑完，不能让一次卡住的请求挂死蒙版。
+    const fetchText = async (url, ms = 10000) => {
+      const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctl ? setTimeout(() => ctl.abort(), ms) : 0;
+      try {
+        const r = await fetch(url, ctl ? { signal: ctl.signal } : undefined);
+        return r.ok ? await r.text() : null;
+      } catch (e) { return null; }
+      finally { if (timer) clearTimeout(timer); }
+    };
     try {
-      const response = await fetch('assets/mobs/11.svg?v=' + ASSET_VER);
-    if (!response.ok) throw new Error('Hornet SVG load failed: ' + response.status);
-    const raw = await response.text();
+    const raw = await fetchText('assets/mobs/11.svg?v=' + ASSET_VER);
+    if (!raw) throw new Error('Hornet SVG load failed');
     // 11.svg 顶部有一段注释，解析前先剥掉
     let source = raw;
     const cmt = source.indexOf('-->');
@@ -196,16 +205,15 @@ const MobFX = {
       emptyGroup.appendChild(keep);
     }
     const serialize = (node) => 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(node));
-    // 【不 await】：prepareAssets 若阻塞在某个素材上，boot 的 loading 蒙版永远不撤
-    // —— 表现就是整个游戏"停摆"。素材加载完会自动可用，晚一两帧毫无影响。
-    SpriteStore.load('mob11_empty', serialize(emptyRoot));
+    // 派生素材必须等真正解码好：否则 Hornet 首帧会退回整张贴图（尾针显示两遍）。
+    await SpriteStore.load('mob11_empty', serialize(emptyRoot));
     // Bumble Bee 尾部产出的 Pollen 走【生物实体】链路（有碰撞箱/红闪/退场/F3），
     // 所以要把 Pollen 花瓣的素材也注册进 SpriteStore 的 mob 键空间，否则它既画不出来、
     // 也提取不到轮廓（mobHitTest 直接返回 null -> 打不到玩家、花瓣也打不到它）。
     const pollen = (typeof PETAL_TYPES !== 'undefined')
       ? PETAL_TYPES.find((t) => t && t.slug === 'pollen') : null;
     if (pollen && pollen.svg != null) {
-      SpriteStore.load('mobpollen', 'assets/petals/' + pollen.svg + '.svg?v=' + ASSET_VER);
+      await SpriteStore.load('mobpollen', 'assets/petals/' + pollen.svg + '.svg?v=' + ASSET_VER);
     }
     // Wax 等落位实体的素材需要预热：artCanvas 异步构建期间返回 null，
     // 预热可保证首次绘制即可显示。
@@ -213,9 +221,8 @@ const MobFX = {
     // 生成一份"只有中间椭圆身体"的素材，碰撞轮廓改用它 —— 触角不该撑大碰撞箱。
     for (const id of ['11', '27']) {
       try {
-        const res = await fetch('assets/mobs/' + id + '.svg?v=' + ASSET_VER);
-        if (!res.ok) continue;
-        const txt = await res.text();
+        const txt = await fetchText('assets/mobs/' + id + '.svg?v=' + ASSET_VER);
+        if (!txt) continue;
         let src = txt;
         const close = src.indexOf('-->');
         if (src.trim().startsWith('<!--') && close >= 0) src = src.slice(close + 3).trim();
@@ -272,7 +279,7 @@ const MobFX = {
             keep2.setAttribute('fill', 'none'); keep2.setAttribute('stroke', 'none');
             g2.appendChild(keep2);
           }
-          SpriteStore.load('mob' + id + '_body',
+          await SpriteStore.load('mob' + id + '_body',
             'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(root2)));
         }
       } catch (e) { /* 失败就退回整张图，不影响游戏 */ }

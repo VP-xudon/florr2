@@ -36,15 +36,8 @@ Object.assign(UI, {
       this._mmHover = e.clientX >= left - 4 && e.clientX <= left + size + 4
                    && e.clientY >= top - 4 && e.clientY <= top + size + 4;
     });
-    // 预热位图（中档 + 全图/局部兜底）：避免第一次按 M 时现场构建整张地图造成延迟
-    setTimeout(() => {
-      const g = window.__game;
-      if (!g || !g.map || typeof g.map.minimapCanvas !== 'function') return;
-      try {
-        g.map.minimapCanvas(this._mmFullPx());
-        g.map.minimapCanvas(this._mmBmpPx(160 * 1.2));
-      } catch (e) { /* 忽略：预热失败只影响首次切换 */ }
-    }, 800);
+    // 位图预热已移入 boot 的 Loading 阶段（含 _mmFullPx 大图）：
+    // 这里的 800ms 定时器会在蒙版撤掉后才建 648~1296px 的全图位图，正是开局卡顿源之一。
   },
   cycleMinimapMode() {
     this._mmMode = (this._mmMode + 1) % 3;

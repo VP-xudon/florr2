@@ -1,4 +1,4 @@
-// main.js — 资源加载引导（非阻塞，绝不卡死加载界面）
+// main.js — 资源加载引导：Loading 蒙版会等到所有素材真正解码、窗口预热完成后才撤
 'use strict';
 
 const ASSET_LIST = [];
@@ -50,34 +50,78 @@ async function boot() {
     game.syncInventory();   // 初始渲染卡槽（花朵下方快捷栏常驻显示）
     window.__game = game;   // 供 UI 取玩家数据（如物品栏落点）
     // 背包是服务端权威：启动后拉一次镜像，之后所有增减都走 UI._invRequest 的回执。
-    if (UI && typeof UI.syncInventoryFromServer === 'function') UI.syncInventoryFromServer();
+    if (UI && typeof UI.syncInventoryFromServer === 'function') await UI.syncInventoryFromServer();
   } catch (e) {
     console.error('[boot] 初始化失败：', e);
   } finally {
     // 注意：不在这里撤 loading —— 必须等全部资源加载完成后再撤（见下方 await）
   }
 
-  // 资源在后台加载（互不阻塞）。【蒙版绝不提前撤】—— 必须等全部资源加载完成。
-  // 超过 20s 仍未完成：在正上方中央显示一个定格提示框，但后台继续等（不放弃加载）。
+  // 【蒙版绝不提前撤】：必须等所有素材真正解码、所有窗口预热完成后才撤。
+  // 超过 30s 仍未完成才弹定格提示（后台继续等，不放弃加载）。
   const slowWarn = setTimeout(() => {
     if (window.GARDEN_DATA && UI.showLoadingWarn) UI.showLoadingWarn();
-  }, 20000);
+  }, 30000);
   try {
-    // prepareAssets 最多等 8s：它内部只做"解析/测量 + 触发素材加载"，
-    // 不允许任何网络抖动把 loading 蒙版挂死（素材晚到会自动补上，不影响游戏）。
-    await Promise.race([MobFX.prepareAssets(), new Promise((r) => setTimeout(r, 8000))]);
-    await Promise.allSettled(ASSET_LIST.map(([k, s]) => SpriteStore.load(k, s)));
-  } catch (e) { /* 单个素材失败不影响其他 */ }
-  // 小地图位图预热：在 Loading 阶段就构建好，避免首次悬浮缩放时现场绘制整张大图而卡顿
-  try {
+    // 1) 卡面 / 世界实体素材：fetch + getBBox + dataURL + Image 解码一次做完。
+    //    同时也消除了第一次打开背包/合成时的集中卡顿。
+    if (typeof CardRenderer !== 'undefined' && typeof CardRenderer.prewarm === 'function') {
+      await CardRenderer.prewarm(PETAL_TYPES.map((p) => String(p.svg)));
+    }
+    // 2) 生物派生素材：Hornet 空壳 / 无触角身体 / Pollen，以及蜘蛛步态与蚂蚁分件。
+    await MobFX.prepareAssets();
+    if (typeof SpiderGait !== 'undefined' && SpiderGait.prewarm) await SpiderGait.prewarm();
+    if (typeof AntArt !== 'undefined' && AntArt.prewarm) await AntArt.prewarm();
+    // 3) 清单素材 + 派生素材（data URL / 动态部件）一并校验：失败/超时自动重试。
+    const derived = Object.keys(SpriteStore.sources || {}).map((k) => [k, SpriteStore.sources[k]]);
+    await SpriteStore.loadAll(ASSET_LIST.concat(derived));
+    // 3b) 瓦片位图：loadAll 只把 SVG 解码成 Image，首帧才逐格建 288² canvas。
+    //     这里把地图实际用到的 svg + 翻转组合一次性栅格化。
+    try {
+      const seen = new Set();
+      for (const layer of (window.GARDEN_DATA && window.GARDEN_DATA.layers) || []) {
+        for (const t of layer.tiles || []) {
+          if (!t || t === -1) continue;
+          let name = t, flags = 0;
+          if (typeof t === 'string') {
+            const h = t.indexOf('#');
+            if (h >= 0) { name = t.slice(0, h); flags = parseInt(t.slice(h + 1), 10) || 0; }
+          }
+          const sig = name + '#' + flags;
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          SpriteStore.canvasFlip('tile' + name, GARDEN_TILE, flags);
+        }
+      }
+    } catch (e) { /* 瓦片预热失败不影响进入游戏 */ }
+    // 3c) 生物位图 / 轴心 / 轮廓：按首屏实体的实际 drawSize 建缓存，
+    //     避免撤蒙版后第一帧集中做 2× 超采样、裁剪与轮廓提取。
+    try {
+      const g = window.__game;
+      if (g && g.mobs && typeof SpriteStore.prewarmMobs === 'function') SpriteStore.prewarmMobs(g.mobs);
+    } catch (e) { /* 生物预热失败不影响进入游戏 */ }
+    // 4) 字体就绪后统一重绘卡面；网络异常时最多等 5s，不让蒙版挂死。
+    await Promise.race([
+      (async () => {
+        if (document.fonts && document.fonts.load) await document.fonts.load('800 16px Ubuntu');
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      })(),
+      new Promise((r) => setTimeout(r, 5000))
+    ]);
+    // 5) 背包/合成窗口的 DOM、canvas、事件绑定全部建好，首次打开零构建。
+    if (UI && typeof UI.prewarmWindows === 'function') await UI.prewarmWindows();
+    // 6) 小地图位图预热：覆盖过渡中会用到的全部尺寸（含大档的 _mmFullPx 全图位图）。
     const g = window.__game;
     if (g && g.map && typeof g.map.minimapCanvas === 'function') {
-      g.map.minimapCanvas(192);
-      g.map.minimapCanvas(512);
+      const px = [192, 512];
+      if (typeof UI._mmFullPx === 'function') px.push(UI._mmFullPx());
+      if (typeof UI._mmBmpPx === 'function') px.push(UI._mmBmpPx(160 * 1.2));
+      for (const s of new Set(px)) g.map.minimapCanvas(s);
     }
-  } catch (e) { /* 预热失败不影响进入游戏 */ }
+  } catch (e) { console.error('[boot] 预热阶段失败：', e); }
   clearTimeout(slowWarn);
   if (window.GARDEN_DATA) UI.hideLoading();
+  window.__uiBooted = true;
 }
 
 // 脚本已置于 body 末尾，DOM 就绪即可启动（不依赖 window.load 等待全部子资源）

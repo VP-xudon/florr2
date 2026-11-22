@@ -473,6 +473,16 @@ const CardRenderer = (function () {
     (_imgWait[url] = _imgWait[url] || []).push(cv);
     return _imgCache[url];
   }
+  // 预热用：把 data URL 真正解码进共享缓存。失败也 resolve，不让单张素材卡住 Loading。
+  function decode(url) {
+    const hit = _imgCache[url];
+    if (hit && hit.complete && hit.naturalWidth > 0) return Promise.resolve(hit);
+    return new Promise((resolve) => {
+      const im = new Image();
+      im.onload = im.onerror = () => { _imgCache[url] = im; resolve(im); };
+      im.src = url;
+    });
+  }
 
   function roundRectPath(ctx, x, y, w, h, r) {
     r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
@@ -890,10 +900,38 @@ const CardRenderer = (function () {
   // Ubuntu 走 Google Fonts 异步加载（display=swap）：卡牌可能在字体到位前就画好了，
   // 那时名称会用了回退字体且不会自动更新。这里主动触发一次加载，就绪后统一重绘。
   if (typeof document !== 'undefined' && document.fonts && document.fonts.load) {
-    document.fonts.load('800 16px Ubuntu').then(() => repaintAll()).catch(() => {});
+    // Loading 期间由 boot 统一重绘；字体若迟到才在撤蒙版后补一次，避免开局全量重绘卡顿。
+    document.fonts.load('800 16px Ubuntu').then(() => {
+      if (window.__uiBooted) repaintAll();
+    }).catch(() => {});
+  }
+
+  // Loading 阶段一次做完：卡面素材的 fetch + getBBox + dataURL + Image 解码，
+  // 以及世界实体素材的 128/256px 位图。第一次开背包/合成时这些链已全部命中缓存。
+  async function prewarm(ids) {
+    const list = Array.isArray(ids) ? ids : [];
+    await Promise.all(list.map(async (id) => {
+      try {
+        const cardUrl = await asset(id);
+        if (cardUrl) await decode(cardUrl);
+        const artTxt = await artSvg(id);
+        if (!artTxt) return;
+        const url = 'data:image/svg+xml,' + encodeURIComponent(artTxt);
+        const im = await decode(url);
+        if (!im || !(im.naturalWidth > 0)) return;
+        for (const px of [128, 256]) {
+          const key = id + '|' + px;
+          if (_artCv[key] !== undefined) continue;
+          const c = document.createElement('canvas');
+          c.width = c.height = px;
+          try { c.getContext('2d').drawImage(im, 0, 0, px, px); _artCv[key] = c; } catch (e) { /* 忽略 */ }
+        }
+      } catch (e) { /* 单张失败不影响其它素材 */ }
+    }));
   }
 
   return {
+    prewarm,
     createCard, darken, rarityColor, artCanvas, redArtCanvas, artImage, renderCardTo, repaintAll, paintCard: paint,
     schedulePaint, setCount, FONT,
     // 素材窗口（[x,y,w,h]，素材自身 viewBox 坐标）：给"按素材坐标对位"的绘制方用
