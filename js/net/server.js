@@ -21,68 +21,151 @@ class LocalServer {
     this.ents = [];             // 权威 Mob 实体（只增不减由 cull 负责）
     this.fields = createEntitySet('web', () => this.nextEntityId());   // 场地型实体单源：玩家网 + 敌方蛛网合并一张表
     this.hornetProjectiles = new Map(); // 已发射的独立 Hornet 导弹，不随母体回收（Map<id, projectile>）
-    this.player = null;         // 玩家权威副本（跑同一套物理，供战斗定位）
+    this.sessions = new Map();  // id -> 会话（玩家权威副本 + 输入 + 背包 + 复活点 + 待投递事件）
+    this.players = [];          // 全部会话的玩家权威副本（世界系统统一遍历）
+    this.player = null;         // 主会话玩家（单机 LocalNet 兼容别名）
     this.map = null;            // 碰撞地图（与客户端同一份）
-    this._input = { dx: 0, dy: 0, mode: 'normal' };
-    // 客户端上报的可视半径（世界 px，见 applyInput）：醒/睡范围只认它 + MOB_ACTIVE_PAD。
-    // 客户端一帧都还没上报时用 MOB_ACTIVE_R 兜底（旧口径，等价于"看不看得见都先醒着"）。
-    this.viewR = MOB_ACTIVE_R;
-    this._events = [];          // 待投递事件（聊天、系统私信）
-    // 背包权威：type.key|rarity -> 数量。客户端 _gc 只是它的镜像，
-    // 任何增减都必须经 invRequest，插件改本地镜像改不到这里。
-    this.inventory = Object.create(null);
-    // 已扣下、等待合成的装载材料（key + 数量）。客户端不能自带数量，
-    // craft 只能消费这份服务端记录，避免"装载不扣/重复扣/伪造数量"。
-    this.pendingCraft = null;
-    // 已合成但玩家还没"拿下来"的成品：拿下/被替下之前不计入 inventory，
-    // 所以背包与合成列表都不会提前显示结果，也无法在客户端提前读到。
-    this.pendingResult = null;
+    this._events = [];          // 广播事件（聊天 / 伤害飘字 / 系统公告）
     this._combatAcc = 0;
     this._started = false;
     this._inited = false;      // 是否已按生成表初始化过（每张地图只自动跑一次）
-    // 复活点（检查点）状态，见 _ensureCheckpoints
-    this.cpOf = null;          // 当前绑定的 checkpoints 数组（换图时重算）
-    this.cpMax = -1;           // 走到过的最远检查点下标
-    this.cpIdx = 0;            // 当前复活点下标
-    this.cpStays = CP_RESPAWN_STAYS;
-    this.cpAcc = 0;
   }
 
-  // 绑定地图与玩家副本；客户端在 init 后调用一次。
-  // 调用方必须先把 ?hp=N 等调试参数应用到 playerTemplate：
-  // 客户端每帧会用快照的 hp 覆盖自己，服务端副本的初始血量必须与之一致。
-  attach(map, playerTemplate) {
-    this.map = map;
+  // 单机会话 = 主会话；多会话（Node 服务端）通过 sessId 指定。
+  _primary() { return this.sessions.values().next().value || null; }
+  session(sessId) {
+    if (sessId != null) return this.sessions.get(sessId) || null;
+    return this._primary();
+  }
+  _playerOf(sessId) {
+    const s = this.session(sessId);
+    return s ? s.player : null;
+  }
+
+  // 兼容旧接口：this.player / this.inventory 等一律指向【主会话】。
+  // 单机 LocalNet 完全按旧代码运行；多会话的业务入口都显式传 sessId。
+  get inventory() {
+    const s = this._primary();
+    return s ? s.inventory : (this._legacyInventory || (this._legacyInventory = Object.create(null)));
+  }
+  set inventory(v) {
+    const s = this._primary();
+    if (s) s.inventory = v; else this._legacyInventory = v;
+  }
+  get pendingCraft() { const s = this._primary(); return s ? s.pendingCraft : null; }
+  set pendingCraft(v) { const s = this._primary(); if (s) s.pendingCraft = v; }
+  get pendingResult() { const s = this._primary(); return s ? s.pendingResult : null; }
+  set pendingResult(v) { const s = this._primary(); if (s) s.pendingResult = v; }
+  get _input() { const s = this._primary(); return s ? s.input : { dx: 0, dy: 0, mode: 'normal' }; }
+  set _input(v) { const s = this._primary(); if (s) s.input = v; }
+  get viewR() { const s = this._primary(); return s ? s.viewR : MOB_ACTIVE_R; }
+  set viewR(v) { const s = this._primary(); if (s) s.viewR = v; }
+  get _slotSig() { const s = this._primary(); return s ? s.slotSig : ''; }
+  set _slotSig(v) { const s = this._primary(); if (s) s.slotSig = v; }
+
+  // 新建一个会话（玩家权威副本）。playerTemplate 可为空 -> 用初始装备与服务端默认血量。
+  addSession(id, playerTemplate) {
+    if (id == null) id = ++this._sessSeq;
+    if (this.sessions.has(id)) return this.sessions.get(id);
+    const tpl = playerTemplate || null;
+    const sess = {
+      id,
+      name: (tpl && tpl.name) || ('Guest #' + (1000 + Math.floor(Math.random() * 9000))),
+      player: null,
+      input: { dx: 0, dy: 0, mode: 'normal' },
+      viewR: MOB_ACTIVE_R,
+      inventory: Object.create(null),
+      pendingCraft: null,
+      pendingResult: null,
+      slotSig: '',
+      events: [],
+      cpOf: null, cpMax: -1, cpIdx: 0, cpStays: CP_RESPAWN_STAYS, cpAcc: 0,
+    };
     // 权威玩家副本：复用 Player 类（移动 + 花瓣 + 装填全都在），
     // 这样战斗判定用的是与服务端完全一致的物理，不需要另写一套。
-    this.player = new Player();
-    const p = this.player;
-    p.slots = playerTemplate.slots;
-    p.name = playerTemplate.name;
+    const p = new Player();
+    p.sess = sess;
+    sess.player = p;
+    p.slots = (tpl && tpl.slots) ? tpl.slots : this._starterSlots();
+    p.name = sess.name;
     // 血量相关全部从模板继承（maxHp/hp 与血条平滑值）。
     // 非有限数一律拒绝：Infinity/NaN 灌进权威副本后，战斗、平滑血条、快照都会一路 NaN。
-    p.maxHp = (Number.isFinite(playerTemplate.maxHp) && playerTemplate.maxHp > 0)
-      ? playerTemplate.maxHp : FLOWER_BASE_HP;
-    p.hp = Number.isFinite(playerTemplate.hp) ? Math.min(playerTemplate.hp, p.maxHp) : p.maxHp;
+    p.maxHp = (tpl && Number.isFinite(tpl.maxHp) && tpl.maxHp > 0) ? tpl.maxHp : FLOWER_BASE_HP;
+    p.hp = (tpl && Number.isFinite(tpl.hp)) ? Math.min(tpl.hp, p.maxHp) : p.maxHp;
     // Soil 的生命上限加成以【模板上限】为基准（权威副本与客户端同口径）
     p.baseMaxHp = p.maxHp;
     p.recompute();
     // 出生状态统一走 Player.resetForSpawn：出生无敌 + 花瓣实体/世代号/装填 与客户端同源。
     // 少了出生无敌时，服务端副本从第 0 帧起就能被打 -> 客户端被快照置为 dead -> 一碰就死。
-    p.resetForSpawn(playerTemplate);
+    const spawn = (tpl && Number.isFinite(tpl.x) && Number.isFinite(tpl.y))
+      ? { x: tpl.x, y: tpl.y }
+      : ((this.map && this.map.spawnCheckpointPoint)
+        ? this.map.spawnCheckpointPoint(p.r || 22) : { x: 0, y: 0 });
+    p.resetForSpawn(spawn);
     p.webSink = this.fields;        // 玩家生成的网（Web 花瓣）统一进 server.fields（场级实体单源）
     // 调试模式给一张"取之不尽"的库存（用大数代替 Infinity，保证可 JSON 序列化）。
     const sk = (typeof STARTER_INV_KEY !== 'undefined') ? STARTER_INV_KEY : null;
-    if (sk && !(sk in this.inventory)) this.inventory[sk] = 1;
-    this._slotSig = '';
-    // 地图/玩家就位后立刻按生成表把全图铺满（等价于 /init <map>），避免开局空场
+    if (sk && !(sk in sess.inventory)) sess.inventory[sk] = 1;
+    this.sessions.set(id, sess);
+    this.players.push(p);
+    if (!this.player) this.player = p;
     this.spawnT = 0;
+    this._autoInit();
+    return sess;
+  }
+
+  removeSession(id) {
+    const sess = this.sessions.get(id);
+    if (!sess) return;
+    this.sessions.delete(id);
+    const p = sess.player;
+    if (p) {
+      p.dead = true;
+      EntityFX.despawn(p);
+      const i = this.players.indexOf(p);
+      if (i >= 0) this.players.splice(i, 1);
+      if (this.player === p) this.player = this.players[0] || null;
+      if (p.petals) for (const b of p.petals) { b.dead = true; EntityFX.despawn(b); }
+    }
+  }
+
+  // 服务端初始装备：与客户端 _resetPlayer 完全同源（4 common Basic + 1 common Rose）。
+  _starterSlots() {
+    const slots = emptySlots();
+    const basic = (typeof STARTER_BASIC_KEY !== 'undefined')
+      ? PETAL_TYPES.find((t) => t.key === STARTER_BASIC_KEY) : null;
+    const rose = (typeof STARTER_ROSE_KEY !== 'undefined')
+      ? PETAL_TYPES.find((t) => t.key === STARTER_ROSE_KEY) : null;
+    const nBasic = Math.min(4, slots.length);
+    for (let i = 0; i < nBasic; i++) if (basic) slots[i] = { type: basic, rarity: 'common', lunge: 0 };
+    if (rose && nBasic < slots.length) slots[nBasic] = { type: rose, rarity: 'common', lunge: 0 };
+    return slots;
+  }
+
+  // 网络上行里的卡面只带 key/rarity，权威副本按 PETAL_TYPES 还原成完整类型对象。
+  _cardFromWire(c) {
+    if (!c) return null;
+    if (c.type) return c;
+    const type = PETAL_TYPES.find((t) => t.key === c.key) || null;
+    return type ? { type, rarity: c.rarity, lunge: 0 } : null;
+  }
+
+  // 绑定地图与玩家副本；本地单机在 init 后调用一次。
+  // 调用方必须先把 ?hp=N 等调试参数应用到 playerTemplate：
+  // 客户端每帧会用快照的 hp 覆盖自己，服务端副本的初始血量必须与之一致。
+  attach(map, playerTemplate) {
+    this.map = map;
+    // 本地单机（LocalNet）在 attach 时传入玩家模板 -> 立即建 0 号会话。
+    // 真服务端（node server.js）传 null：会话只由 WebSocket 的 join 创建，
+    // 否则会凭空多出一个没人控制的影子玩家（快照里还会被当成“其它玩家”画出来）。
+    if (playerTemplate && !this.sessions.size) this.addSession(0, playerTemplate);
     this._autoInit();
   }
 
   // 客户端装备发生变化时把最新 slots 同步给权威副本（按签名去重，避免每帧 recompute）
-  syncLoadout(slots, hold) {
-    const p = this.player;
+  syncLoadout(slots, hold, sessId) {
+    const sess = this.session(sessId);
+    const p = sess && sess.player;
     if (!p || !slots) return;
     // 换卡动画期间的"装填暂停"是客户端表现层状态，必须上行同步给权威副本，
     // 否则两端装填进度不一致。
@@ -90,10 +173,11 @@ class LocalServer {
       if (p.reloadHold.length !== hold.length) p.reloadHold = hold.slice();
       else for (let i = 0; i < hold.length; i++) p.reloadHold[i] = !!hold[i];
     }
-    const sig = slots.map((c) => (c ? c.type.key + c.rarity : '-')).join(',');
-    if (sig === this._slotSig) return;
-    this._slotSig = sig;
-    p.slots = slots;
+    const cards = slots.map((c) => this._cardFromWire(c));
+    const sig = cards.map((c) => (c ? c.type.key + c.rarity : '-')).join(',');
+    if (sig === sess.slotSig) return;
+    sess.slotSig = sig;
+    p.slots = cards;
     p.recompute();
   }
 
@@ -109,7 +193,7 @@ class LocalServer {
   // 默认初始化：服务器（含本地模拟服务器）一就位就按生成表铺一遍，
   // 之后交给 spawnOne 维持。地图或玩家还没绑定就跳过，等另一侧就位时再触发。
   _autoInit() {
-    if (this._inited || !this.map || !this.player) return false;
+    if (this._inited || !this.map || !this.sessions.size) return false;
     const res = this.initMap();
     this._inited = true;
     if (res && res.ok) {
@@ -119,22 +203,25 @@ class LocalServer {
     return !!(res && res.ok);
   }
 
-  applyInput(input) {
-    this._input = input;
+  applyInput(input, sessId) {
+    const sess = this.session(sessId);
+    if (!sess) return;
+    sess.input = input || { dx: 0, dy: 0, mode: 'normal' };
     // 视野半径是"客户端知道、服务端不知道"的信息（窗口大小 + 相机缩放 + 相机偏移），
     // 所以由客户端每帧上报。非法值忽略，绝不把醒/睡半径写成 NaN。
-    if (input && Number.isFinite(input.viewR) && input.viewR > 0) this.viewR = input.viewR;
+    if (input && Number.isFinite(input.viewR) && input.viewR > 0) sess.viewR = input.viewR;
   }
 
-  requestRespawn() {
-    const p = this.player;
+  requestRespawn(sessId) {
+    const sess = this.session(sessId);
+    const p = sess && sess.player;
     if (!p) return null;
-    const pos = this._respawnPos();
+    const pos = this._respawnPos(sess);
     // 统一重置：与客户端 Game.respawn 调用同一个方法，字段清单只有一份
     p.resetForSpawn(pos);
     for (const m of this.ents) if (m.threat) m.threat.length = 0;   // 重生后仇恨豁免
     // 客户端要跟着把预测副本搬到同一个点（否则会被下一帧快照硬拽过去）
-    this._events.push({ kind: 'respawned', x: pos.x, y: pos.y, cp: pos.idx });
+    this._event(sess, { kind: 'respawned', x: pos.x, y: pos.y, cp: pos.idx });
     return pos;
   }
 
@@ -144,52 +231,53 @@ class LocalServer {
   //   · 只有"走到过更远的检查点"才会改变复活策略，而且全程【不弹任何提示】
   //   · 走到更远的检查点 -> 复活点重置为"它的上一个"，并【强制重新保底 3 次】
   //   · 复活落在当前复活点；在该点满 3 次后重新结算：往前推一个（最多推到最远到访点）
-  _ensureCheckpoints() {
+  _ensureCheckpoints(sess) {
     const cps = (this.map && this.map.checkpoints) || [];
-    if (this.cpOf === cps) return;
-    this.cpOf = cps;
-    this.cpMax = -1;                        // 走到过的最远检查点下标（-1 = 还没到过）
-    this.cpIdx = 0;                         // 当前使用的复活点下标
-    this.cpStays = CP_RESPAWN_STAYS;        // 当前复活点还剩几次保底
-    this.cpAcc = 0;
+    if (sess.cpOf === cps) return;
+    sess.cpOf = cps;
+    sess.cpMax = -1;                        // 走到过的最远检查点下标（-1 = 还没到过）
+    sess.cpIdx = 0;                         // 当前使用的复活点下标
+    sess.cpStays = CP_RESPAWN_STAYS;        // 当前复活点还剩几次保底
+    sess.cpAcc = 0;
   }
 
-  _checkCheckpoints() {
-    this._ensureCheckpoints();
-    const p = this.player;
+  _checkCheckpoints(sess) {
+    this._ensureCheckpoints(sess);
+    const p = sess.player;
     if (!p || p.dead || !this.map || !this.map.checkpointAt) return;
     const i = this.map.checkpointAt(p.x, p.y);
-    if (i < 0 || i <= this.cpMax) return;   // 没走进更远的检查点：什么都不做
-    this.cpMax = i;
-    this.cpIdx = Math.max(0, i - 1);        // "最远检查点的上一个"
-    this.cpStays = CP_RESPAWN_STAYS;        // 更远 -> 强制重新保底 3 次
+    if (i < 0 || i <= sess.cpMax) return;   // 没走进更远的检查点：什么都不做
+    sess.cpMax = i;
+    sess.cpIdx = Math.max(0, i - 1);        // "最远检查点的上一个"
+    sess.cpStays = CP_RESPAWN_STAYS;        // 更远 -> 强制重新保底 3 次
   }
 
-  _respawnPos() {
-    this._ensureCheckpoints();
+  _respawnPos(sess) {
+    this._ensureCheckpoints(sess);
     const cps = (this.map && this.map.checkpoints) || [];
     if (!cps.length) return { x: 0, y: 0, idx: -1 };
     // 站立半径按玩家本体：复活点必须是"整个人站得下"的位置，而不是只有一个空点。
-    const pr = (this.player && this.player.r) ? this.player.r : 22;
-    if (this.cpMax < 0) {
+    const pr = (sess.player && sess.player.r) ? sess.player.r : 22;
+    if (sess.cpMax < 0) {
       // 还没走到过任何检查点：就在【等级最低的那个复活区域】里随机复活（不固定回原点 0,0）
       const base = this.map.checkpointSpawnPoint ? this.map.checkpointSpawnPoint(cps[0], pr) : { x: 0, y: 0 };
       return { x: base.x, y: base.y, idx: 0 };
     }
-    if (this.cpStays <= 0) {                // 保底用完 -> 重新结算复活点
-      this.cpIdx = Math.min(this.cpIdx + 1, this.cpMax);
-      this.cpStays = CP_RESPAWN_STAYS;
+    if (sess.cpStays <= 0) {                // 保底用完 -> 重新结算复活点
+      sess.cpIdx = Math.min(sess.cpIdx + 1, sess.cpMax);
+      sess.cpStays = CP_RESPAWN_STAYS;
     }
-    this.cpStays--;
-    const cp = cps[Math.min(this.cpIdx, cps.length - 1)];
+    sess.cpStays--;
+    const cp = cps[Math.min(sess.cpIdx, cps.length - 1)];
     // 复活落地：整片检查点区域内【随机】一个能站人的位置（不再固定区域中心）
     const pos = this.map.checkpointSpawnPoint ? this.map.checkpointSpawnPoint(cp, pr) : { x: 0, y: 0 };
-    return { x: pos.x, y: pos.y, idx: this.cpIdx };
+    return { x: pos.x, y: pos.y, idx: sess.cpIdx };
   }
 
   // /tp 确认后调用：只有"真正能站人"的坐标才传送，否则返回错误文案键（不挪人）。
-  teleport(x, y) {
-    const p = this.player;
+  teleport(x, y, sessId) {
+    const sess = this.session(sessId);
+    const p = sess && sess.player;
     if (!p || !this.map) return 'Chat/CommandError/InternalError';
     const fx = Number(x), fy = Number(y);
     if (!isFinite(fx) || !isFinite(fy)) return 'Chat/Command/tp/Usage';
@@ -202,7 +290,7 @@ class LocalServer {
     }
     p.x = fx; p.y = fy; p.vx = 0; p.vy = 0;
     if (p.petals) for (const b of p.petals) { b.x = fx; b.y = fy; b.vx = 0; b.vy = 0; }
-    this._events.push({ kind: 'teleported', x: fx, y: fy });
+    this._event(sess, { kind: 'teleported', x: fx, y: fy });
     return null;
   }
 
@@ -214,9 +302,14 @@ class LocalServer {
   //   · 每步只遍历 _act；
   //   · _rest 每 0.2s 扫一次，把够近的叫醒（_wakeNearby）；
   //   · 数量对不上时自动重建（_rebuildPartition）—— 兜住"外部直接往 ents 塞个体"。
-  // 当前醒/睡半径（px）：视野半径 + 余量，钳下限。
+  // 当前醒/睡半径（px）：视野半径 + 余量，钳下限。多会话取最大（分区自愈用）。
   activeR() {
-    const v = Number.isFinite(this.viewR) ? this.viewR : MOB_ACTIVE_R;
+    let v = 0;
+    for (const s of this.sessions.values()) {
+      const r = Number.isFinite(s.viewR) ? s.viewR : MOB_ACTIVE_R;
+      if (r > v) v = r;
+    }
+    if (!(v > 0)) v = MOB_ACTIVE_R;
     return Math.max(MOB_ACTIVE_MIN, v + MOB_ACTIVE_PAD);
   }
 
@@ -224,35 +317,42 @@ class LocalServer {
   //   · 死掉的个体必须留在醒着：退场动画还要继续推进（EntityFX.tickEntity）；
   //   · 多节生物按【整条链】判定：锚点取链头，半径加上整条链长 ——
   //     否则链尾进视野时链头还在睡，_solveChains 没有头可解，那半条链会僵在原地。
-  _isAwake(m, p, R) {
+  //   · 多会话：只要落在【任意一个】玩家的醒/睡半径内就醒着。
+  //   · 死亡玩家照样算：他还在用尸体视角看世界，视野里的生物必须继续跑 AI/物理，
+  //     否则"一死全场就冻住"。死亡只影响"谁可以被追"（见 _nearestPlayer），不影响醒/睡。
+  _isAwake(m) {
     if (m.dead) return true;
     const head = (m._head && !m._head.dead) ? m._head : m;
-    const lim = R + (head._chainLen || 0);
-    return dist2(head.x, head.y, p.x, p.y) <= lim * lim;
+    const chain = head._chainLen || 0;
+    for (const s of this.sessions.values()) {
+      const p = s.player;
+      if (!p) continue;
+      const v = Number.isFinite(s.viewR) ? s.viewR : MOB_ACTIVE_R;
+      const R = Math.max(MOB_ACTIVE_MIN, v + MOB_ACTIVE_PAD);
+      const lim = R + chain;
+      if (dist2(head.x, head.y, p.x, p.y) <= lim * lim) return true;
+    }
+    return false;
   }
 
   _rebuildPartition() {
     const act = this._act || (this._act = []);
     const rest = this._rest || (this._rest = []);
     act.length = 0; rest.length = 0;
-    const p = this.player;
-    if (!p) return;
-    const R = this.activeR();
+    if (!this.sessions.size) return;
     for (const m of this.ents) {
-      if (this._isAwake(m, p, R)) act.push(m);
+      if (this._isAwake(m)) act.push(m);
       else rest.push(m);
     }
   }
 
   _wakeNearby() {
     const rest = this._rest, act = this._act;
-    const p = this.player;
-    if (!p || !rest) return;
-    const R = this.activeR();
+    if (!rest) return;
     let n = 0;
     for (let i = 0; i < rest.length; i++) {
       const m = rest[i];
-      if (this._isAwake(m, p, R)) { act.push(m); continue; }
+      if (this._isAwake(m)) { act.push(m); continue; }
       rest[n++] = m;
     }
     rest.length = n;
@@ -354,11 +454,17 @@ class LocalServer {
     return list[list.length - 1];
   }
 
-  // 在指定区里取一个生成点（全区随机；不落在玩家 180px 内，避免刷脸）
+  // 在指定区里取一个生成点（全区随机；不落在任何玩家 180px 内，避免刷脸）
   // 尝试次数刻意压小：取不到点说明这个区全是墙（地图里确实有这样的区），
   // 由 _spawnInZone 记冷却，避免每 0.1s 重试几万次采样。
   _zoneSpawnPoint(zone) {
-    const p = this.player;
+    const near = (x, y) => {
+      for (const s of this.sessions.values()) {
+        const p = s.player;
+        if (p && !p.dead && dist(x, y, p.x, p.y) <= 180) return true;
+      }
+      return false;
+    };
     let first = null;
     for (let i = 0; i < 8; i++) {
       const pos = this.map.randomPointInZone
@@ -368,7 +474,7 @@ class LocalServer {
       // 减速瓦片是生物的禁区：不在这里生成（玩家能进，生物不能进/不能站）
       if (this.map.mobBlockedAt && this.map.mobBlockedAt(pos[0], pos[1], 24)) continue;
       if (!first) first = pos;
-      if (!p || dist(pos[0], pos[1], p.x, p.y) > 180) return pos;
+      if (!near(pos[0], pos[1])) return pos;
     }
     // 退而求其次的那个点也必须是"生物站得住"的
     if (first && this.map.mobBlockedAt && this.map.mobBlockedAt(first[0], first[1], 24)) return null;
@@ -377,10 +483,9 @@ class LocalServer {
     return first;
   }
 
-  // 玩家当前的幸运加成：所有【活着】的 Clover 花瓣实体各给一份（可叠加）。
+  // 某个玩家的幸运加成：他所有【活着】的 Clover 花瓣实体各给一份（可叠加）。
   // 只在生成生物时读一次，不进每帧循环。
-  _playerLuck() {
-    const p = this.player;
+  _playerLuck(p) {
     if (!p || !p.petals) return 0;
     let sum = 0;
     for (const b of p.petals) {
@@ -391,13 +496,14 @@ class LocalServer {
     return sum;
   }
 
-  // 某点的环境幸运值 = 基准 LUCK_BASE，玩家 CLOVER_LUCK_R 内叠加 Clover 加成，上限 LUCK_MAX。
+  // 某点的环境幸运值 = 基准 LUCK_BASE，任一玩家 CLOVER_LUCK_R 内叠加他的 Clover 加成，上限 LUCK_MAX。
   _ambientLuck(x, y) {
-    const p = this.player;
     let luck = LUCK_BASE;
-    if (p && !p.dead) {
+    for (const s of this.sessions.values()) {
+      const p = s.player;
+      if (!p || p.dead) continue;
       const dx = x - p.x, dy = y - p.y;
-      if (dx * dx + dy * dy <= CLOVER_LUCK_R * CLOVER_LUCK_R) luck += this._playerLuck();
+      if (dx * dx + dy * dy <= CLOVER_LUCK_R * CLOVER_LUCK_R) luck += this._playerLuck(p);
     }
     return Math.min(luck, LUCK_MAX);
   }
@@ -645,7 +751,7 @@ class LocalServer {
 
   // 维持：每秒若干次，挑"缺口最大"的区补 1 只（全图轮转，不偏袒玩家附近）
   spawnOne() {
-    if (!this.map || !this.player) return false;
+    if (!this.map || !this.sessions.size) return false;
     if (this.aliveMobs() >= GLOBAL_MAX_MOBS) return false;
     const { map: targets } = this.zoneTargets();
     // 单趟统计各区现存数量（避免 "每区都扫一遍 ents" 的 O(区×生物)）
@@ -665,6 +771,7 @@ class LocalServer {
     // 只有地图本身没有生成区（如简易圆形地图）时，才在玩家周围保底生成。
     if (targets.size > 0) return false;
     const p = this.player;
+    if (!p) return false;
     const a = Math.random() * TAU;
     const d = 420 + Math.random() * 480;
     const x = p.x + Math.cos(a) * d, y = p.y + Math.sin(a) * d;
@@ -1014,22 +1121,25 @@ class LocalServer {
   // 这里补一趟"只推玩家、不推节"的分离：节是刚体节点，推它只会脱节（下一帧又被摆回来）；
   // 玩家是自由实体，被身体扫到就该被顶开，与"头节撞到玩家"是同一观感。
   _pushPlayerOutOfChains() {
-    const p = this.player;
     const src = this._awake;
-    if (!p || p.dead || !src) return;
-    // 遁地（Shovel）：玩家没有碰撞箱，链体直接从"地下"扫过去
-    if (p.burrowT > 0) return;
-    const pr = p.r || 0;
-    for (let i = 0; i < src.length; i++) {
-      const m = src[i];
-      if (m.dead || m.sleeping || !m._chainLocked) continue;
-      const dx = m.x - p.x, dy = m.y - p.y;
-      const rr = (m.r || 0) + pr + 4;
-      if (dx * dx + dy * dy > rr * rr) continue;
-      const hit = mobHitTest(m, p.x, p.y, pr);
-      if (!hit || hit.depth <= 0) continue;
-      p.x += hit.nx * hit.depth;
-      p.y += hit.ny * hit.depth;
+    if (!src) return;
+    for (const sess of this.sessions.values()) {
+      const p = sess.player;
+      if (!p || p.dead) continue;
+      // 遁地（Shovel）：玩家没有碰撞箱，链体直接从"地下"扫过去
+      if (p.burrowT > 0) continue;
+      const pr = p.r || 0;
+      for (let i = 0; i < src.length; i++) {
+        const m = src[i];
+        if (m.dead || m.sleeping || !m._chainLocked) continue;
+        const dx = m.x - p.x, dy = m.y - p.y;
+        const rr = (m.r || 0) + pr + 4;
+        if (dx * dx + dy * dy > rr * rr) continue;
+        const hit = mobHitTest(m, p.x, p.y, pr);
+        if (!hit || hit.depth <= 0) continue;
+        p.x += hit.nx * hit.depth;
+        p.y += hit.ny * hit.depth;
+      }
     }
   }
 
@@ -1038,14 +1148,33 @@ class LocalServer {
   // 不再往一个 300 行的 step() 里插代码。前后依赖写在各方法的注释里。
   step(dt) {
     this.t += dt;
-    if (!this.player || !this.map) return;
+    if (!this.sessions.size || !this.map) return;
     for (let i = 0; i < STEP_SYSTEMS.length; i++) this[STEP_SYSTEMS[i]](dt);
+    // 广播事件（聊天 / 伤害飘字 / 系统公告）在一步结束时复制进每个会话，
+    // 这样多会话各自 drain 都不会漏收，也不会互相拿到别人的定向事件。
+    this._fanoutEvents();
+  }
+
+  // 定向事件：只投给某个会话（受伤 / 复活 / 传送 / 指令回执）。
+  _event(sess, ev) {
+    if (!ev) return;
+    if (sess) sess.events.push(ev);
+    else this._events.push(ev);
+  }
+
+  // 广播事件：所有会话都能收到（聊天、全场飘字、系统公告、击杀）。
+  _broadcast(ev) { if (ev) this._events.push(ev); }
+
+  _fanoutEvents() {
+    if (!this._events.length) return;
+    for (const s of this.sessions.values()) {
+      for (let i = 0; i < this._events.length; i++) s.events.push(this._events[i]);
+    }
+    this._events.length = 0;
   }
 
   // 1) 玩家权威副本 + 检查点 + 召唤物跟随 + 多实体卡重装填
   sysPlayer(dt) {
-    const p = this.player;
-    p.mode = this._input.mode || 'normal';
     // 特效输出临时静音：治疗飘字等表现由客户端预测副本负责，
     // 否则同一帧服务端与客户端各弹一次（会看到两个数字）。
     const _sup = PetalFX._suppress;
@@ -1054,68 +1183,87 @@ class LocalServer {
       // 只把"醒着的"生物交给玩家：花瓣能碰到的生物一定在 activeR()（视野 + 余量）内，
       // 而全量 ents（4000+）每帧扫一遍纯属浪费（这一项曾占 1.5ms/步）。
       const near = this._act || this.ents;
-      if (!p.dead) p.update(dt, { x: this._input.dx, y: this._input.dy }, this.map, near);
-      else p.update(dt, { x: 0, y: 0 }, this.map, near);
+      for (const sess of this.sessions.values()) {
+        const p = sess.player;
+        if (!p) continue;
+        p.mode = (sess.input && sess.input.mode) || 'normal';
+        const dx = (sess.input && sess.input.dx) || 0;
+        const dy = (sess.input && sess.input.dy) || 0;
+        if (!p.dead) p.update(dt, { x: dx, y: dy }, this.map, near);
+        else p.update(dt, { x: 0, y: 0 }, this.map, near);
+
+        // 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
+        sess.cpAcc = (sess.cpAcc || 0) + dt;
+        if (sess.cpAcc >= 0.2) { sess.cpAcc = 0; this._checkCheckpoints(sess); }
+
+        // 召唤物跟随卡槽：主人把 Ant Egg 换下去，它的召唤物一起退场。
+        // 之前卸下卡片只移除了花瓣实体，召唤物会一直留在场上。
+        if (p.slots) {
+          for (const m of this.ents) {
+            if (!m || !m.isSummon || !m.summonFrom || m.dead) continue;
+            if (m.followEnt && m.followEnt !== p) continue;
+            const sc = m.summonFrom;
+            const c = p.slots[sc.slotIndex];
+            if (!c || (c.type && c.type.slug) !== sc.slug) {
+              m.dead = true;
+              EntityFX.despawn(m);
+            }
+          }
+        }
+
+        // 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
+        // 【必须把坐标拉回花朵中心】：死亡实体就地冻结，复活时沿用旧坐标,
+        // 会在贴身位置凭空出现并立刻判定命中。
+        for (const b of p.petals) {
+          if (!b.dead || !(b.respawnT > 0)) continue;
+          // 内容物还活着：这个蛋的重装填被挂起（召唤物死亡时才解除）
+          if (b.holdRespawn) {
+            const u = b.summonUnit;
+            const gone = !u || u.dead || this.ents.indexOf(u) < 0;
+            if (gone) {
+              b.holdRespawn = false;
+              b.summonUnit = null;
+              b.respawnT = petalReloadOf(b.card) || 60;
+            } else {
+              continue;
+            }
+          }
+          b.respawnT -= dt;
+          if (b.respawnT <= 0) {
+            b.respawnT = 0;
+            b.dead = false;
+            b.hp = b.maxHp;
+            // 复活 = 重新入场：清掉上一次的退场标记与红闪（否则 exiting 恒真、永远不再受击闪红）
+            EntityFX.spawn(b, 'petal');
+            b.x = p.x; b.y = p.y;      // 回到花朵中心，再从花瓣轨道飞出去
+            b.vx = 0; b.vy = 0;
+          }
+        }
+      }
     } finally { PetalFX._suppress = _sup; }
+  }
 
-    // 复活区域解锁：站在某个 checkpoints 区域里即解锁（0.2s 查一次足够）
-    this.cpAcc = (this.cpAcc || 0) + dt;
-    if (this.cpAcc >= 0.2) { this.cpAcc = 0; this._checkCheckpoints(); }
-
-    // 召唤物跟随卡槽：主人把 Ant Egg 换下去，它的召唤物一起退场。
-    // 之前卸下卡片只移除了花瓣实体，召唤物会一直留在场上。
-    if (p.slots) {
-      for (const m of this.ents) {
-        if (!m || !m.isSummon || !m.summonFrom || m.dead) continue;
-        const sc = m.summonFrom;
-        const c = p.slots[sc.slotIndex];
-        if (!c || (c.type && c.type.slug) !== sc.slug) {
-          m.dead = true;
-          EntityFX.despawn(m);
-        }
-      }
+  // 生物当前最该关注的玩家：离它最近的活人（多会话）。
+  // 死亡玩家不作为 AI 目标，但仍保留在会话里等待复活。
+  _nearestPlayer(m) {
+    let best = null, bestD = Infinity;
+    for (const s of this.sessions.values()) {
+      const p = s.player;
+      if (!p || p.dead) continue;
+      const d = dist2(m.x, m.y, p.x, p.y);
+      if (d < bestD) { bestD = d; best = p; }
     }
-
-    // 多实体卡（Light）的独立重装填：到点各自满血复活（卡片不进入 reload）
-    // 【必须把坐标拉回花朵中心】：死亡实体就地冻结，复活时沿用旧坐标,
-    // 会在贴身位置凭空出现并立刻判定命中。
-    for (const b of p.petals) {
-      if (!b.dead || !(b.respawnT > 0)) continue;
-      // 内容物还活着：这个蛋的重装填被挂起（召唤物死亡时才解除）
-      if (b.holdRespawn) {
-        const u = b.summonUnit;
-        const gone = !u || u.dead || this.ents.indexOf(u) < 0;
-        if (gone) {
-          b.holdRespawn = false;
-          b.summonUnit = null;
-          b.respawnT = petalReloadOf(b.card) || 60;
-        } else {
-          continue;
-        }
-      }
-      b.respawnT -= dt;
-      if (b.respawnT <= 0) {
-        b.respawnT = 0;
-        b.dead = false;
-        b.hp = b.maxHp;
-        // 复活 = 重新入场：清掉上一次的退场标记与红闪（否则 exiting 恒真、永远不再受击闪红）
-        EntityFX.spawn(b, 'petal');
-        b.x = p.x; b.y = p.y;      // 回到花朵中心，再从花瓣轨道飞出去
-        b.vx = 0; b.vy = 0;
-      }
-    }
+    return best || this.player;
   }
 
   // 2) 生物：AI + 移动 + 退场回收。顺带建好 this._awake（后面推挤/战斗/链解算都读它）
   sysMobs(dt) {
-    const p = this.player;
     //    远处生物【休眠】：全图人口按生成表铺开，但只有玩家视野范围内的才跑 AI/物理，
     //    所以"全图 1000+ 只"不会拖垮帧率（服务端人口 ≠ 服务端负载）。
     //
     //    【醒/睡分区】把 this.ents 拆成 _act（跑 AI/物理）与 _rest（休眠）。
     //    每步只遍历 _act；_rest 每 0.2s 扫一次，把进入 activeR() 的个体叫醒。
     //    醒/睡边界最多 0.2s 延迟（边界远在屏幕外，玩家 0.2s 走不到），不影响体感。
-    const R = this.activeR();
     const act = this._act || (this._act = []);
     const rest = this._rest || (this._rest = []);
     // 【醒着的个体收进一个复用数组】：下面"玩家推挤 / 两两推挤 / 战斗"三步直接遍历它，
@@ -1136,7 +1284,7 @@ class LocalServer {
         // 退场播完（EntityFX.done）才回收：实体离场必须先播完通用退场动画，
         // 不允许在这里直接 splice —— 那会让生物"凭空消失"。
         if (EntityFX.done(m)) { needCompact = true; continue; }
-      } else if (!this._isAwake(m, p, R)) {
+      } else if (!this._isAwake(m)) {
         // 走出视野 -> 转休眠（进 _rest，本步不再更新；它仍然留在 this.ents 里参与快照/小地图）
         m.sleeping = true;
         rest.push(m);
@@ -1166,7 +1314,8 @@ class LocalServer {
       m._followPt = null;
       // 传入本帧醒着的个体：AI 的目标按【阵营】从"玩家 + 其它实体"里选最近的，
       // 而不是固定盯着玩家（召唤物要打敌对生物，敌对生物也会打召唤物）。
-      m.update(dt, p, this.map, this._awake);
+      const target = (m.faction === 'player' && m.followEnt) ? m.followEnt : this._nearestPlayer(m);
+      m.update(dt, target, this.map, this._awake);
       if (m.hornet && m.hornet.projectiles && m.hornet.projectiles.length) {
         for (const projectile of m.hornet.projectiles) {
           projectile.owner = m;
@@ -1194,14 +1343,19 @@ class LocalServer {
     this.spawnOne();
   }
 
-  // 推挤与硬碰撞：玩家↔生物、生物↔生物、Wax 落位块、召唤物。
+  // 推挤与硬碰撞：玩家↔生物、玩家↔玩家、生物↔生物、Wax 落位块、召唤物。
   sysPush(dt) {
-    const p = this.player;
+    const alive = [];
+    for (const s of this.sessions.values()) {
+      const p = s.player;
+      if (p && !p.dead) alive.push(p);
+    }
     const awake = this._awake || this.ents;
     // 3) 玩家 vs 生物：按重量 + 动能推挤（physicsPush）。重的一方几乎不动、轻的被推飞；
     //    很快的玩家能推动"更大一点"重量的生物；小生物再也推不动大生物。
     //    遁地（Shovel）期间玩家没有碰撞箱：整段跳过。
-    if (!p.dead && p.burrowT <= 0) {
+    for (const p of alive) {
+      if (p.burrowT > 0) continue;
       for (let i = 0; i < awake.length; i++) {
         const m = awake[i];
         if (m.dead) continue;                    // 休眠生物离玩家很远，不可能接触
@@ -1213,6 +1367,12 @@ class LocalServer {
         if (m.noPush) continue;                  // 原地放置的实体（Pollen）不参与推动
         if (m._chainLocked) physicsPushPlayerOnly(p, m);
         else physicsPushMob(p, m);
+      }
+    }
+    // 3b) 玩家之间：同一套 physicsPush（圆 vs 圆，反质量 + 动能）。
+    for (let i = 0; i < alive.length; i++) {
+      for (let j = i + 1; j < alive.length; j++) {
+        physicsPush(alive[i], alive[j]);
       }
     }
 
@@ -1274,7 +1434,9 @@ class LocalServer {
     //     于是生物被硬阻挡，不可能从蜡块底下穿过去。
     //   · 蜡块 ↔ 蜡块：双方 static=false、按 weight 反质量分配，正常互相挤压。
     // 全部走同一个 physicsPush；没有第二套碰撞函数。
-    if (p && !p.dead && p.petals) {
+    for (const sessP of this.sessions.values()) {
+      const p = sessP.player;
+      if (!p || p.dead || !p.petals) continue;
       const waxes = p.petals.filter((w) => w && !w.dead && w.shape);
       const map = this.map;
       for (const w of waxes) {
@@ -1465,7 +1627,12 @@ class LocalServer {
   // Ant Egg 被击碎：50% 原地生成一只【同级】幼蚁，死追击碎它的玩家。
   // 复仇目标只是一个属性（mob.avenger），追击行为在 ai.js 的通用 chase 里。
   _spawnEggAvenger(egg) {
-    const p = this.player;
+    // 复仇目标 = 最近一次真正打碎这枚卵的玩家（从仇恨表取），取不到时才退回主会话。
+    let p = null;
+    for (const t of egg.threat || []) {
+      if (t.ent && t.ent.sess) { p = t.ent; break; }
+    }
+    if (!p) p = this.player;
     if (!p || p.dead) return null;
     if (Math.random() >= 0.5) return null;
     const type = MOB_TYPES.find((t) => t && t.slug === 'baby_ant');
@@ -1607,8 +1774,7 @@ class LocalServer {
   // 场地型实体的判定：与放置者敌对的生物进入半径 -> 获得对应状态效果。
   // 效果的【数值】不在这里（那是 StatusFX 注册项的事），这里只负责"谁站在网上"。
   _fieldTick(dt) {
-    const p = this.player;
-    if (!p) return;
+    if (!this.sessions.size) return;
     const src = this._awake || this.ents;
     const fields = this.fields;
     const fieldsLen = fields.length;
@@ -1639,15 +1805,19 @@ class LocalServer {
       }
     }
 
-    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：给【玩家】挂减速 ----
-    if (fieldsLen && !p.dead) {
-      for (let i = 0; i < fieldsLen; i++) {
-        const w = fields.get(i);
-        if (!w || w.exiting || w.owner !== 'mob') continue;  // 只处理敌方网
-        const dx = p.x - w.x, dy = p.y - w.y;
-        if (dx * dx + dy * dy <= w.r * w.r) {
-          StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
-          break;
+    // ---- 敌方蛛网（Legend+ 蜘蛛原地自铺 + 蜘蛛大招产出的超大网）：给【所有玩家】挂减速 ----
+    if (fieldsLen) {
+      for (const sess of this.sessions.values()) {
+        const p = sess.player;
+        if (!p || p.dead) continue;
+        for (let i = 0; i < fieldsLen; i++) {
+          const w = fields.get(i);
+          if (!w || w.exiting || w.owner !== 'mob') continue;  // 只处理敌方网
+          const dx = p.x - w.x, dy = p.y - w.y;
+          if (dx * dx + dy * dy <= w.r * w.r) {
+            StatusFX.add(p, 'web', { dur: STATUS_FIELD_REFRESH });
+            break;
+          }
         }
       }
     }
@@ -1677,7 +1847,14 @@ class LocalServer {
   // 战斗结算：只负责"谁掉多少血/谁该被弹开"，并把结果写成事件交给客户端表现。
   // 反弹总量恒定，按稀有度查表分配；玩家份额由事件带回客户端，叠加到它的预测位置上。
   _combatTick() {
-    const p = this.player;
+    for (const sess of this.sessions.values()) {
+      if (sess.player) this._combatTickFor(sess.player);
+    }
+  }
+
+  // 单个玩家的花瓣 / 花朵本体与世界的结算。_combatTick 对每个会话各跑一遍：
+  // 花瓣与花朵是【每个玩家自己的】，生物 / 尾针 / 召唤物是共享的。
+  _combatTickFor(p) {
     if (!p) return;
     // 接触的两种"节奏"，口径完全不同，别混：
     //   kbT = 传能冷却：击退是【离散事件】，一次接触只传一次动能（PetalFX 自己判）；
@@ -1717,8 +1894,8 @@ class LocalServer {
             break;
           }
         }
-        b.hp -= b.maxHp * PETAL_ATTACK_DUR;
-        if (b.hp <= 0) { this._destroyPetal(b); continue; }
+        b.hp -= b.maxHp * PETAL_ATTACK_DUR * petalWearK(b);
+        if (b.hp <= 0) { this._destroyPetal(b, p); continue; }
       }
       if (projectile.dead || projectile.exiting) continue;
       // 遁地：玩家没有碰撞箱，尾针直接穿过去
@@ -1731,7 +1908,7 @@ class LocalServer {
         const share = (KNOCKBACK_SHARE[(owner && owner.rarity) || 'common'] || KNOCKBACK_SHARE.common)[0];
         const total = FLOWER_KNOCKBACK * p.r * 2 * share;
         applyKnockback(p, dx / d, dy / d, total);
-        this._events.push({ kind: 'hurt', ux: dx / d, uy: dy / d, total, shake: true });
+        this._event(p.sess, { kind: 'hurt', ux: dx / d, uy: dy / d, total, shake: true });
       }
       projectile.dead = true;
       EntityFX.despawn(projectile);
@@ -1826,8 +2003,8 @@ class LocalServer {
             }
           }
           // 攻击磨损：与撞生物同一口径（按最大耐久的固定比例，每 tick 一次）
-          b.hp -= b.maxHp * PETAL_ATTACK_DUR;
-          if (b.hp <= 0) { this._destroyPetal(b); continue; }
+          b.hp -= b.maxHp * PETAL_ATTACK_DUR * petalWearK(b);
+          if (b.hp <= 0) { this._destroyPetal(b, p); continue; }
         }
         // 尾针 → 玩家：与生物撞玩家同一套（this._dmg 减护甲、p.hurt 带无敌、
         // 统一击退份额、统一退场）。飞行中才接触伤害。
@@ -1844,7 +2021,7 @@ class LocalServer {
               const total = FLOWER_KNOCKBACK * p.r * 2;
               const share = (KNOCKBACK_SHARE[m.rarity] || KNOCKBACK_SHARE.common)[0];
               applyKnockback(p, pdx / d, pdy / d, total * share);
-              this._events.push({ kind: 'hurt', ux: pdx / d, uy: pdy / d, total: total * share, shake: true });
+              this._event(p.sess, { kind: 'hurt', ux: pdx / d, uy: pdy / d, total: total * share, shake: true });
             }
             stinger.exiting = true;
             stinger.dead = true;
@@ -1926,12 +2103,28 @@ class LocalServer {
             b.hp -= toPetal; EntityFX.hurt(b);
           }
         }
-        if (toMob > 0) this._hitMob(m, toMob);
+        if (toMob > 0) this._hitMob(m, toMob, p);
+        // 减疗（Dandelion）：命中叠一层 —— 加号叠加（+20%/+40%…）、上限由数据表声明。
+        // 【一次攻击 ≠ 一 tick】：接触伤害是每 tick 结算的，直接每 tick 叠会在一瞬间顶满 100%，
+        // 所以按数据表声明的 cooldown（秒）做实体级节流 —— 每秒最多叠一层（与 reload 同量级）。
+        // 只把状态挂在【被命中者】身上；扣减统一走 StatusFX.healMul，
+        // 所以 Leaf / Rose 以及以后任何回血来源都自动受影响。
+        const hd = pt.healDown;
+        if (hd) {
+          b.hdCd = Math.max(0, (b.hdCd || 0) - TICK_DT);
+          if (toMob > 0 && b.hdCd <= 0) {
+            b.hdCd = (hd.cooldown != null) ? hd.cooldown : 1.0;
+            if (typeof StatusFX !== 'undefined') {
+              StatusFX.add(m, 'heal_down', { dur: hd.dur || 30, value: hd.amount || 0.2 });
+            }
+          }
+        }
         if (interval > 0) b.intervalT = interval;    // 结算完立刻进入 Interval 冷却
         if (canBeHit) {
           // 攻击磨损：按最大耐久比例、每 tick 磨损（PETAL_ATTACK_DUR 本来就是按 25Hz 定的）
-          b.hp -= b.maxHp * PETAL_ATTACK_DUR;
-          if (b.hp <= 0) this._destroyPetal(b);
+          // wearK：体积型花瓣（月石）一次压住很多只生物，需要按数据缩小自磨损。
+          b.hp -= b.maxHp * PETAL_ATTACK_DUR * petalWearK(b);
+          if (b.hp <= 0) this._destroyPetal(b, p);
         }
         if (m.dead) break;
       }
@@ -1948,17 +2141,18 @@ class LocalServer {
         // 体伤（挨打）：同样给面板值；真正的节流在花朵自己身上
         //（Player.hurt → hurtInvuln 受伤无敌帧），全项目唯一带无敌帧的实体。
         const toFlower = this._dmg(m.dmg, p.armor);
-        if (toMob > 0) this._hitMob(m, toMob);
+        if (toMob > 0) this._hitMob(m, toMob, p);
         if (toFlower > 0) {
           const hurt = p.hurt(toFlower, m);
           // 中毒（蜘蛛等）：命中花朵就把该稀有度的中毒总量施加给玩家。
           // 总量 / 每秒速率 = 本次中毒的持续时长；扣血由 Player._tickPoison 每帧均摊。
           // 只在【真的造成了伤害】时施加（被无敌帧挡掉的那一下不应挂毒）。
           const poison = (m.poison > 0 && m.poisonRate > 0)
-            ? { dur: m.poison / m.poisonRate, rate: m.poisonRate } : null;
+            ? { dur: m.poison / m.poisonRate, rate: m.poisonRate, src: m.netId } : null;
           if (hurt && !p.dead && poison && typeof StatusFX !== 'undefined') {
-            // 服务端权威副本先挂上（生物/血量就在这里算）
-            StatusFX.add(p, 'poison', { dur: poison.dur, value: poison.rate });
+            // 服务端权威副本先挂上（生物/血量就在这里算）。
+            // src = 蜘蛛的实体 id：同源毒只刷新时长，不同蜘蛛各占一层、dps 相加。
+            StatusFX.add(p, 'poison', { dur: poison.dur, value: poison.rate, src: poison.src });
           }
           if (hurt && !p.dead) {
             const ux = phit.nx, uy = phit.ny;
@@ -1970,7 +2164,7 @@ class LocalServer {
             applyKnockback(p, ux, uy, playerKb);
             // poison 一并带给客户端：状态效果不进快照，客户端靠这条事件给自己挂毒
             //（否则只有服务端那份玩家会掉血、会变紫，本地看到的永远是正常脸）。
-            this._events.push({
+            this._event(p.sess, {
               kind: 'hurt', ux, uy, total: playerKb, shake: true, poison
             });
           }
@@ -2064,7 +2258,7 @@ class LocalServer {
       // 蚁穴挨打：工蚁转敌对 + 按血量批次补员（40 只的总量与占比由池子保证）
       if (m.type && m.type.slug === 'ant_hole') this._antHoleHurt(m);
       // 伤害榜 / 掉落归属只统计玩家本人造成的伤害
-      if (Number.isFinite(toMob) && from && from === this.player && m.lastHitByPlayer) {
+      if (Number.isFinite(toMob) && from && from.sess && m.lastHitByPlayer) {
         m.lastHitByPlayer.set(from, r.applied);
       }
       m.pendDmg = (m.pendDmg || 0) + r.applied;
@@ -2109,8 +2303,7 @@ class LocalServer {
       if (!t.ent || t.ent.honey) continue;               // 蜜不是伤害来源
       if (t.dmg > best) { best = t.dmg; top = t.ent; }
     }
-    const p = this.player;
-    const killer = (top && top.name) ? top.name : ((p && p.name) || 'Guest');
+    const killer = (top && top.name) ? top.name : 'Guest';
     const rarName = I18N.t('Rarities/' + m.rarity + '/Name', m.rarity);
     const mobName = m.name || (m.type && m.type.name) || 'Mob';
     const art = /^[aeiou]/i.test(rarName) ? 'An' : 'A';
@@ -2168,7 +2361,7 @@ class LocalServer {
   // 从花瓣实体召唤内容物（Ant Egg -> Soldier Ant）。
   // 数值：同稀有度该物种 × summon.scale；大小（长度）同样 × scale。
   // 数值表缺失时返回 null（调用方退回普通重装填），绝不编造数值让怪 hp=0。
-  _spawnSummon(src, card, def) {
+  _spawnSummon(src, card, def, owner) {
     const type = MOB_TYPES.find((t) => t && t.slug === def.slug);
     if (!type) {
       if (!this._warnedSummon) { this._warnedSummon = {}; console.warn('[summon] 未知物种', def.slug); this._warnedSummon[def.slug] = 1; }
@@ -2202,7 +2395,7 @@ class LocalServer {
     mob.permanentHpBar = true;
     mob.hpBarTag = 'Summon';
     // 跟随数据（属性，不是专属 AI）：follow 阀值来自 MOB_TRAITS，行为在通用 wander 里。
-    mob.followEnt = this.player;
+    mob.followEnt = owner || null;
     // 【碰撞与其它生物同一口径】：普通生物在第一次 update 里建轮廓（Mob._ensureShape），
     // 召唤物是在 sysCombat 中途生成的，否则要等下一步 sysMobs 才建 —— 那一帧里它只有
     // "外接圆"半径、F3 也没有碰撞箱，看起来就是"召唤物没有碰撞"。
@@ -2211,8 +2404,8 @@ class LocalServer {
     return mob;
   }
 
-  _destroyPetal(b) {
-    const p = this.player;
+  _destroyPetal(b, owner) {
+    const p = owner || this.player;
     // 先问引擎：某些实体"碎了"要留下东西（Web 在飞行途中被打碎 -> 原地立刻张网）。
     // 注意顺序：必须在 b.dead = true 之前（钩子要读它的位置/状态）。
     if (p && b && !b.dead && typeof PetalFX !== 'undefined' && PetalFX.onPop) {
@@ -2233,7 +2426,7 @@ class LocalServer {
     // 并且【这一个蛋】的重装填被挂起，直到它的召唤物死亡（见 1.5) 段与 _onSummonDead）。
     const summon = c.type && c.type.summon;
     if (summon) {
-      const unit = this._spawnSummon(b, c, summon);
+      const unit = this._spawnSummon(b, c, summon, p);
       if (unit) {
         b.holdRespawn = true;
         b.respawnT = dur;
@@ -2248,20 +2441,28 @@ class LocalServer {
 
   // ---- 聊天：服务器全局设定。按频道路由；Local 只投给半径内的接收者。 ----
   // 半径内没有其他接收者 -> 以系统名义私信发送者一条红字（Chat/Alone）。
-  sendChat(channel, text) {
-    const p = this.player;
+  sendChat(channel, text, sessId) {
+    const sess = this.session(sessId);
+    const p = sess && sess.player;
     const name = p ? p.name : 'Guest';
     // 指令：以 / 开头视为指令，不进入普通聊天（类型不匹配等一律走 i18n 系统提示）
-    if (text && typeof text === 'string' && text[0] === '/') { this._handleCommand(text, channel); return; }
-    // 本地实现只有一个玩家，因此 Local 永远"周围没人" -> 必定收到系统红字私信。
+    if (text && typeof text === 'string' && text[0] === '/') { this._handleCommand(text, channel, sess); return; }
+    // 全局频道：所有人都能收到；Local 频道只按“周围有没有人”判定是否提示无人应答。
     const heard = this._recipients(channel, p).length;
-    this._events.push({ kind: 'chat', channel, from: name, text });
+    this._broadcast({ kind: 'chat', channel, from: name, text });
     if (heard === 0) {
-      this._events.push({ kind: 'sys', channel, text: 'Chat/Alone' });
+      this._event(sess, { kind: 'sys', channel, text: 'Chat/Alone' });
     }
   }
-  // 返回该频道能收到消息的实体（本地只有玩家自己一个"他人"之外的接收者）
-  _recipients(channel, from) { return []; }
+  // 该频道里除发送者以外的接收者（多人会话 = 其它玩家）。
+  _recipients(channel, from) {
+    const out = [];
+    for (const s of this.sessions.values()) {
+      const p = s.player;
+      if (p && p !== from) out.push(p);
+    }
+    return out;
+  }
 
   // 匹配玩家：全名 / 忽略大小写，以及 "#0333" -> "Guest #0333"（客人玩家）
   _matchPlayer(input) {
@@ -2281,8 +2482,8 @@ class LocalServer {
 
   // 服务端处理的指令：/init、/summon、/kill、/kill-mob、/resphere。
   // 其余指令均已在客户端 chat.js 本地实现；走到这里的一律按未知指令处理。
-  _handleCommand(raw, channel) {
-    const p = this.player;
+  _handleCommand(raw, channel, sess) {
+    const p = sess && sess.player;
     if (!p) return;
     const parts = String(raw).trim().split(/\s+/).filter(Boolean);
     const cmd = (parts[0] || '').toLowerCase();
@@ -2291,16 +2492,16 @@ class LocalServer {
       const res = this.initMap(parts[1]);
       if (!res.ok) {
         if (res.cur) {
-          this._events.push({
+          this._event(sess, {
             kind: 'sys', channel,
             text: I18N.tf('Chat/Command/init/BadMap', { 0: res.cur }, 'Invalid map. Current map: ' + res.cur)
           });
         } else {
-          this._events.push({ kind: 'sys', channel, text: res.err || 'Chat/CommandError/InternalError' });
+          this._event(sess, { kind: 'sys', channel, text: res.err || 'Chat/CommandError/InternalError' });
         }
         return;
       }
-      this._events.push({
+      this._event(sess, {
         kind: 'sys', channel,
         text: I18N.tf('Chat/Command/init/Done',
           { 0: (this.map && this.map.name) || 'map', 1: res.spawned, 2: res.total },
@@ -2314,7 +2515,7 @@ class LocalServer {
       const rareArg = parts[2] || '';
       const count = parseInt(parts[3], 10);
       if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadMobId' }); return;
+        this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/BadMobId' }); return;
       }
       const rm = /^([A-Za-z_]+)(?:\[([^\]]*)\])?$/.exec(rareArg);
       const rarity = rm ? rm[1].toLowerCase() : '';
@@ -2323,23 +2524,23 @@ class LocalServer {
         for (const seg of rm[2].split(',')) {
           const kv = seg.split('=');
           if (kv.length !== 2 || !kv[0].trim()) {
-            this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
+            this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
           }
           opts[kv[0].trim().toLowerCase()] = kv[1].trim().toLowerCase();
         }
       }
       if (!rarity || RARITY_ORDER.indexOf(rarity) < 0) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadRarity' }); return;
+        this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/BadRarity' }); return;
       }
       if (!Number.isFinite(count) || count < 1) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadCount' }); return;
+        this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/BadCount' }); return;
       }
       const type = MOB_BY_ID[mobId];
       const chain = isSegmentMob(type);
       // 参数校验：只认多节生物的 type；其余组合一律报错，避免"写了参数却没生效"
       for (const k of Object.keys(opts)) {
         if (k !== 'type' || !chain || (opts[k] !== 'normal' && opts[k] !== 'long')) {
-          this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
+          this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/BadParam' }); return;
         }
       }
       const n = Math.max(1, Math.min(count, 50));   // 上限保护，避免一次刷太多
@@ -2356,29 +2557,29 @@ class LocalServer {
         }
       }
       InvulnFX.add(p, 'summon', 4);
-      this._events.push({ kind: 'sys', channel, text: 'Chat/Command/summon/Done' });
+      this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/summon/Done' });
     } else if (cmd === '/kill') {
       // /kill <player>：杀死对应玩家（#0333 匹配 Guest #0333）；找不到报错
       const target = this._matchPlayer(parts[1]);
-      if (!target) { this._events.push({ kind: 'sys', channel, text: 'Chat/CommandError/TargetNotFound' }); return; }
+      if (!target) { this._event(sess, { kind: 'sys', channel, text: 'Chat/CommandError/TargetNotFound' }); return; }
       target.hp = 0;
       if (typeof target.die === 'function') target.die();
-      this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill/Done', { 0: target.name }, 'Killed ' + target.name + '.') });
+      this._event(sess, { kind: 'sys', channel, text: I18N.tf('Chat/Command/kill/Done', { 0: target.name }, 'Killed ' + target.name + '.') });
     } else if (cmd === '/kill-mob') {
       // /kill-mob <mob_id> <rarity|all> <near|all> [count]：count 仅 near 时必填
       const mobId = parseInt(parts[1], 10);
       const rarity = (parts[2] || '').toLowerCase();
       const scope = (parts[3] || '').toLowerCase();
       const countArg = parts[4];
-      if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadMobId' }); return; }
-      if (rarity !== 'all' && RARITY_ORDER.indexOf(rarity) < 0) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadRarity' }); return; }
-      if (scope !== 'near' && scope !== 'all') { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadScope' }); return; }
+      if (!Number.isFinite(mobId) || mobId < 0 || !MOB_BY_ID[mobId]) { this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadMobId' }); return; }
+      if (rarity !== 'all' && RARITY_ORDER.indexOf(rarity) < 0) { this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadRarity' }); return; }
+      if (scope !== 'near' && scope !== 'all') { this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadScope' }); return; }
       let count = Infinity;
       if (scope === 'near') {
         count = parseInt(countArg, 10);
-        if (!Number.isFinite(count) || count < 1) { this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return; }
+        if (!Number.isFinite(count) || count < 1) { this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return; }
       } else if (countArg != null) {
-        this._events.push({ kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return;   // all 不接受 count
+        this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/kill-mob/BadCount' }); return;   // all 不接受 count
       }
       const NEAR_R = 900, px = p.x, py = p.y;
       let killed = 0;
@@ -2393,61 +2594,78 @@ class LocalServer {
         if (this._hitMob(m, Infinity)) killed++;   // 只在真正死亡时计入，避免假报成功
         if (killed >= count) break;
       }
-      this._events.push({ kind: 'sys', channel, text: I18N.tf('Chat/Command/kill-mob/Done', { 0: killed }, 'Killed ' + killed + ' mob(s).') });
+      this._event(sess, { kind: 'sys', channel, text: I18N.tf('Chat/Command/kill-mob/Done', { 0: killed }, 'Killed ' + killed + ' mob(s).') });
+    } else if (cmd === '/reload') {
+      // /reload <done|redo|pause>：只改【自己】带装填属性的花瓣计时。
+      // 静默执行：回执统一由客户端 chat.js 打一条，服务端不再重复发系统消息。
+      const mode = (parts[1] || '').toLowerCase();
+      if (mode === 'done' || mode === 'redo' || mode === 'pause') p.cmdReload(mode);
     } else if (cmd === '/resphere') {
       if (!p.dead) return;            // 活着直接忽略，不报错
-      this._respawnInPlace();
-      this._events.push({ kind: 'sys', channel, text: 'Chat/Command/resphere/Done' });
+      this._respawnInPlace(sess);
+      this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/resphere/Done' });
     } else {
-      this._events.push({ kind: 'sys', channel, text: 'Chat/Command/Unknown' });
+      this._event(sess, { kind: 'sys', channel, text: 'Chat/Command/Unknown' });
     }
   }
 
   // 原地复活：保留死亡地点 (x,y)，只恢复状态/无敌/仇恨豁免
-  _respawnInPlace() {
-    const p = this.player;
+  _respawnInPlace(sessId) {
+    const sess = this.session(sessId);
+    const p = sess && sess.player;
     if (!p) return;
     // 统一重置入口（pos = null 表示不改坐标）：清花瓣实体/世代号/装填，与其它复活路径一致。
     p.resetForSpawn(null);
     for (const m of this.ents) if (m.threat) m.threat.length = 0;
     // 通知客户端同步重置自己的预测副本（否则客户端不知道这次重生，世代号照样会漂）
-    this._events.push({ kind: 'respawned', x: p.x, y: p.y, cp: -1 });
+    this._event(sess, { kind: 'respawned', x: p.x, y: p.y, cp: -1 });
   }
 
-  drainEvents() { const e = this._events; this._events = []; return e; }
+  // 取走某个会话的待投递事件（含广播扇出）；不传 sessId 时退回旧的全局队列（LocalNet 兼容）。
+  drainEvents(sessId) {
+    const sess = this.session(sessId);
+    if (sess) { const e = sess.events; sess.events = []; return e; }
+    const e = this._events; this._events = []; return e;
+  }
 
   // ---------------- 背包权威 ----------------
   // 客户端只能发 op，不能自带数量：所有增减在这里算完，回传【整份】新背包让客户端覆盖镜像。
-  _invSnapshot() {
+  _invSnapshot(sess) {
     const o = {};
-    for (const k in this.inventory) o[k] = this.inventory[k];
+    const inv = sess ? sess.inventory : this.inventory;
+    for (const k in inv) o[k] = inv[k];
     return o;
   }
   // 调试开关是【用户设置】，运行中随时可能切换，所以这里必须实时读 window.__debug：
-  // 缓存成字段的话"开过调试再关掉"会让此后所有扣料/损耗都变成空操作（合成失败看不到消耗）。
+  // 缓存成字段的话“开过调试再关掉”会让此后所有扣料/损耗都变成空操作（合成失败看不到消耗）。
   _invDebug() { return !!(typeof window !== 'undefined' && window.__debug); }
-  _invCount(key) { return this._invDebug() ? Infinity : (this.inventory[key] || 0); }
-  _invSet(key, n) { if (!this._invDebug()) this.inventory[key] = Math.max(0, n); }
+  _invCount(sess, key) { return this._invDebug() ? Infinity : ((sess && sess.inventory[key]) || 0); }
+  _invSet(sess, key, n) { if (!this._invDebug() && sess) sess.inventory[key] = Math.max(0, n); }
 
-  invRequest(a) {
+  // 背包权威入口：所有 op 都作用在【指定会话】的库存与待合成状态上。
+  invRequest(a, sessId) {
+    const sess = this.session(sessId);
     const op = a.op;
-    const snap = () => ({ inventory: this._invSnapshot() });
+    const snap = () => ({ inventory: this._invSnapshot(sess) });
+    if (!sess) return Object.assign({ error: 'no session' }, snap());
+    const cnt = (key) => this._invCount(sess, key);
+    const set = (key, n) => this._invSet(sess, key, n);
     if (op === 'get') return snap();
     // 卸下全部装载材料：不需要 key，只认服务端记录的 pending。
     if (op === 'unload') {
-      const prev = this.pendingCraft;
+      const prev = sess.pendingCraft;
       if (prev) {
-        this._invSet(prev.key, this._invCount(prev.key) + prev.n);
-        this.pendingCraft = null;
+        set(prev.key, cnt(prev.key) + prev.n);
+        sess.pendingCraft = null;
       }
       return snap();
     }
     // 领取结果：同样不需要 key，必须放在下面的 key 校验之前
     if (op === 'takeResult') {
-      const r = this.pendingResult;
+      const r = sess.pendingResult;
       if (r) {
-        this._invSet(r.key, this._invCount(r.key) + r.count);
-        this.pendingResult = null;
+        set(r.key, cnt(r.key) + r.count);
+        sess.pendingResult = null;
       }
       return Object.assign({ taken: r ? r.count : 0 }, snap());
     }
@@ -2460,27 +2678,27 @@ class LocalServer {
     if (!Number.isFinite(n)) return fail('bad n');
 
     if (op === 'take') {
-      if (this._invCount(key) < n) return fail('not enough');
-      this._invSet(key, this._invCount(key) - n);
+      if (cnt(key) < n) return fail('not enough');
+      set(key, cnt(key) - n);
     } else if (op === 'return' || op === 'add') {
-      this._invSet(key, this._invCount(key) + n);
+      set(key, cnt(key) + n);
     } else if (op === 'load') {
       // 装载合成材料：点击时就扣（库存立刻减少）；换卡/叠加先返还上一批。
-      // 同种补齐时上一批会被先返还：可用量必须算上它，否则"装载 3 张 + 库存 2 张"
+      // 同种补齐时上一批会被先返还：可用量必须算上它，否则“装载 3 张 + 库存 2 张”
       // 要装 5 张会被误判 not enough（客户端却按补齐显示，表现为点了不扣料、可无限刷）。
-      const prev = this.pendingCraft;
+      const prev = sess.pendingCraft;
       const refund = (prev && prev.key === key) ? prev.n : 0;
-      if (this._invCount(key) + refund < n) return fail('not enough');
-      if (prev) this._invSet(prev.key, this._invCount(prev.key) + prev.n);
-      this._invSet(key, this._invCount(key) - n);
-      this.pendingCraft = { key, n };
+      if (cnt(key) + refund < n) return fail('not enough');
+      if (prev) set(prev.key, cnt(prev.key) + prev.n);
+      set(key, cnt(key) - n);
+      sess.pendingCraft = { key, n };
     } else if (op === 'craft') {
       // 只消费服务端已扣的材料：客户端传来的 n / target 一律不采信。
-      const pc = this.pendingCraft;
+      const pc = sess.pendingCraft;
       if (!pc) return fail('no pending craft');
       if (pc.key !== key) return fail('key mismatch');
       const m = pc.n;
-      this.pendingCraft = null;
+      sess.pendingCraft = null;
       const bar = pc.key.indexOf('|');
       const typeKey = bar >= 0 ? pc.key.slice(0, bar) : pc.key;
       const rarity = bar >= 0 ? pc.key.slice(bar + 1) : '';
@@ -2495,15 +2713,15 @@ class LocalServer {
       }
       // 剩余 1~4 张继续【留在装载槽】（已扣状态），不返还背包：
       // 客户端 st.count = left，卸下时才由 unload 返还，两边始终一致。
-      if (left > 0) this.pendingCraft = { key: pc.key, n: left };
+      if (left > 0) sess.pendingCraft = { key: pc.key, n: left };
       const tk = typeKey + '|' + target;
       // 旧结果若还没拿下：被替下这一刻才真正入包（用户口径）。
-      if (this.pendingResult) {
-        const old = this.pendingResult;
-        this._invSet(old.key, this._invCount(old.key) + old.count);
+      if (sess.pendingResult) {
+        const old = sess.pendingResult;
+        set(old.key, cnt(old.key) + old.count);
       }
       // 新结果先挂在服务端，等玩家点结果卡 / 被下一拨替下才计入 inventory。
-      this.pendingResult = wins > 0 ? { key: tk, count: wins } : null;
+      sess.pendingResult = wins > 0 ? { key: tk, count: wins } : null;
       return Object.assign({ wins, losses, left, target }, snap());
     } else {
       return fail('unknown op');
@@ -2513,27 +2731,27 @@ class LocalServer {
 
   // 请求/应答入口：本地实现与远端传输层共用同一份分发，避免两处 if/else 分叉。
   // 返回值必须是纯数据（可 JSON 序列化）；字符串表示 i18n 错误键。
-  handleRequest(kind, payload) {
+  handleRequest(kind, payload, sessId) {
     const a = payload || {};
     switch (kind) {
       case 'respawn':
-        return this.requestRespawn();
+        return this.requestRespawn(sessId);
       case 'teleport':
-        return this.teleport(a.x, a.y) || null;    // null = 成功
+        return this.teleport(a.x, a.y, sessId) || null;    // null = 成功
       case 'init':
         this.initMap(a.map);
         return true;
       case 'player': {
-        const p = this.player;
+        const p = this._playerOf(sessId);
         if (!p) return null;
         return {
           name: p.name, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, level: p.level
         };
       }
       case 'players':
-        return this.player ? [{ name: this.player.name }] : [];
+        return this.players.map((p) => ({ id: p.sess ? p.sess.id : null, name: p.name }));
       case 'inv':
-        return this.invRequest(a);
+        return this.invRequest(a, sessId);
       default:
         return { error: 'unknown request: ' + kind };
     }
@@ -2542,8 +2760,9 @@ class LocalServer {
   // ---- 快照：纯数据，可 JSON 序列化 ----
   // dt = 本快照覆盖的模拟时长。客户端用它算插值步长，
   // 高刷新率屏幕（144Hz）下才不会被固定 1/25 拖成"永远追不上"。
-  snapshot(dt) {
-    const p = this.player;
+  snapshot(dt, sessId) {
+    const sess = this.session(sessId);
+    const p = sess ? sess.player : null;
     return {
       t: this.t,
       dt: dt || SNAP_DT,
@@ -2559,6 +2778,8 @@ class LocalServer {
       // gen = 世代号：滞留型花瓣（Pollen / Honey）脱轨后重新装填，同一槽会同时存在多批实体。
       // 滞留实体的位置与速度也由服务端下发：它们会被生物硬碰撞推挤。
       petals: this._snapPetals(p),
+      // 其它玩家（多人）：只带表现必需字段 + 他们的花瓣，客户端用轻量视图对象绘制。
+      players: this._snapOtherPlayers(sess),
       // 场级实体（网）：玩家的网 + 蜘蛛自铺/大招的网，全部下发。
       // 客户端只渲染这里下发的网；玩家网与蜘蛛网共用同一套生成 / 到期 / 退场流程。
       webs: this._snapWebs(),
@@ -2568,22 +2789,51 @@ class LocalServer {
     };
   }
 
+  // 除“我”以外的所有会话玩家：位置 / 血量 / 装备 / 花瓣状态。
+  // 每个会话有自己的花瓣缓冲（_petalBuf 是共享的，多个玩家同时打包会互相覆盖）。
+  _snapOtherPlayers(sess) {
+    const out = this._playerBuf || (this._playerBuf = []);
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      if (s === sess) continue;
+      const p = s.player;
+      if (!p) continue;
+      const o = out[n] || (out[n] = {});
+      o.id = s.id;
+      o.name = p.name;
+      o.x = p.x; o.y = p.y;
+      o.hp = p.hp; o.maxHp = p.maxHp;
+      o.dead = !!p.dead;
+      o.facing = p.facing || 0;
+      o.hurtT = p.hurtT || 0;
+      o.deathRot = p.deathRot || 0;
+      o.invuln = p.invuln || 0;
+      o.slots = (p.slots || []).map((c) => (c && c.type) ? { key: c.type.key, rarity: c.rarity } : null);
+      o.petals = this._snapPetals(p,
+        s._petalBuf || (s._petalBuf = []),
+        s._petalHas || (s._petalHas = new Uint8Array(32)));
+      n++;
+    }
+    out.length = n;
+    return out;
+  }
+
   // 快照里的花瓣状态：必须覆盖"有卡但此刻没有实体"的槽位。
   // 花瓣打碎后 _destroyPetal 只打 dead 标记并进入 reload，实体要到下一帧才移出 p.petals；
   // 若不补齐 dead 记录，客户端按 (slot, sub, gen) 找不到条目，就会留下一片
   // 既不碎裂也不进入装填、且不参与伤害结算的幽灵花瓣。
-  _snapPetals(p) {
+  _snapPetals(p, buf, has) {
     // 与 _fillEnts 同一套对象复用：25Hz 下每帧 new 一个数组 + 十几个对象是纯 GC 负担。
     // 快照是同步消费的（客户端在本次 step 里读完），没有人会把数组留到下一帧。
-    const out = this._petalBuf || (this._petalBuf = []);
+    const out = buf || (this._petalBuf || (this._petalBuf = []));
     let n = 0;
     if (!p) { out.length = 0; return out; }
     // 一趟扫完：下发实体的同时记下"哪些槽已有实体记录"，
     // 省掉后面"每槽再扫一遍 p.petals"的 O(槽×花瓣)。
     const slots = p.slots || [];
-    let hasSlot = this._petalHas;
+    let hasSlot = has;
     if (!hasSlot || hasSlot.length < slots.length) {
-      hasSlot = this._petalHas = new Uint8Array(Math.max(32, slots.length));
+      hasSlot = new Uint8Array(Math.max(32, slots.length));
     }
     hasSlot.fill(0);
     for (const b of p.petals) {

@@ -18,7 +18,9 @@
 ## 1. 项目定位
 
 - **florr.io 的浏览器端复刻（非官方）**，当前只有 **Garden** 一张图。
-- 纯前端：`HTML + CSS + 原生 JS + Canvas 2D + DOM 覆盖层`。
+- 主客户端纯前端：`HTML + CSS + 原生 JS + Canvas 2D + DOM 覆盖层`。
+- 联机由根目录 `server.js` 提供：零依赖 Node（`http` + 手写 RFC6455 WebSocket + `vm` 复用前端模拟模块），
+  既托管静态文件又跑权威世界；不联机时用任意静态服务器即可。
 - 没有构建步骤、npm 依赖、package.json、测试与 lint；改完在浏览器中手动验证。
 - 入口为根目录 `index.html`，**必须通过本地 HTTP 服务器打开**：地图与 tileset 由 `fetch()` 加载。
 - 仓库：`https://github.com/VP-xudon/florr2`，默认分支 `main`。
@@ -28,9 +30,16 @@
 ## 2. 运行与调试
 
 ```powershell
+node server.js 8090
+# 打开 http://localhost:8090/   联机；Loading 后准备页点 Ready 才入服
+
 python -m http.server 8000
-# 打开 http://localhost:8000/
+# 打开 http://localhost:8000/   纯静态；连不上服务端时自动回退 LocalNet 本地模拟
 ```
+
+- `server.js` 端口参数：`node server.js 8090`、`--port 8090` / `-p 8090`，默认 `8080`；
+  `--host` 默认 `0.0.0.0`。`/ws` 是联机 WebSocket 端点，其余路径按 MIME 静态托管，`?v=N` 原样透传。
+- 启动先预生成整张花园（约 10s），日志出现 `服务已启动` 后再打开页面。
 
 - URL 参数：`?hp=N`（同时设置当前与最大血量，非法值忽略）、`?touch=1`（桌面强制显示触控层）。
 - 热键：`F3` 调试屏幕、`C` 合成窗口（调试屏幕打开时改为切碰撞箱）、
@@ -83,6 +92,7 @@ python dev/check_versions.py   # 引用、重名、i18n、版本号、跨文件�
 | `js/net/protocol.js` | 协议与生成参数、`FX_FIELDS`、`petalNetKey` |
 | `js/net/server.js` | `LocalServer` 权威世界、`STEP_SYSTEMS`、`nextEntityId`、请求分发 |
 | `js/net/client.js` | `Net` 接口、`LocalNet`、`WebSocketNet`（连接失败回退本地） |
+| `server.js` | Node 服务端：静态托管 + WebSocket + `vm` 加载同一套模拟模块，60Hz 世界 / 25Hz 快照，多会话 |
 | `js/chat.js` | 聊天频道、漂浮消息、指令解析与本地实现 |
 | `js/game.js` | `Game`：主循环、输入、相机、渲染、快照镜像、事件、拾取、小地图 |
 | `dev/check_versions.py` | 静态检查：引用、重名、i18n、版本号、跨文件契约 |
@@ -101,14 +111,14 @@ python dev/check_versions.py   # 引用、重名、i18n、版本号、跨文件�
 `index.html` 中脚本顺序有硬依赖：
 
 ```
-util.js → assets.js → i18n(en_US/zh_CN) → lang.js
+util.js → assets.js → i18n(en_US/zh_CN) → lang.js → i18n-extra.js
 → mob-shapes.js → registry.js → data.js → petal-metrics.js → cards.js
 → ui.js → ui/tooltip.js → ui/drag.js → ui/minimap.js
 → map.js → ai.js → petal-effects.js
 → sim/constants.js → sim/exit.js → mob-fx.js → render/render-util.js
 → sim/physics.js → sim/mob-shape.js → sim/player.js → sim/mob.js → sim/drops.js → render/fx.js
 → net/protocol.js → net/server.js → net/client.js
-→ chat.js → i18n-extra.js → ui/touch.js → ui/debug-screen.js → ui/bossbar.js
+→ chat.js → ui/touch.js → ui/debug-screen.js → ui/bossbar.js
 → game.js → main.js
 ```
 
@@ -116,8 +126,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 - `registry.js` 先于 `data.js`。
 - `sim/constants.js` 先于所有读取 `SNAP_DT` 的模块。
 - `net/protocol.js` 先于 `server.js` / `client.js` / `game.js`：`FX_FIELDS` 与 `petalNetKey` 的唯一声明。
-- `i18n-extra.js` 先于 `game.js`：`DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 读取这些键。
-- `main.js` 末尾 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 等待服务端库存镜像。
+- `i18n-extra.js` 先于 `data.js`：花瓣/生物名在 `data.js` 构建类型表时就取译文，晚于它会
+  让新增名称（如 Moon Rock 的卡面短名）永远回落 registry 英文全称；它也早于 `game.js`，
+  因为 `DebugScreen.init` / `TouchCtl.init` 在 `Game.init()` 读取这些键。
+- `main.js` 末尾 `boot()`：`UI.init()` → `loadGardenData()` → `Game.init()` → `Game.start()` → 全部预热 → `UI.hideLoading()` → `UI.showConnect()`（准备页）。
 - Loading 蒙版【绝不提前撤】，依次等待：
   `CardRenderer.prewarm`（全部花瓣的 fetch / `getBBox` / dataURL / Image 解码 + 128/256px 实体位图）→
   `MobFX.prepareAssets`（尾针空壳 / 无触角身体 / Pollen，内部 fetch 自带超时且派生素材改为 await）→
@@ -139,6 +151,10 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
      等内部最长关键帧 `sunrise` 结束（animationend，8.5s 定时器兜底，reduced-motion 也不挂死）；
   ③ 停留 2s；
   ④ `#loading.gone` 整块蒙版渐隐 450ms 后才 `display:none`，露出已在跑的游戏画面。
+- Loading 退场后进入**准备页**（`#connect`，花园瓦片 `grass_c_0.svg` 平铺背景）：
+  中央 Ubuntu 白字黑描边的 `Connecting`，连上后文字快速缩小、中间的 `Ready` 按钮快速放大（`connect-btn-in`）。
+  **点 Ready 才 `joinServer()`**：此前 `Game.update()` 首行 `if (!this.joined || !this.net) return;`，
+  世界不推进、实体不生成、服务端也没有该会话。连不上 WebSocket（4s 超时）时回退 `LocalNet`，点 Ready 即本地模拟。
   logo 的 SVG 文本在 `UI.init` 时预取（`_studioLogoSvg`），退场时不再等网络。
 - 预热任务全部【协作式让帧】：`boot()` 的 `yieldFrame()` 在每个阶段之间、瓦片每 8 组、
   生物位图每 8 项、卡面每 8 张、背包每个稀有度分组后各 `await requestAnimationFrame`。
@@ -172,7 +188,16 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
 
 ## 6. 网络
 
-- `Net` 是接口；`LocalNet` 进程内持有 `LocalServer`；`WebSocketNet` 连接失败时回退 `LocalNet`。
+- `Net` 是接口；`LocalNet` 进程内持有 `LocalServer`；`WebSocketNet` 连接失败（4s 超时）时回退 `LocalNet`。
+- **连接与入服是两步**：`connect()` 只建传输（`WebSocketNet` 打开 `/ws`，不建玩家），
+  `join({name, loadout})` 才发 `{t:'join'}`，服务端 `addSession(sessId)` 后回 `{t:'joined'}`。
+  `LocalNet` 也只在 `join` 时才 `attach` + `start`。`Game.connectServer()` / `Game.joinServer()` 由准备页驱动。
+- **多会话**：`LocalServer.sessions` 持有每会话各自的 `player` / `inventory` / `pending*` / 复活点，
+  `this.player` / `this.inventory` / `pending*` 是主会话的兼容代理（`attach(map, null)` 不再凭空建 0 号会话）。
+  事件分发 `_event(sessId)` / `_broadcast` / `_fanoutEvents`：`hurt`、`respawned`、指令回执按会话定向，
+  `dmg` / `kill` / `chat` / `sys` 广播；`_combatTickFor(p)` 让伤害归属到具体会话。
+- `server.js` 启动时 `addSession(0)` → `removeSession(0)` 预生成世界，避免首个玩家入服时超时。
+- `join` 的 loadout 只上行 `{key, rarity}`，形态与数值由服务端按类型表还原，不采信客户端自报。
 - 权威状态（生成、移动、碰撞、战斗、击退、聊天路由）在 `LocalServer`；
   本地玩家在客户端预测，服务端跑同一套物理校验。
 - 上行：`{t:'input'}`、`{t:'loadout'}`、`{t:'respawn'}`、`{t:'chat'}`。
@@ -188,10 +213,12 @@ util.js → assets.js → i18n(en_US/zh_CN) → lang.js
   `pendingResult = {key, count}` 是**服务端存储的待领取成品**：`craft` 只挂起、不写 inventory，
   所以背包和合成列表都不会提前显示结果；点结果卡（`takeResult`）或被下一拨/卸下"替下"时
   才真正计入 inventory。目标由 `craftTargetOf` 从材料稀有度推导，概率取 `data.js` 的 `CRAFT_CHANCE`。
-  启动时 `main.js` 调 `UI.syncInventoryFromServer()` 拉一次镜像。
+  入服（`Game.joinServer`）后拉一次背包镜像；Loading 与准备页阶段不建会话。
 - 快照频率 `SNAP_HZ = 25`，`LocalNet.step` 按 `SNAP_DT` 累加并保留余量后下发。
-- 快照内容：`player`、`petals`（按 `petalNetKey` 定位）、`ents`（全量生物 + `FX_FIELDS`）、
-  `webs`、`projectiles`。
+- 快照内容（按会话 `snapshot(dt, sessId)`）：`player`、`petals`（本会话，按 `petalNetKey` 定位）、
+  `players`（其他玩家及其花瓣）、`ents`、`webs`、`projectiles`。
+- 远处生物瘦身：近处仍发完整对象 + `FX_FIELDS`，远处只发 `far: [id, typeId, rarity, level, x, y]`；
+  客户端 `_applySnap` 两种都吃（实测单帧约 80KB、2000+ 只生物）。
 - 事件：`dmg`、`kill`、`hurt`、`chat`、`sys`、`respawned`、`teleported`。
 - 客户端差分镜像：新 `netId` 建视图，消失的播放退场后回收；`px/tx/blend` 插值。
 - 远处生物休眠：半径**不是固定值** —— 客户端每帧把可视半径（视口半对角线 + 相机偏移，
@@ -453,7 +480,7 @@ EntityFX.hurt(ent, dur);
 - `registry.js`：花瓣 1..94 为真实、95..116 为二创；生物 1..83 为真实，84+ 忽略。
 - 启用花瓣（`ENABLED_PETAL_SLUGS`）：`basic, light, rose, stinger, pollen, honey, peas, leaf,
   faster, third_eye, web, antennae, orange, missile, wax, rice, corn, wing, ant_egg, clover,
-  glass, basil, shovel, soil`。
+  glass, basil, shovel, soil, rock, moon_rock, dandelion`。
 - 不可堆叠（`stackable: false`，只有最左那格生效）：`third_eye, antennae, clover`。
   这是"卡不可叠"，不是"效果不可叠"：多个玩家各带一张 Clover 时幸运值照常加算。
 - 生物词条键：`MOB_I18N_ALIASES` 把 slug 映射到官方键（蚂蚁家族是 `ant_*` 前缀：
@@ -461,6 +488,9 @@ EntityFX.hurt(ent, dur);
   名字与简介都必须经 `mobI18nKey(slug)` 查，否则中文环境回落英文且没有简介。
   特例：Bumble Bee 的 Pollen 是【生物实体】（`POLLEN_SHOT_TYPE`，slug `pollen_shot`），
   不能借 `Petals/pollen`，词条在 `js/i18n-extra.js` 里单独登记。
+- 花瓣名：卡面画 `Petals/<slug>/Name`（短名），悬浮框用 `Petals/<slug>/FullName`（缺省回落 Name）。
+  Egg 的短名是 `Egg`、全称 `Ant Egg`；Moon Rock 比照同一口径：EN 卡面 `Moon` / 全称 `Moon Rock`，
+  中文没有简化名，卡面与全称都用 `月石`。
 - 花瓣默认自转：口径是「**公转 + 自转 = `PETAL_SELF_TURN_T` 秒一圈**」（= 2s），
   所以 `_petalSelfRate` 必须 **减去公转角速度**（绘制角 = drawRot + selfRot，叠加才是玩家看到的一圈）。
   `type.selfSpin` 优先；`orientOutward`（Missile）与落位实体（Wax）不走默认自转。
@@ -594,16 +624,49 @@ EntityFX.hurt(ent, dur);
   noKnockback`），也不结算伤害；装填 2.5s。悬浮框只有 `Healing Bonus: +45%` 一行，
   标签色与 Heal 属性完全相同（`STAT_LABEL_COLORS.heal`）。
 - Orange：三实体阵型，伤害按目标上次实际受伤追加计算，上限 `Max Damage`。
+- Rock（生物 id 1）：障碍型 + `immovable`（重量 Infinity，与 Ant Egg 同口径），数值在
+  `MOB_RARITY_OVERRIDES[1]`（官方只给区间时取下限）。外形**不读素材**：`MobFX.register('rock',
+  { drawBody })` 按 `mob.seed` 生成「等分角 ± 小抖动、半径 ±5%」的闭合多边形，端点数从
+  common 的 5~6 个线性长到 eternal 的 40~50 个（相邻端点最大间隔 ≤1.6 步长，不会出现长直边）；
+  同一条路径先填后描（描边跟着形状走）。碰撞箱【不是圆】：`MobFX.register('rock', { colliderPts })`
+  返回同一份顶点的归一化版本（再向外扩半个 lineWidth），`Mob._ensureShape` 的通用钩子
+  `MobFX.colliderPts(mob)` 把它直接当成普通 `shape { pts, r }` —— 画出来那条外轮廓描边就是判定形状，
+  碰撞/推挤/受击红闪/F3 全部同源。体型走 `MOB_TRAITS.rock.sizeScale = 1.0`（与同级虫子同口径）。
+  引擎侧通用钩子：`Mob.draw` 先问 `MobFX.drawBody`（返回 true 跳过贴图），
+  `Mob._ensureShape` 先问 `MobFX.colliderPts`（返回顶点则跳过素材轮廓）。
+- Dandelion（花瓣 id 15）：一卡多体【Light 型】（`PETAL_SUB_COUNT.dandelion`：mythic 2、ultra+
+  3，其余 1，每体各占一个轨道位）+ `orientOutward`：素材不是旋转对称的，`PetalFX.artTip`
+  **不写死角度**，而是由 `CardRenderer.partCenter(15, '#cfcfcf')`（离屏 getBBox 按 fill 分组）
+  实测白色绒球相对图形中心的方位，再统一 **+3π/4 校正**后作为 artTip（素材里 `#cfcfcf` 的
+  实测侧是根部一侧，先 +π；实机又向左偏 45°，再减 π/4 —— 绘制角 = 轨道角 − tip，
+  向左偏就减 tip）。于是实体上绒球朝外，卡面排布（`DANDELION_LAYOUTS`，值为 `(tip) => 布局` 的函数）
+  把每个实例转到「绒球朝里」；卡面与实体共用这一份 tip。
+- 状态【分层】模型（`js/sim/status.js`）：`ent.status` 每次施加都是独立一层
+  `{ id, dur, value, src }`，各层并行计时；`StatusFX.list/get` 返回每个 id 的聚合记录。
+  · **可叠加**（`def.stack === 'add'`，中毒 / 减疗）：聚合值 = 所有未过期层的总和
+    （305/s 3s + 第 2s 叠 135/s 5s -> 305 / 440 / 135 / 0），`maxValue` 封顶；
+  · **不可叠加**（缺省，蛛网）：聚合值 = 各层最大值，时长同样并行（同值层合并成一层刷新时长）；
+  · 同一来源（`opt.src`，例如同一只蜘蛛的 `netId`）的可叠加状态只刷新时长、不叠数值。
+- Dandelion 命中叠 `heal_down`（`PETAL_TRAITS.dandelion.healDown = { amount, dur, max }`）：
+  `stack:'add'` + `maxValue:1`，每层独立 30s；扣减只看 `StatusFX.healMul(ent)`，
+  在唯一回血出口 `PetalFX.ctx.heal` 里与 Basil 的增疗相乘 —— 新回血来源天然支持减疗。
+- 状态条带（`UI.renderStatus`）：每条 = 圆角条带（`def.bandColor`，比图标色略浅）+ 圆形图标
+  （`def.color` + `def.glyph`）+ 数字；数字文本来自 `StatusFX.textOf(rec)`（蛛网 = 移速减少百分比、
+  中毒 = 当前每秒毒伤、减疗 = -20%…），宽度用 canvas `measureText` 量出、CSS `transition: width`
+  平滑过渡。**无描边**：原 2px 黑边改成条带内边距（本体更宽）。入场 = 0.55 倍渐大渐显，
+  退场 = 脱离文档流留在原位渐小渐隐；新条带出现/旧条带消失时，其余条带用 FLIP 平滑让位，
+  整行 `justify-content:center` 始终居中；元素按 id 复用，不整体重建。
 - Missile：发射链路与 Peas 相同（`launch` 能力字段 + 引擎默认 `detach`/`flightOf`）；
   reach 下加载完成即沿当前轨道角径向飞出（`launchRadial`），直线飞行 2s，参与实体碰撞。
 - Hornet：追击速度 0.95× 玩家，尾部 Missile 为 MobFX 子实体，独立受击，消失后 0.5s 重生。
 - Shovel：装填按稀有度递减（`PETAL_RARITY_OVERRIDES.shovel.reload`：15.0 / 13.1 / 11.8 / 10.1 /
   8.5 / 6.9 / 5.2 / 3.6 / 2.0 / 2.0 s，唯一入口 `petalReloadOf(card)`）；detect 模式装填完成即遁地 2s。
 - 可自然生成生物（`SPAWNABLE_MOB_SLUGS`）：`ladybug, bee, bumble_bee, centipede, spider, hornet,
-  soldier_ant, worker_ant, baby_ant, ant_egg, queen_ant, ant_hole`。地图 TMJ 里的旧名走
+  soldier_ant, worker_ant, baby_ant, ant_egg, queen_ant, ant_hole, rock`。地图 TMJ 里的旧名走
   `MOB_SPAWN_ALIASES`（`ant_soldier / ant_worker / ant_baby / ant_queen` → 对应物种）。
-- 中毒数值在 `MOB_RARITY_OVERRIDES[id].{poison,poisonRate}`，由 `_combatTick` 施加到 `StatusFX`，
-  扣血在 `Player._tickPoison`；状态效果不进快照，客户端由 `hurt` 事件的 `poison` 字段自挂。
+- 中毒数值在 `MOB_RARITY_OVERRIDES[id].{poison,poisonRate}`，由 `_combatTick` 施加到 `StatusFX`
+  （带 `src = 蜘蛛 netId`：同源只刷新时长，不同蜘蛛各占一层、dps 相加），扣血在
+  `Player._tickPoison` 读聚合值；状态效果不进快照，客户端由 `hurt` 事件的 `poison`（含 `src`）自挂。
 - 隐藏掉落（`DROP_HIDDEN_SLUGS`）：`mana_orb / blueberries / magic_leaf / magic_eye`。
 - 掉落按生物稀有度查表，`rollMobDrops()` 返回项带 `chance` 供粒子分级。
 - 初始装备：4× common Basic + 1× common Rose；背包 1× common Basic。

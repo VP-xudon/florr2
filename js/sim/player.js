@@ -507,7 +507,9 @@ class Player {
       b.hp = ns.hp; b.maxHp = ns.maxHp;
       // 花瓣位置与速度一律取服务端权威值，客户端只负责渲染与插值。
       // 插值而不是直接赋值：快照 25Hz，直接采信会按台阶跳变。
-      if (ns.x != null) {
+      // 【死亡记录不带位置】：服务端为"有卡无实体"的槽补的占位记录 x/y 是 0，
+      // 采信它会把正在退场的实体朝世界原点拽；死亡位置一律保持在最后一帧。
+      if (!ns.dead && ns.x != null) {
         // 不把坐标硬赋值过去：那样它会跟着 25Hz 的快照台阶跳 —— 被连续推挤时
         // 就是明显的"一卡一卡 / 很粘"。改为记录起终点，由每帧插值还原平滑位移。
         if (b.nToX == null || Math.abs(ns.x - b.nToX) > 0.01 || Math.abs(ns.y - b.nToY) > 0.01) {
@@ -536,7 +538,12 @@ class Player {
         b.dead = false;
         b.hp = b.maxHp;
         this.petalExit.reclaim(b);
+        // 坐标与插值起终点一并拉回花朵中心：只改 x/y 会留着上一次（死亡处）的
+        // nFrom/nTo，下一帧插值会把它从原地"拽"回去，表现就是从生物身上冒出来。
         b.x = this.x; b.y = this.y;
+        b.nFromX = b.nToX = this.x;
+        b.nFromY = b.nToY = this.y;
+        b.nBlend = 1;
         b.vx = 0; b.vy = 0;
       }
     }
@@ -570,7 +577,8 @@ class Player {
         // 所有"待加载 -> 正常"的转换都遵循这条规则（不保留、不继承旧进度）。
         r.frozen = false;
         r.age = 0;
-      } else if (!this.reloadHold[i] && !r.hold) {
+      } else if (!this.reloadHold[i] && !r.hold && !r.paused) {
+        // r.paused：/reload pause 冻结该槽的装填计时（再执行一次 resume）
         r.age += dt;
       }
       // r.hold：Honey 卡在"放在地上的实体"存活期间暂停冷却，实体全部消失后才开始冷却。
@@ -585,6 +593,52 @@ class Player {
       }
     }
   }
+  // /reload <done|redo|pause>：直接操作自己的装填计时（客户端预测副本与服务端权威副本共用）。
+  //   done  = 所有带装填的花瓣剩余时间归零（立刻加载好）
+  //   redo  = 重新计算装填时间（按当前稀有度重取 dur，并从 0 重新计时）
+  //   pause = 暂停 / 继续（对所有带装填的槽位一起切换）
+  // 返回 { n, paused }：n = 实际受影响的槽位数（0 = 没有可操作的花瓣），
+  // paused = 暂停类操作后的状态（供指令回执选文案）。
+  cmdReload(mode) {
+    let n = 0, paused = false;
+    for (let i = 0; i < this.slots.length; i++) {
+      const c = this.slots[i];
+      if (!c) continue;
+      // 只有【带装填】的花瓣参与（饰品 / 无冷却花瓣的 reload 为 0）
+      if (!(petalReloadOf(c) > 0)) continue;
+      let r = this.reload[i];
+      if (!r || r.card !== c) {
+        r = { card: c, age: 0, dur: petalReloadOf(c) };
+        this.reload[i] = r;
+      }
+      // 滞留/落位型（Honey / Wax / 月石）：实体还在场时【没有剩余装填】可操作。
+      // 不跳过的话，/reload done 会让已经存在的实体再长出一份（撕下检测的 hold 语义）。
+      if (r.hold) continue;
+      let held = false;
+      for (const b of this.petals) {
+        if (b && b.stationary && !b.dead && b.slotIndex === i) { held = true; break; }
+      }
+      if (held) continue;
+      if (mode === 'done') {
+        r.age = r.dur;
+        r.hold = false;
+        r.paused = false;
+      } else if (mode === 'redo') {
+        r.dur = petalReloadOf(c);
+        r.age = 0;
+        r.hold = false;
+        r.paused = false;
+      } else if (mode === 'pause') {
+        r.paused = !r.paused;
+        paused = !!r.paused;
+      } else {
+        return { n: 0, paused: false };
+      }
+      n++;
+    }
+    return { n, paused };
+  }
+
   // 该主槽是否装填完成（dur<=0 视为无需装填，立即完成）
   reloadDone(i) {
     if (this.slowTile) return false;      // 减速瓦片上：一律视为"待加载"
@@ -730,6 +784,23 @@ class Player {
       }
       b.life = (b.life || 0) + dt;
 
+      // 自走型实体（Moon Rock）：服务端权威副本自己推进随机游走；
+      // 客户端副本（有 netPetals）不跑第二套随机方向，直接落到下面的快照插值。
+      if (b.selfMove && !this.netPetals) {
+        if (typeof PetalFX !== 'undefined' && PetalFX.tickSelfMove) {
+          PetalFX.tickSelfMove(b, this, dt);
+        }
+        // 【必须放回本帧实体列表】：少了这一句，末尾 this.petals = bodies 会把它丢掉，
+        // 之后既不绘制也不进快照 -> 客户端收到该槽的 dead 占位 -> 直接退场消失。
+        bodies.push(b);
+        continue;
+      }
+      // 客户端副本：位置用快照插值，但自转是纯表现 —— 按同一个绝对角速度本地推进
+      //（不推的话月石在客户端是死的，只有服务端在转）。
+      if (b.selfMove) {
+        b.selfRot = (b.selfRot || 0) + (b.selfRate != null ? b.selfRate : TAU / 15) * dt;
+      }
+
       // 存活上限：Pollen 有；Honey 靠血量撑（Infinity）。
       // 口径由 PetalFX.ttlOf 统一给出（能力字段 holdReloadUntilDeath 决定）。
       const lim = PetalFX.ttlOf(b);
@@ -739,6 +810,14 @@ class Player {
       }
       bodies.push(b);
     }
+    // ---- 月石（Moon Rock）：本人在场时，所有在轨花瓣改为绕月石公转 ----
+    // 月石自己走 stationary 分支（不参与这段），于是玩家身边"光禚"。
+    // 只影响它的拥有者：别的玩家的花瓣不许被别人的月石拉走。
+    let orbitC = this;
+    for (const b of bodies) {
+      if (!b.dead && b.stationary && b.selfMove) { orbitC = b; break; }
+    }
+
     let spotBase = 0;
     for (let k = 0; k < n; k++) {
       const slotIndex = equipped[k];
@@ -925,6 +1004,23 @@ class Player {
     // 人物因 Soil 变大时花瓣跟着边缘一起外移（旧版用固定 PLAYER_R_STD 会让花瓣挤到身上）。
     const baseReach = this.r * (1 + PETAL_REACH) * 1.105;
     const dtc = Math.min(dt, 0.05);   // 弹簧积分步长上限（防掉帧时数值爆炸）
+    // ---- 月石：公转角速度按【半径比例】降速 ----
+    // 目标：绕月石时的【绝对线速度】与绕玩家时相同（= ω × r 守恒），而不是保持圈速。
+    // 基础角速度已包含 Faster 等加成（rotMax 由 recompute 把加成求和），这里只乘半径比。
+    // 目标角与公转搬运必须用【同一个相位/同一个速度】，否则弹簧会把花瓣拉回全速。
+    const orbitRate = (this.rotMax || PETAL_SPIN) * ROT_SCALE;
+    let orbitSpin = this.spin;
+    let rockK = 1;
+    if (orbitC !== this) {
+      const orb = Math.max(1, baseReach * reachMult);
+      rockK = orb / (orb + (orbitC.cr || 0));
+      this._rockAng = (this._rockAng == null)
+        ? this.spin
+        : this._rockAng + orbitRate * rockK * dtc;
+      orbitSpin = this._rockAng;
+    } else {
+      this._rockAng = null;   // 回到玩家：直接用 this.spin（相位立即对齐）
+    }
     // 吸附候选：先在玩家附近筛一遍（轨道半径 + 触发距离 + 余量），
     // 避免全图 1600+ 只生物时每片花瓣都扫全表。
     // 吸附有效范围：轨道半径 + 触发距离 + 3 个花瓣直径的余量。
@@ -943,11 +1039,54 @@ class Player {
         nearMobs.push(m);
       }
     }
+    // 阵型多体（Stinger / Peas / Orange）：整簇必须共用【同一个朝向基准】。
+    // 位置来自服务端后，不能再拿"每个子体自己的位置角"当朝向 —— Orange 的弧线布局会把
+    // 三瓣各转不同角度，整簇看起来被掰开。这里按（槽位, 世代）取整簇中心，还原共同基准角。
+    let formAng = null;
+    if (this.netPetals && this.petals.length) {
+      formAng = this._formAng || (this._formAng = new Map());
+      formAng.clear();
+      for (const b of this.petals) {
+        if (b.dead) continue;
+        const pt = b.card && b.card.type;
+        if (!pt || !pt.formation || b.nToX == null) continue;
+        const key = b.slotIndex + '|' + (b.gen | 0);
+        let s = formAng.get(key);
+        if (!s) { s = { x: 0, y: 0, n: 0 }; formAng.set(key, s); }
+        s.x += b.nToX; s.y += b.nToY; s.n++;
+      }
+    }
     for (const b of this.petals) {
       if (b.dead) continue;         // 已碎实体：留在原位等重装填完成（不绘制、不运动）
       // 自转：独立于公转，从加载好起持续转动（喷射飞行的实体也照样转）
       if (!b.card.type.orientOutward && !b.anchor) {
         b.selfRot = (b.selfRot || 0) + this._petalSelfRate(b) * dtc;
+      }
+
+      // ---- 服务端权威：花瓣位置只按快照渲染 ----
+      // 花瓣是【实体】，位置/速度/血量全部由服务端计算（轨道、吸附、分离、脱轨、地形）。
+      // 客户端不再自行积分第二套花瓣物理 —— 那会与服务端判定错位，表现就是
+      // "看着撞上了却掉血很晚/不掉血""花瓣碎得比画面晚一拍"。
+      // 这里只做帧间插值（25Hz 快照 -> 每帧），运动状态与判定仍以服务端为准。
+      // 单机（LocalNet）同样走这一条：服务端与客户端同进程，零延迟，不需要预测副本。
+      if (this.netPetals && b.nToX != null) {
+        b.nBlend = Math.min(1, (b.nBlend || 0) + dtc / SNAP_DT);
+        b.x = b.nFromX + (b.nToX - b.nFromX) * b.nBlend;
+        b.y = b.nFromY + (b.nToY - b.nFromY) * b.nBlend;
+        // 朝向仍由本地按"实体相对花心的方位"还原（位置是权威的，朝向纯表现）：
+        // 尖端朝外（Missile）用自身方位；阵型多体用整簇中心的方位。
+        const pt = b.card && b.card.type;
+        if (pt && pt.orientOutward) {
+          const tip = (typeof PetalFX !== 'undefined') ? PetalFX.artTip(pt) : null;
+          b.selfRot = Math.atan2(b.y - this.y, b.x - this.x) - (tip || 0);
+        } else if (pt && pt.formation) {
+          const s = formAng && formAng.get(b.slotIndex + '|' + (b.gen | 0));
+          if (s && s.n) {
+            const ca = Math.atan2(s.y / s.n - this.y, s.x / s.n - this.x);
+            b.drawRot = ca + Math.PI / 2 + (b.formRot || 0);
+          }
+        }
+        continue;
       }
 
       // 滞留实体（Pollen / Honey）：脱离轨道后只用惯性滑行 -> 阻尼停住，
@@ -1044,10 +1183,12 @@ class Player {
         }
         waveAdd *= (this.mode === 'reach' ? 1 : 0) * (typeof this.modeT === 'number' ? this.modeT : 1);
       }
-      const reach = baseReach * mult * orbitK + rb + formationOffset + waveAdd;
-      const ang = this.spin + (b.spot || 0) * spotStep;
-      let tx = this.x + Math.cos(ang) * reach;
-      let ty = this.y + Math.sin(ang) * reach;
+      // 绕月石时，公转中心换成月石、半径加上月石的半径：花瓣就绕着它转。
+      const rockR = (orbitC !== this) ? (orbitC.cr || 0) : 0;
+      const reach = baseReach * mult * orbitK + rb + formationOffset + waveAdd + rockR;
+      const ang = orbitSpin + (b.spot || 0) * spotStep;
+      let tx = orbitC.x + Math.cos(ang) * reach;
+      let ty = orbitC.y + Math.sin(ang) * reach;
       // 尖端朝外（Missile 公转时）：尖端角同样只问 PetalFX，不在这里引特定素材的常量。
       if (b.card.type.orientOutward) {
         b.selfRot = ang - ((typeof PetalFX !== 'undefined' ? PetalFX.artTip(b.card.type) : null) || 0);
@@ -1069,12 +1210,12 @@ class Player {
         b.drawRot = ang + Math.PI / 2 + (b.formRot || 0);
         if (b.sub === 0) {
           const apexR = reach * Math.cos(half) + edge * Math.sqrt(3) / 2;
-          tx = this.x + Math.cos(ang) * apexR;
-          ty = this.y + Math.sin(ang) * apexR;
+          tx = orbitC.x + Math.cos(ang) * apexR;
+          ty = orbitC.y + Math.sin(ang) * apexR;
         } else {
           const side = b.sub === 1 ? -1 : 1;
-          tx = this.x + Math.cos(ang + side * half) * reach;
-          ty = this.y + Math.sin(ang + side * half) * reach;
+          tx = orbitC.x + Math.cos(ang + side * half) * reach;
+          ty = orbitC.y + Math.sin(ang + side * half) * reach;
         }
       } else if (b.formOff) {
         const R = ang + Math.PI / 2;
@@ -1139,12 +1280,12 @@ class Player {
       // 于是轨道半径严格等于 reach、与转速无关；
       // 玩家位移造成的拖尾感（故意保留的缓冲）仍然来自残差弹簧，手感不变。
       // 吸附（sticky）时目标是生物表面而不是轨道点，不做搬运。
-      const dang = mob ? 0 : (this.rotMax || PETAL_SPIN) * ROT_SCALE * dtc;
+      const dang = mob ? 0 : orbitRate * rockK * dtc;
       if (dang) {
         const cw = Math.cos(dang), sw = Math.sin(dang);
-        const dxp = b.x - this.x, dyp = b.y - this.y;
-        b.x = this.x + dxp * cw - dyp * sw;
-        b.y = this.y + dxp * sw + dyp * cw;
+        const dxp = b.x - orbitC.x, dyp = b.y - orbitC.y;
+        b.x = orbitC.x + dxp * cw - dyp * sw;
+        b.y = orbitC.y + dxp * sw + dyp * cw;
         const v0x = b.vx, v0y = b.vy;
         b.vx = v0x * cw - v0y * sw;
         b.vy = v0x * sw + v0y * cw;
@@ -1234,6 +1375,14 @@ class Player {
     }
     const so = b.card && b.card.type ? b.card.type.spinOrigin : null;
     EntityFX.draw(ctx, b, (c) => {
+      // 程序化绘制（月石）：注册项整片接管外形（描边绝对粗细 / 斑点随稀有度）。
+      // 受伤红闪仍按碰撞圆（碰撞箱严格等于外形）走 EntityFX。
+      if (typeof PetalFX !== 'undefined' && PetalFX.drawBody
+        && PetalFX.drawBody(c, b, entSize(), rot)) {
+        const hurtA0 = EntityFX.hurtAlpha(b);
+        if (hurtA0 > 0) EntityFX.drawHurtShape(c, b, 0, 0, null, 0, b.cr || PETAL_R);
+        return;
+      }
       const cv = svg ? CardRenderer.artCanvas(svg, 128) : null;
       // 拿到画布 = 素材已就绪 => 实体窗口也已实测出来，尺寸可以取准。
       const size = entSize();

@@ -420,6 +420,20 @@ const MobFX = {
     if (def && def.drawOver) def.drawOver.call(def, ctx, mob);
   },
 
+  // 物种自绘【本体】（可选）：返回 true 表示已经画完，调用方不再画贴图。
+  // 用于形状不能由素材决定的物种（Rock：圆周围随机波动的多边形）。
+  drawBody(ctx, mob) {
+    const def = this.defOf(mob);
+    return !!(def && def.drawBody && def.drawBody(ctx, mob));
+  },
+
+  // 物种自绘本体对应的【碰撞外形】（可选）：返回归一化顶点（× collSize = 世界尺寸）。
+  // 与 drawBody 同源：画出来是什么样，判定就是什么样（目前只有 Rock）。
+  colliderPts(mob) {
+    const def = this.defOf(mob);
+    return (def && def.colliderPts) ? (def.colliderPts(mob) || null) : null;
+  },
+
   drawMissile(ctx, missile, size, alpha) {
     if (!missile || (missile.dead && !missile.exiting)) return;
     MobFX.drawMissileAt(ctx, missile, missile.x, missile.y,
@@ -803,3 +817,77 @@ for (const antSlug of ['soldier_ant', 'worker_ant', 'baby_ant', 'queen_ant']) {
     },
   });
 }
+
+// ============================================================================
+// 物种声明：Rock 石头
+//   外形【不是素材里的固定多边形】：一圈半径随机小幅度波动的端点连线而成。
+//   端点数随稀有度增长：common 5~6 个 -> eternal 40~50 个；
+//   · 端点按【等分角 ± 小抖动】分布，于是相邻端点的最大相隔也不大，不会出现一条长直边；
+//   · 半径波动 ±5%（"小幅度"），种子取自实体自己，每块石头形状/朝向都不同且稳定；
+//   · 描边 = 同一路径描边（跟着形状走），内部填充满；
+//   · 碰撞箱【就是这条外轮廓描边】：colliderPts 返回同一份顶点，并按描边外沿
+//     向外扩半个 lineWidth —— 画多大就判多大，不再是包住形状的圆。
+// ============================================================================
+function rockVerts(mob, D) {
+  const key = (mob.rarity || '') + '|' + (mob.seed | 0);
+  if (mob._rockKey === key && mob._rockPts) return mob._rockPts;
+  let s = ((mob.seed | 0) || 1);
+  const rng = () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 8) & 0xffffff) / 0x1000000; };
+  const idx = Math.max(0, (typeof RARITY_ORDER !== 'undefined') ? RARITY_ORDER.indexOf(mob.rarity) : 0);
+  const last = (typeof RARITY_ORDER !== 'undefined' && RARITY_ORDER.length > 1) ? RARITY_ORDER.length - 1 : 8;
+  const t = idx / last;
+  const lo = Math.round(5 + (40 - 5) * t);     // 端点下限：5 -> 40
+  const hi = Math.round(6 + (50 - 6) * t);     // 端点上限：6 -> 50
+  const n = Math.max(3, lo + Math.floor(rng() * (hi - lo + 1)));
+  const R = D / 2;
+  const step = TAU / n;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    // 角度抖动 ±0.3 步长 -> 相邻端点最大间隔 ≤ 1.6 步长（不会突然拉出长直边）
+    const a = i * step + (rng() * 0.6 - 0.3) * step;
+    // 半径波动 ±5%：视觉上"大致是圆"，但边缘自然磕磕碰碰
+    const r = R * (1 + (rng() * 2 - 1) * 0.05);
+    pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  mob._rockKey = key;
+  mob._rockPts = pts;
+  return pts;
+}
+
+// 归一化碰撞顶点（× 视觉直径 = 世界尺寸）：与 drawBody 同一份 rockVerts，
+// 每个顶点沿半径向外扩【描边外沿】（lineWidth 的一半）—— 判定贴着外轮廓描边。
+function rockColliderPts(mob) {
+  const D = mob.drawSize || 40;
+  const pts = rockVerts(mob, D);
+  const half = Math.max(1.2, D * 0.09) / 2;
+  return pts.map(([x, y]) => {
+    const d = Math.hypot(x, y) || 1;
+    const k = (d + half) / d / D;
+    return [x * k, y * k];
+  });
+}
+
+MobFX.register('rock', {
+  colliderPts: rockColliderPts,
+  drawBody(ctx, mob) {
+    const D = mob.drawSize || 40;
+    const pts = rockVerts(mob, D);
+    ctx.save();
+    // 朝向随机（生成时 facing 已随机）——石头本身不自转，每块石头只是朝向不同。
+    // 旋转角 = facing + artRot：与 mobHitTest 读的轮廓旋转【完全一致】
+    // （没有贴图时 artRot 仍是默认补偿角，绘制必须跟上，否则判定与画面差 45°~135°）。
+    ctx.rotate((mob.facing || 0) + (mob.artRot || 0));
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = '#777';          // 同素材本体色
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.2, D * 0.09);
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#606060';     // 同素材外圈色
+    ctx.stroke();
+    ctx.restore();
+    return true;
+  },
+});

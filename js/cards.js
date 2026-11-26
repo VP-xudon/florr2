@@ -78,6 +78,9 @@ const CardRenderer = (function () {
   const PETAL_ENT_REF = [32.858, 32.858];      // Basic 内容包围盒（离线实测常量）
 
   const _bb = {};    // svgId -> [x, y, w, h] | null（离屏 getBBox 实测内容包围盒）
+  // svgId -> [{ fill, x, y, w, h }]：每条 path 的实测包围盒（同一次离屏测量顺手记下）。
+  // 用途：需要"素材里某一块图形朝哪边"的时候（蒲公英的白色绒球方位）。
+  const _bbParts = {};
   // 实体绘制直径：素材窗口相对 Basic 参考窗口的比例 × 基准直径。
   // 世界与卡面用的是【同一套以 Basic 为基准的比例】（卡面窗口 79.38 / 实体窗口 32.86），
   // 所以卡面上占多大比例，世界里就占多大；不再一律塞进同一个方框（否则素材大的一律缩水）。
@@ -105,6 +108,23 @@ const CardRenderer = (function () {
       if (svg && svg.getBBox) {
         const b = svg.getBBox();
         if (b.width > 0 && b.height > 0) bb = [b.x, b.y, b.width, b.height];
+        // 分块包围盒（只对少量 path 的素材做，开销可忽略）：
+        // 按 fill 取重心即可回答"白球在哪一边"，不需要引入任何素材专用常量。
+        const nodes = svg.querySelectorAll ? svg.querySelectorAll('path') : null;
+        if (nodes && nodes.length && nodes.length <= 12) {
+          const parts = [];
+          for (const n of nodes) {
+            try {
+              const pb = n.getBBox();
+              if (!(pb.width > 0 && pb.height > 0)) continue;
+              parts.push({
+                fill: (n.getAttribute('fill') || '').toLowerCase(),
+                x: pb.x, y: pb.y, w: pb.width, h: pb.height
+              });
+            } catch (e) { /* 单条失败不影响整体测量 */ }
+          }
+          if (parts.length) _bbParts[svgId] = parts;
+        }
       }
       box.remove();
     } catch (e) { bb = null; }
@@ -225,10 +245,36 @@ const CardRenderer = (function () {
   const ORANGE_LAYOUTS = {
     3: evenlyRotated(formRing(3, 0.58 / Math.sqrt(3), 0.72 * 1.3, -Math.PI / 2, false))
   };
+  // Dandelion：实体是【Light 型】（每体各占一个轨道位，不锁阵型），
+  // 但卡面要求"白色绒球朝里" —— 所以它的卡面布局是一个【函数】：
+  // 入参 = PetalFX.artTip 给出的头部朝向 tip（已在素材实测方位上做 +3π/4 校正），
+  // 实例 i 在环上角度 a，则 rot = a + π - tip。
+  // （实体侧是 orientOutward：白色绒球朝外，两边刚好相反，同一份 tip 驱动。）
+  function dandelionCardLayout(n) {
+    return (tip) => {
+      const t0 = tip || 0;
+      const step = TAU / n;
+      const r = (n === 2) ? 0.56 : 0.66;      // 环半径（单位 = 单体直径 D）
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + i * step;
+        out.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, k: 1, rot: a + Math.PI - t0 });
+      }
+      return out;
+    };
+  }
+  const DANDELION_LAYOUTS = { 2: dandelionCardLayout(2), 3: dandelionCardLayout(3) };
   // 阵型型花瓣的布局总表：slug -> { 实体数: 布局 }。新增此类花瓣只需在这里加一项。
+  // 值可以是布局数组，也可以是 (tip) => 布局 的函数（届时按素材朝向现算）。
   const FORMATION_LAYOUTS = {
-    stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS
+    stinger: STINGER_LAYOUTS, peas: PEAS_LAYOUTS, orange: ORANGE_LAYOUTS,
+    dandelion: DANDELION_LAYOUTS
   };
+  // 素材"头部"方位（有方向的花瓣才有，如蒲公英的绒球）：只问 PetalFX，不在这里写数值。
+  function cardArtTip(t) {
+    if (typeof PetalFX === 'undefined' || !PetalFX.artTip) return 0;
+    return PetalFX.artTip(t) || 0;
+  }
 
   // 该花瓣在【实体】里由几个独立光点组成（Light 多体；其他花瓣 = 1）。
   // 实体的每个光点各占一个轨道位，等同"装了 N 个单体 Light"，不套用卡面的紧凑排布。
@@ -247,11 +293,14 @@ const CardRenderer = (function () {
     const n = lightSubCount(t, rarity);
     if (n <= 1) return null;
     // 阵型型（Stinger…）：用它【自己的】布局（含每实例朝向），使卡面与实体排布严格一致
+    const tab = FORMATION_LAYOUTS[t.slug];
     if (t.formation) {
-      const tab = FORMATION_LAYOUTS[t.slug];
       const formation = (tab && tab[n]) || LIGHT_LAYOUTS[n] || null;
       if (formation) return t.formationAutoRotate ? evenlyRotated(formation) : formation;
     }
+    // 非阵型多体也可以有自己的【卡面】排布（蒲公英）：实体仍各占一个轨道位。
+    const own = tab && tab[n];
+    if (own) return (typeof own === 'function') ? own(cardArtTip(t)) : own;
     return LIGHT_LAYOUTS[n] || null;
   }
 
@@ -699,8 +748,9 @@ const CardRenderer = (function () {
           if (aw && typeof PetalFX !== 'undefined' && PetalFX.artOverlay) {
             // 装备中（主卡槽）才取实时朝向；其余场合传 null -> 画正中、不动
             const look = (st.live && PetalFX.lookAngle) ? PetalFX.lookAngle() : null;
+            // 第 5 个参数 = 卡面状态（rarity 等）：程序化卡面（月石）要按稀有度画
             PetalFX.artOverlay(ctx, st.svg, look,
-              { x: ox, y: oy, w: dw, h: dh, ux: aw[0], uy: aw[1], uw: aw[2], uh: aw[3] });
+              { x: ox, y: oy, w: dw, h: dh, ux: aw[0], uy: aw[1], uw: aw[2], uh: aw[3] }, st);
           }
         }
       }
@@ -827,12 +877,17 @@ const CardRenderer = (function () {
       if (!cv.isConnected) { _dynCards.delete(cv); continue; }   // 卡牌已销毁
       if (!cv.clientWidth) continue;                             // 不可见：不画
       if (now - (cv._dynT || 0) < DYN_MIN_MS) continue;
-      if (look == null) {
-        if (cv._dynLook == null) continue;          // 一直是"居中"：没有变化，不必重画
-      } else if (cv._dynLook != null) {
-        const dc = Math.abs(Math.cos(cv._dynLook) - Math.cos(look))
-          + Math.abs(Math.sin(cv._dynLook) - Math.sin(look));
-        if (dc < DYN_MIN_ANGLE) continue;
+      // 程序化动态卡面（月石）：斑点/描边随时间实时变化，不靠朝向变化触发
+      const animated = (typeof PetalFX !== 'undefined' && PetalFX.overlayAnimated)
+        ? PetalFX.overlayAnimated(cv._card && cv._card.svg) : false;
+      if (!animated) {
+        if (look == null) {
+          if (cv._dynLook == null) continue;          // 一直是"居中"：没有变化，不必重画
+        } else if (cv._dynLook != null) {
+          const dc = Math.abs(Math.cos(cv._dynLook) - Math.cos(look))
+            + Math.abs(Math.sin(cv._dynLook) - Math.sin(look));
+          if (dc < DYN_MIN_ANGLE) continue;
+        }
       }
       cv._dynT = now;
       cv._dynLook = look;
@@ -945,6 +1000,19 @@ const CardRenderer = (function () {
     // 内容包围盒（[x,y,w,h]，素材自身 viewBox 坐标，离屏 getBBox 实测）：
     // 需要"图形真正的中心/尺寸"时用它 —— 窗口是统一化的，跟图形本身不一样大。
     contentBox: (id) => _bb[id] || null,
+    // 某填充色所有 path 的加权中心（素材坐标）。有方向的素材（蒲公英绒球）用它定朝向。
+    partCenter: (id, fill) => {
+      const list = _bbParts[id];
+      if (!list || !list.length) return null;
+      const f = String(fill || '').toLowerCase();
+      let sx = 0, sy = 0, sn = 0;
+      for (const p of list) {
+        if (p.fill !== f) continue;
+        const w = Math.max(1e-6, p.w * p.h);      // 面积加权：大块为主，小块不拽偏中心
+        sx += (p.x + p.w / 2) * w; sy += (p.y + p.h / 2) * w; sn += w;
+      }
+      return sn > 0 ? [sx / sn, sy / sn] : null;
+    },
     // 多体花瓣（Light）：卡面布局 / 直径换算 / 通用绘制 / 实体光点数
     multiLayout, entityFormationLayout, lightDRatio, drawMulti, lightSubCount
   };

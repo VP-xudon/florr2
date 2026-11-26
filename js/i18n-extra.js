@@ -54,6 +54,23 @@
     'Chat/Command/summon/BadParam':
       'Invalid parameter. Segmented mobs accept [type=normal] or [type=long], e.g. /summon 3 common[type=long] 1',
 
+    // ---- /reload <done|redo|pause> ----
+    'Chat/Command/reload/Args': '<done|redo|pause>',
+    'Chat/Command/reload/Description': 'Reset, restart or pause the reload timer of your petals',
+    'Chat/Command/reload/Usage': 'Usage: /reload <done|redo|pause>',
+    'Chat/Command/reload/None': 'No petals with a reload timer are equipped.',
+    'Chat/Command/reload/Done': 'Reload finished for {0} petal slot(s).',
+    'Chat/Command/reload/Redo': 'Reload restarted for {0} petal slot(s).',
+    'Chat/Command/reload/Paused': 'Reload paused for {0} petal slot(s).',
+    'Chat/Command/reload/Resumed': 'Reload resumed for {0} petal slot(s).',
+
+    // ---- 花瓣名称：registry 的英文名是 Moon Rock（slug = moon_rock）----
+    // 卡面用短名（与 Egg 同一口径：Name = 卡面，FullName = 悬浮框全称）
+    'Petals/moon_rock/Name': 'Moon',
+    'Petals/moon_rock/FullName': 'Moon Rock',
+    'Petals/moon_rock/Description':
+      'This thing is so big your petals orbit it instead.',
+
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': 'Rotation Speed:',
     'UI/Petal/AttackRangeLabel': 'Attack Range:',
@@ -75,6 +92,11 @@
     'Status/Web/Short': 'W',
     'Status/Poison/Name': 'Poison',
     'Status/Poison/Short': '☠',
+    'Status/HealDown/Name': 'Healing Reduction',
+    'Status/HealDown/Short': '−',
+    // 蒲公英花瓣与（尚未实装的）生物词条补齐，缺了会回落英文键
+    'Petals/dandelion/Description': 'A puffy petal. Its hits weaken the healing of whatever it touches.',
+    'Mobs/rock/Description': 'A rock. It doesn\'t do much.',
 
     // ---- 全服击杀公告 ----
     'Chat/Sys/BossDestroyed': '{0} {1} {2} was destroyed by {3}',
@@ -105,6 +127,9 @@
     'UI/Craft/FailNote': 'On failure 1~4 petals are lost.',
     'UI/Craft/Chance': 'Success rate: {0}%',
     'UI/Craft/ShiftNote': 'Shift + click: load all leftovers at once (press Craft to start).',
+    // ---- 准备页（Loading 之后、入服之前） ----
+    'UI/Connect/Connecting': 'Connecting',
+    'UI/Connect/Ready': 'Ready',
     // ---- 设置窗口：图像 ----
     'UI/Settings/ShowMobHpBar': 'Show mob health bars',
     'UI/Settings/ShowFeedback': 'Show feedback numbers',
@@ -156,6 +181,23 @@
     'Chat/Command/summon/BadParam':
       '参数无效。多节生物支持 [type=normal] 或 [type=long]，例如 /summon 3 common[type=long] 1',
 
+    // ---- /reload <done|redo|pause> ----
+    'Chat/Command/reload/Args': '<done|redo|pause>',
+    'Chat/Command/reload/Description': '重置、重算或暂停自己花瓣的装填计时',
+    'Chat/Command/reload/Usage': '用法：/reload <done|redo|pause>',
+    'Chat/Command/reload/None': '没有装备任何带装填属性的花瓣。',
+    'Chat/Command/reload/Done': '已将 {0} 个花瓣槽的剩余装填时间归零。',
+    'Chat/Command/reload/Redo': '已重新计算 {0} 个花瓣槽的装填时间。',
+    'Chat/Command/reload/Paused': '已暂停 {0} 个花瓣槽的装填计时。',
+    'Chat/Command/reload/Resumed': '已继续 {0} 个花瓣槽的装填计时。',
+
+    // ---- 花瓣名称：registry 的英文名是 Moon Rock（slug = moon_rock）----
+    // 中文没有简化名：卡面与悬浮框都用"月石"
+    'Petals/moon_rock/Name': '月石',
+    'Petals/moon_rock/FullName': '月石',
+    'Petals/moon_rock/Description':
+      '这个东西大到能让你的其他花瓣围着它转。不过，你是在哪里找到它的？',
+
     // ---- 花瓣属性：装备加成（标签色与 Max Mob Rarity 一致）----
     'UI/Petal/RotSpeedLabel': '旋转速度：',
     'UI/Petal/AttackRangeLabel': '攻击距离：',
@@ -177,6 +219,10 @@
     'Status/Web/Short': '网',
     'Status/Poison/Name': '中毒',
     'Status/Poison/Short': '☠',
+    'Status/HealDown/Name': '减疗',
+    'Status/HealDown/Short': '−',
+    'Petals/dandelion/Description': '蓬松的花瓣。它击中什么，什么受到的疗程就会变得更差。',
+    'Mobs/rock/Description': '一块石头。它做不了什么。',
 
     'Chat/Sys/BossDestroyed': '{3} 摧毁了 {1} {2}',
 
@@ -202,6 +248,9 @@
     'UI/Craft/FailNote': '失败会损失1~4个花瓣',
     'UI/Craft/Chance': '成功率: {0}%',
     'UI/Craft/ShiftNote': 'Shift + 点击：一次性装入全部剩余卡片（仍需点 Craft 合成）',
+    // ---- 准备页（Loading 之后、入服之前） ----
+    'UI/Connect/Connecting': 'Connecting',
+    'UI/Connect/Ready': 'Ready',
     // ---- 设置窗口：图像 ----
     'UI/Settings/ShowMobHpBar': '显示生物血量条',
     'UI/Settings/ShowFeedback': '显示反馈数值',

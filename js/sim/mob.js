@@ -330,7 +330,9 @@ class Mob {
   // 建立碰撞外形。服务端在 update 里建；客户端视图不跑 update，
   // 因此 draw 路径也必须调用它，否则 shape 为空、调试碰撞箱显示不出来。
   _ensureShape() {
-    if (this.shape && this._crbApplied === CRB.ready) return;
+    // _shapeLocked = 由 MobFX 钩子给出的外形（Rock）：顶点只随实例种子变化，
+    // 建一次就够，不必每帧重建（draw 每帧都会调到这里）。
+    if (this.shape && (this._crbApplied === CRB.ready || this._shapeLocked)) return;
     let ct = null;
     // ---- 1) 硬编码碰撞箱 .crb（唯一权威来源，生物/花瓣/F3 共用）----
     if (typeof CRB !== 'undefined' && CRB.ready) {
@@ -341,6 +343,17 @@ class Mob {
     }
     // ---- 2) 没实装的物种 / crb 加载失败：退回素材轮廓（仅兜底）----
     if (!ct) {
+    // ---- 2a) 物种自绘外形的碰撞箱（MobFX 钩子，目前只有 Rock）----
+    // 与绘制同源：返回归一化顶点，这里只负责转成 shape { pts, r }。
+    if (typeof MobFX !== 'undefined' && MobFX.colliderPts) {
+      const pts = MobFX.colliderPts(this);
+      if (pts && pts.length >= 3) {
+        let rad = 0;
+        for (const p of pts) { const d = Math.hypot(p[0], p[1]); if (d > rad) rad = d; }
+        ct = { pts, r: rad || 0.5 };
+        this._shapeLocked = true;
+      }
+    }
     // ---- 手写碰撞箱（可选覆盖，默认【不走】）----
     // 默认口径 = 从【素材】提取轮廓（蜘蛛走"去掉腿的身体"素材，见下）。
     // 只有物种显式声明 MOB_TRAITS[slug].collider = { type:'circle', k } 时才手写：
@@ -688,7 +701,11 @@ class Mob {
         // ② 身体（无腿贴图，压在腿上面）
         drawMob(ctx, keyBody, this.drawSize, 0, 0, rot, 1, null);
       } else {
-        drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null);
+        // 物种自绘本体（可选）：返回 true = 本体已画完，跳过贴图。
+        // 引擎不认识具体物种，只问 MobFX（与 PetalFX.drawBody 完全对称）；
+        // 红闪/名牌/碰撞仍走下面的通用链路。
+        const painted = (typeof MobFX !== 'undefined' && MobFX.drawBody) ? MobFX.drawBody(ctx, this) : false;
+        if (!painted) drawMob(ctx, key, this.drawSize, 0, 0, rot, 1, null);
       }
       // 物种自绘的叠加层（引擎只问 MobFX，不认识具体物种）：兵蚁的翅膀/小牙摆动走这里。
       if (typeof MobFX !== 'undefined') MobFX.drawOver(ctx, this);

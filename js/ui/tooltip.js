@@ -288,10 +288,10 @@ Object.assign(UI, {
 
         ctx.save();
         ctx.globalAlpha = alpha;
-        // 面板：半透明深绿底（0.5）+ 斜向柔和高光；无描边
+        // 面板：半透明纯灰底（0.5）+ 斜向柔和高光；无描边
         ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 18 * S; ctx.shadowOffsetY = 6 * S;
         roundRectPath(ctx, x, y, W, H, pad);
-        ctx.fillStyle = 'rgba(10,56,30,0.5)';
+        ctx.fillStyle = 'rgba(90,90,90,0.5)';
         ctx.fill();
         ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
         ctx.save();
@@ -299,8 +299,8 @@ Object.assign(UI, {
         ctx.clip();
         const gl = ctx.createLinearGradient(x, y, x + W, y + H);
         gl.addColorStop(0, 'rgba(255,255,255,0)');
-        gl.addColorStop(0.55, 'rgba(190,255,205,.025)');
-        gl.addColorStop(1, 'rgba(190,255,205,.065)');
+        gl.addColorStop(0.55, 'rgba(255,255,255,.025)');
+        gl.addColorStop(1, 'rgba(255,255,255,.065)');
         ctx.fillStyle = gl;
         ctx.fillRect(x, y, W, H);
         ctx.restore();

@@ -57,24 +57,42 @@ body {
   pointer-events: auto; z-index: 45;
 }
 .quickrow { display: flex; gap: 8px; }
-/* 状态效果条：卡槽正上方，圆形小图标，按获得顺序从左到右排列 */
+/* 状态效果条：卡槽正上方，按获得顺序从左到右排列。
+   每条 = 圆角条带（略浅底色）+ 圆形图标 + 数字；宽度由 JS 按文本量出并自适应。
+   无描边：原本 2px 黑边的位置改成条带自身的内边距（本体更大更宽）；
+   宽度、位移、入场/退场（缩放+透明度）全部平滑过渡。 */
 .status-row {
   display: flex; gap: 6px; margin-bottom: 6px;
   justify-content: center;
-}
-.status-icon {
   position: relative;
-  width: 22px; height: 22px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 800;
-  color: #fff; box-sizing: border-box; border: 2px solid #000;
-  -webkit-text-stroke: 0.6px #000; paint-order: stroke fill;
+  min-height: 22px;
 }
-/* 带数值的效果（未来）：右下角小角标 */
-.status-val {
-  position: absolute; right: -7px; bottom: -5px;
-  font-size: 9px; font-style: normal; font-weight: 800; color: #fff;
-  -webkit-text-stroke: 1.6px #000; paint-order: stroke fill;
+.status-band {
+  display: flex; align-items: center; gap: 4px;
+  height: 22px; box-sizing: border-box;
+  padding: 0 9px 0 5px;
+  border-radius: 9px;
+  color: #fff;
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif;
+  font-size: 12px; font-weight: 800; line-height: 1;
+  -webkit-text-stroke: 0.6px #000; paint-order: stroke fill;
+  overflow: hidden; white-space: nowrap;
+  flex: 0 0 auto;
+  will-change: transform, opacity, width;
+  transition: width .18s ease, background .18s linear,
+              transform .2s cubic-bezier(.3,1.15,.5,1), opacity .18s ease;
+}
+/* 图标：圆形底色 + 一个符号（减号 / 骷髅 / 约等号） */
+.status-ico {
+  flex: 0 0 auto;
+  width: 16px; height: 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-style: normal; font-size: 11px; font-weight: 900;
+  color: #000; -webkit-text-stroke: 0;
+}
+/* 数值：条带内部只显示数字/百分比，不放文字或 emoji */
+.status-txt {
+  font-style: normal; font-weight: 800; white-space: nowrap;
 }
 /* 主槽行：整体 0.9 倍（zoom 同步缩放描边/圆角/间距等所有子元素） */
 #slotRow { zoom: 0.9; }
@@ -539,6 +557,44 @@ body {
   z-index: 60; pointer-events: none;
   font-family: 'Ubuntu', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
+/* ================= 准备页（Connecting -> Ready） =================
+   Loading 蒙版撤掉后才出现：花园瓦片平铺背景（压暗）+ 白底黑描边 Ubuntu 大字。
+   连接建立后文字快速渐小，Ready 按钮（Continue 同款绿钮）快速渐大；点 Ready 才入服。 */
+/* z-index 必须低于 #loading(50)：准备页会在 Loading 淡出前预挂载，
+   由蒙版盖住；蒙版撤走时下面已经是准备页，不会先闪一下游戏画面。 */
+#connect {
+  position: fixed; inset: 0; z-index: 49;
+  display: flex; align-items: center; justify-content: center;
+  background: #24301f url('../assets/static/tiles/grass_c_0.svg') repeat;
+  background-size: 96px 96px;
+  opacity: 1; transition: opacity .45s ease;
+}
+#connect::before { content: ''; position: absolute; inset: 0; background: rgba(0, 0, 0, .35); }
+#connect.gone { opacity: 0; pointer-events: none; }
+#connectInner { position: relative; display: flex; align-items: center; justify-content: center; }
+#connectText {
+  font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-weight: 800; font-size: 52px;
+  color: #fff; -webkit-text-stroke: 2px #000; paint-order: stroke fill;
+  transform-origin: center;
+  transition: transform .28s cubic-bezier(.5, 0, .9, .4), opacity .28s ease;
+}
+#connectText.shrink { transform: scale(.15); opacity: 0; }
+#connectText.hidden, #connectBtn.hidden { display: none; }
+#connectBtn {
+  padding: 10px 44px; font-family: 'Ubuntu', 'Segoe UI', sans-serif; font-weight: 800;
+  font-size: 20px; line-height: 1;
+  color: #fff; -webkit-text-stroke: 1px #000; paint-order: stroke fill;
+  background: #2fc47a; border: 4px solid #1ea761; border-radius: 8px; cursor: pointer;
+  animation: connect-btn-in .28s cubic-bezier(.3, 1.5, .5, 1) both;
+  transition: transform .15s ease, background .15s ease;
+}
+#connectBtn:hover { background: #45d68d; transform: scale(1.06); }
+#connectBtn:active { transform: scale(.96); }
+@keyframes connect-btn-in {
+  0% { transform: scale(.15); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 /* ================= 全局聊天（仿 notice.PNG / notice2.PNG / example1.PNG） ================= */
 /* 单一容器：收起态与展开态共用同一个输入框，左右边界/圆角/白底黑边完全一致；
    展开只是在上方追加标签与历史（#chat 以 bottom 定位，自动向上生长）。 */

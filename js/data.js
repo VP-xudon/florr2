@@ -53,7 +53,8 @@ const MOB_POISON_COLOR = '#c58cff';
 const ENABLED_PETAL_SLUGS = new Set([
   'basic', 'light', 'rose', 'stinger', 'pollen', 'honey', 'peas', 'leaf',
   'faster', 'third_eye', 'web', 'antennae', 'orange', 'missile', 'wax',
-  'rice', 'corn', 'wing', 'ant_egg', 'clover', 'glass', 'basil', 'shovel', 'soil'
+  'rice', 'corn', 'wing', 'ant_egg', 'clover', 'glass', 'basil', 'shovel', 'soil',
+  'rock', 'moon_rock', 'dandelion'
 ]);
 // 不受 reach 模式影响的花瓣（按住空格时轨道半径不放大，保持基础距离）：
 //   rose = 治疗型，延长轨道只会让回血更难命中主角，不计算延长效果。
@@ -329,6 +330,38 @@ const PETAL_RARITY_OVERRIDES = {
     ultra:     { dmg: 0, hp: 0, attackRange: 140 },
     super:     { dmg: 0, hp: 0, attackRange: 190 },
     eternal:   { dmg: 0, hp: 0, attackRange: 240 },
+  },
+  // Rock（石头）：极为耐用的普通攻击花瓣，dmg/hp 逐级 ×3，冷却 3.0s。
+  rock: {
+    common:    { dmg: 22,     hp: 30 },
+    unusual:   { dmg: 66,     hp: 90 },
+    rare:      { dmg: 198,    hp: 270 },
+    epic:      { dmg: 594,    hp: 810 },
+    legendary: { dmg: 1782,   hp: 2430 },
+    mythic:    { dmg: 5346,   hp: 7290 },
+    ultra:     { dmg: 16038,  hp: 21870 },
+    super:     { dmg: 48114,  hp: 65610 },
+    eternal:   { dmg: 144342, hp: 196830 },
+  },
+  // Moon Rock（月石）：只有 Ultra 起才有；伤害/血量按官方表。
+  // radius = 实体碰撞圆半径（px，隐藏属性），逐档 175 / 200 / 225
+  //（用户口径：common..eternal 依次 25 50 75 100 125 150 175 200 225，月石从 ultra 起）。
+  moon_rock: {
+    ultra:     { dmg: 2187,  hp: 3645000,  radius: 175 },
+    super:     { dmg: 6561,  hp: 10935000, radius: 200 },
+    eternal:   { dmg: 19683, hp: 32805000, radius: 225 },
+  },
+  // Dandelion（蒲公英）：伤害 = 血量（官方表逐档写实），Unusual 起才有（没有 Common 卡）。
+  // 数值是【单个实体】的；一卡多体（mythic 2 / ultra+ 3）各拿一份，见 PETAL_SUB_COUNT。
+  dandelion: {
+    unusual:   { dmg: 24,    hp: 24 },
+    rare:      { dmg: 72,    hp: 72 },
+    epic:      { dmg: 216,   hp: 216 },
+    legendary: { dmg: 648,   hp: 648 },
+    mythic:    { dmg: 972,   hp: 972 },
+    ultra:     { dmg: 1944,  hp: 1944 },
+    super:     { dmg: 5832,  hp: 5832 },
+    eternal:   { dmg: 17496, hp: 17496 },
   }
 };
 
@@ -344,6 +377,8 @@ const PETAL_SUB_COUNT = {
   // Peas：所有稀有度均为 4 个实体（单个绿色小球才是实体，见阵型布局）
   peas: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4 },
   orange: { common: 3, unusual: 3, rare: 3, epic: 3, legendary: 3, mythic: 3, ultra: 3, super: 3, eternal: 3 },
+  // Dandelion：mythic 以下 1 个，mythic 2 个，mythic 以上 3 个（官方口径）
+  dandelion: { common: 1, unusual: 1, rare: 1, epic: 1, legendary: 1, mythic: 2, ultra: 3, super: 3, eternal: 3 },
   // Ant Egg：所有稀有度都是 4 个蛋实体 = 4 只 Soldier Ant 的内容物
   ant_egg: { common: 4, unusual: 4, rare: 4, epic: 4, legendary: 4, mythic: 4, ultra: 4, super: 4, eternal: 4 }
 };
@@ -569,6 +604,32 @@ const PETAL_TRAITS = {
     // 旧值 (0.5389, 0.8049) 是拿"内容框宽度 39.461"当分母算的（还拟合错了圆心），
     // 偏移被放大十几倍 -> 轴心被甩到形体之外，看起来就是"绕着碰撞圈外沿转"。
     spinOrigin: { x: 0.03883, y: 0.11259 }
+  },
+  // Rock（石头）：普通攻击/坦克花瓣（数值见 PETAL_RARITY_OVERRIDES.rock）。
+  // 行为与 Basic 完全同一套：轨道 + 实体碰撞 + 双向结算，没有任何专属逻辑。
+  rock: { reload: 3.0, reloadText: '3.0s', sticky: false },
+  // Moon Rock（月石）：加载好【立刻】脱轨（autoDetach），在玩家附近随机生成；
+  //   · 不绕玩家公转，自己随机游走（selfMove：每 2000 tick 换向、撞墙立刻转向）；
+  //   · 卡面跟着实体走，实体死了才重新装填（holdReloadUntilDeath，100s）；
+  //   · 它在场时，【拥有者】的所有在轨花瓣改为绕它公转（见 Player._syncPetals）；
+  //   · 与玩家之间没有碰撞箱（不设 shape，玩家侧不推它、它也不推玩家）。
+  // Dandelion（蒲公英）：
+  //   · 一卡多体、非固定阵型（与 Light 同型：每个实体各占一个轨道位，各自结算）；
+  //   · 绒球朝向：素材不是旋转对称的，必须锁定朝向 —— orientOutward（同 Missile）
+  //     让白色绒球朝外，朝向角由 PetalFX.artTip 从素材实测得出；
+  //   · 命中敌人时给目标叠一层【减疗】状态（每次 +20%，加号叠加、上限 100%，持续 30s），
+  //     healDown 只描述数据，扣减统一走 StatusFX.healMul（任何回血来源都生效）。
+  dandelion: {
+    reload: 1.0, reloadText: '1.0s', sticky: false, orientOutward: true,
+    healDown: { amount: 0.2, dur: 30, max: 1, cooldown: 1.0 }
+  },
+  moon_rock: {
+    reload: 100, reloadText: '100.0s', sticky: false,
+    autoDetach: true, holdReloadUntilDeath: true, selfMove: true,
+    // 攻击磨损系数：它的碰撞圆半径 175~225，一次会同时压住十几只生物。
+    // 磨损是【每只生物每 tick】按最大耐久 0.4% 扣的，叠起来就是 100%/秒
+    //（表现为刚生成就红闪碎掉）。体积型花瓣用数据声明缩放，引擎不判断 slug。
+    wearK: 0.05
   }
 };
 
@@ -650,6 +711,12 @@ function buildPetalTypes() {
       soil: tr.soil || null,
       // 自动落地（Wax）：加载好立刻脱轨，不需要 reach/detect
       autoDetach: !!tr.autoDetach,
+      // 自走型（Moon Rock）：脱轨后自己随机移动，不绕玩家公转
+      selfMove: !!tr.selfMove,
+      // 攻击磨损系数（1 = 标准）：体积型花瓣压住的生物多，按数据缩小自磨损
+      wearK: (tr.wearK != null) ? tr.wearK : 1,
+      // 减疗型（Dandelion）：{ amount, dur, max } —— 命中时给目标叠一层减疗状态
+      healDown: tr.healDown || null,
       // 装备型（饰品）：不进入轨道、无装填，固定在人物身上（Third Eye）
       accessory: !!tr.accessory,
       // 同种能否多件同时生效；false = 只有最左边那格生效，其余为暗灰未装填态
@@ -760,6 +827,16 @@ function petalStatsFor(type, rarity) {
 // 取值顺序：rarityStats[rarity].reload（Shovel：15.0s -> 2.0s）> type.reload > stats.spd。
 // 客户端预测副本与服务端权威副本都读它，卡面/悬浮框展示也读它，永远不会出现
 // "客户端按 15s 装填、服务端按 2s 装填"这种两端各算一套的情况。
+// 花瓣的【攻击磨损系数】—— 磨损计算的唯一入口。
+// 每次命中按「最大耐久 × PETAL_ATTACK_DUR × wearK」磨损；默认 1。
+// 体积型花瓣（月石）会同时压住大量生物，而磨损是按【每只生物】结算的，
+// 不缩放就会在一秒内被磨碎（超过血量本身的含义）。系数由 PETAL_TRAITS 声明，
+// 行为层只读它，绝不按 slug 分支。
+function petalWearK(body) {
+  const t = body && body.card && body.card.type;
+  return (t && t.wearK != null) ? t.wearK : 1;
+}
+
 function petalReloadOf(card) {
   const t = card && card.type;
   if (!t) return 0;
@@ -791,6 +868,19 @@ const MISSILE_TIP_ANGLE = Math.atan2(70.538 - 55, 67.096 - 55);
 // 这里按官方数据整表覆盖：hp = Health、dmg = Damage、armor = Armor、exp = XP Reward。
 // 只覆盖列出的稀有度，其余沿用 registry。
 const MOB_RARITY_OVERRIDES = {
+  // Rock 石头（id 1）：障碍型生物，官方表逐档写实。
+  //   官方只给区间时取下限（hp 50~100 / 187.5~375 …，每档上限都是下限的 2 倍）。
+  1: {
+    common:    { hp: 50,          dmg: 10,    armor: 1,   exp: 1 },
+    unusual:   { hp: 187.5,       dmg: 30,    armor: 2,   exp: 1 },
+    rare:      { hp: 675,         dmg: 90,    armor: 7,   exp: 3 },
+    epic:      { hp: 2700,        dmg: 270,   armor: 22,  exp: 22 },
+    legendary: { hp: 16200,       dmg: 810,   armor: 65,  exp: 206 },
+    mythic:    { hp: 157950,      dmg: 2430,  armor: 194, exp: 3071 },
+    ultra:     { hp: 7290000,     dmg: 7290,  armor: 583, exp: 103973 },
+    super:     { hp: 218700000,   dmg: 21870, armor: 583, exp: 6824717 },
+    eternal:   { hp: 1312200000,  dmg: 65610, armor: 583, exp: 6824717 },
+  },
   // Soldier Ant 兵蚁（id 7）：官方表逐档写实。
   //   hp 100 → 2.6244e9，dmg 10 → 65610，armor 1/2/7/22/65/194/583(超以上固定)，
   //   exp 1/2/6/44/400/5437/227398/13608888(超以上固定)。
@@ -980,6 +1070,14 @@ const MOB_TRAITS = {
     // 所以等比放大 0.6626 / 0.4840 ≈ 1.369（否则整只蚁后看起来比兵蚁还小）。
     sizeScale: 1.369,
     queen: { minRarity: 'rare', max: 7, eggCd: 1.5, hatch: 1.0 }
+  },
+  // Rock 石头：障碍型生物 —— 速度 0 + 无穷重量（同 Ant Egg），位置永远不动。
+  //   外形不读素材：MobFX 的程序化绘制按实例种子生成"圆周围小幅度波动的多边形"；
+  //   碰撞箱与绘制同源，由 MobFX 的 colliderPts 钩子给出（那条外轮廓描边本身），
+  //   不再用数据声明圆 —— 引擎侧只把它当成普通 shape { pts, r }。
+  //   sizeScale：与同稀有度虫子同一体型口径（半径 = 基础视觉半径）。
+  rock: {
+    speed: 0, immovable: true, sizeScale: 1.0
   },
   // Ant Hole 蚁穴：障碍型（速度 0 + 无穷重量），原地不动。
   // passWith = 蚂蚁家族与它【没有碰撞】：从洞里爬出来的蚂蚁可以直接踩在洞上。
@@ -1754,6 +1852,9 @@ const STARTER_INV_KEY = STARTER_BASIC_KEY + '|common';
 // 期望 7~8 个蚁穴（各区 0.5% 概率），分散而不是扎堆。
 const MOB_GROUPS = {
   garden: [['ladybug', 3], ['bee', 2], ['bumble_bee', 1], ['spider', 2], ['centipede', 1], ['hornet', 1],
+           // Rock 是 Garden 的障碍型生物，属于全图物种：地图里只有两个区显式写了 rock 权重，
+           // 其余 garden 区必须靠这张组表才能刷出石头。权重 0.5 与地图里 "rock:0.5;garden:0.5" 同口径。
+           ['rock', 0.5],
            ['ant_hole', 0.05]]
 };
 
@@ -1809,11 +1910,11 @@ function applyLuckToRarity(rarity, luck) {
 //   · "名字:权重" -> 权重（省略按 1）
 //   · 纯组名 -> 展开 MOB_GROUPS
 // 返回 [{ type, weight }]（只保留 registry 里真实存在的生物）
-// 只有"行为已完整实现"的物种才参与地图生成。garden.tmj 里目前只剩 rock / dandelion
-// 不在表里（它们是植物/障碍，本来就不是生物），会被跳过并在控制台提示一次；
-// 蚂蚁全家（ant_hole / queen_ant / ant_egg / soldier_ant / worker_ant / baby_ant）都已收录。
+// 只有"行为已完整实现"的物种才参与地图生成。地图里的 dandelion 是花瓣（不是生物），
+// 会被跳过并在控制台提示一次；蚂蚁全家（ant_hole / queen_ant / ant_egg / soldier_ant /
+// worker_ant / baby_ant）与障碍型 Rock 都已收录。
 // 蜈蚣 slug = registry 英文名小写转下划线："Centipede" -> "centipede"（id 12）
-const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant', 'ant_egg', 'queen_ant', 'ant_hole']);
+const SPAWNABLE_MOB_SLUGS = new Set(['ladybug', 'bee', 'bumble_bee', 'centipede', 'spider', 'hornet', 'soldier_ant', 'worker_ant', 'baby_ant', 'ant_egg', 'queen_ant', 'ant_hole', 'rock']);
 
 // 地图（官方导出的 .tmj）里的名字 → 物种 slug。
 // 兵蚁在 TMJ 里的旧写法是 ant_soldier（"兵蚁"词序），而官方英文名是 Soldier Ant（slug = soldier_ant），

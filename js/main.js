@@ -52,8 +52,8 @@ async function boot() {
     game.start();
     game.syncInventory();   // 初始渲染卡槽（花朵下方快捷栏常驻显示）
     window.__game = game;   // 供 UI 取玩家数据（如物品栏落点）
-    // 背包是服务端权威：启动后拉一次镜像，之后所有增减都走 UI._invRequest 的回执。
-    if (UI && typeof UI.syncInventoryFromServer === 'function') await UI.syncInventoryFromServer();
+    // 背包是服务端权威，但此时还没入服（准备页 Ready 之后才 joinServer）：
+    // 镜像在 Game.joinServer 里拉取，Loading 阶段不建立任何会话。
   } catch (e) {
     console.error('[boot] 初始化失败：', e);
   } finally {
@@ -140,8 +140,19 @@ async function boot() {
   const left = 5000 - (performance.now() - bootStart);
   if (left > 0) await new Promise((r) => setTimeout(r, left));
   clearTimeout(slowWarn);
-  if (window.GARDEN_DATA) UI.hideLoading();
-  window.__uiBooted = true;
+  if (window.GARDEN_DATA) {
+    // 准备页必须在蒙版【开始淡出之前】就挂进 DOM：蒙版是渐隐撤掉的，
+    // 那段渐隐里画布已经可见；先挂准备页（z-index 低于蒙版）就不会闪出游戏画面。
+    if (UI && typeof UI.mountConnect === 'function') UI.mountConnect();
+    // 蒙版撤掉之后进入准备页：Connecting（建立传输）-> Ready（入服 / 生成玩家实体）。
+    await UI.hideLoading();
+    window.__uiBooted = true;
+    if (UI && typeof UI.showConnect === 'function' && game) {
+      UI.showConnect(() => game.connectServer(), () => game.joinServer());
+    }
+  } else {
+    window.__uiBooted = true;
+  }
 }
 
 // 脚本已置于 body 末尾，DOM 就绪即可启动（不依赖 window.load 等待全部子资源）

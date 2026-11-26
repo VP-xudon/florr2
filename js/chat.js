@@ -290,6 +290,7 @@ const Chat = {
       case 'help': this._help(args[0]); break;
       case 'rot-speed': this._rotSpeed(args[0]); break;
       case 'speed': this._speed(args[0]); break;              // /speed <倍数>：主人物最高移速倍率
+      case 'reload': this._reloadCmd(args[0]); break;         // /reload <done/redo/pause>：自己的装填计时
       // 调试信息（碰撞箱 / 坐标 / 移速 / 花瓣转速 / 引擎计数）统一走 F3 调试屏幕，
       // 见 ui/debug-screen.js。
       case 'print-players': this._printPlayers(); break;
@@ -423,6 +424,29 @@ const Chat = {
     MOVE_MULT = n;
     this._sys(I18N.tf('Chat/Command/speed/Set', { 0: n }, 'Movement speed set to ' + n + 'x default.'));
   },
+  // /reload <done|redo|pause>：直接操作【自己】带装填属性花瓣的剩余装填时间。
+  //   done  = 剩余时间归零（立刻加载好）
+  //   redo  = 重新计算装填时间（重取 dur 并从 0 重新计时）
+  //   pause = 暂停 / 继续
+  // 装填计时同时存在于客户端预测副本与服务端权威副本：这里先本地生效（立即看到反馈），
+  // 再把同一条指令上行服务端，两端严格一致；回执只由客户端打一条，服务端静默。
+  _reloadCmd(arg) {
+    const mode = String(arg || '').toLowerCase();
+    if (mode !== 'done' && mode !== 'redo' && mode !== 'pause') {
+      this._sys('Chat/Command/reload/Usage');
+      return;
+    }
+    const g = window.__game;
+    const p = g && g.player;
+    const res = (p && typeof p.cmdReload === 'function') ? p.cmdReload(mode) : null;
+    if (!res || !res.n) { this._sys('Chat/Command/reload/None'); return; }
+    this.send('/reload ' + mode);
+    const key = (mode === 'done') ? 'Chat/Command/reload/Done'
+      : (mode === 'redo') ? 'Chat/Command/reload/Redo'
+        : (res.paused ? 'Chat/Command/reload/Paused' : 'Chat/Command/reload/Resumed');
+    this._sys(I18N.tf(key, { 0: res.n }, 'Reload updated for {0} petal slot(s).'));
+  },
+
   _printPlayers() {
     const p = (this._net && typeof this._net.requestSync === 'function')
       ? this._net.requestSync('player') : null;

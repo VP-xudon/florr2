@@ -220,33 +220,47 @@ class Game {
     PetalFX.textSink = (x, y, text, color) => this.spawnText(x, y, text, color);
 
     // ---- 网络层：客户端只通过 Net 与"服务端"往来（上行输入 / 下行快照+事件） ----
-    this.net = new LocalNet();
-    this.net.onMessage((msg) => {
+    // 连接与入服都推迟到准备页（见 connectServer / joinServer）：
+    // Loading 阶段不建连接、不跑模拟、不生成玩家实体。
+    this.net = null;
+    this.joined = false;
+    this.netLocal = false;
+    this.remotePlayers = new Map();
+    this._onNetMessage = (msg) => {
       if (msg.t === 'snap') this._applySnap(msg.snap);
       else if (msg.t === 'evt') this._applyEvt(msg.ev);
-    });
-    // 真正的连接（含世界初始化）放在玩家构造完成之后，见下方 connect({ map, playerTemplate })
+    };
 
     // 聊天走同一条网络通道（服务器全局设定）：上行发送、下行收事件
     if (typeof Chat !== 'undefined') {
-      Chat.bindNet(this.net);
       // /tp -> 先标点（世界 + 小地图红点）；/sure -> 交服务端校验后真正传送
       Chat.onTpTarget = (x, y) => { this.tpTarget = { x, y }; };
       Chat.onTpCancel = () => { this.tpTarget = null; };
       Chat.onTpConfirm = (x, y) => {
-        const err = (this.net && typeof this.net.requestSync === 'function')
-          ? this.net.requestSync('teleport', { x, y })
-          : 'Chat/CommandError/InternalError';
-        if (err) return err;                 // 墙体/不可行走 -> 返回错误键，人不动
-        this.tpTarget = null;
-        this.camera.x = x; this.camera.y = y;   // 相机直接到位，避免长距离滑行
+        if (!this.net) return 'Chat/CommandError/InternalError';
+        // 本地实现：与权威同进程，同步拿到“错误键 / null”
+        const sync = this.net.requestSync ? this.net.requestSync('teleport', { x, y }) : undefined;
+        if (sync !== undefined) {
+          if (sync) return sync;              // 墙体/不可行走 -> 返回错误键，人不动
+          this.tpTarget = null;
+          this.camera.x = x; this.camera.y = y;   // 相机直接到位，避免长距离滑行
+          return null;
+        }
+        // 远端实现：异步请求（错误由服务端回执带回，再走聊天系统提示）
+        this.net.request('teleport', { x, y }).then((err) => {
+          if (err) {
+            if (typeof Chat !== 'undefined' && Chat.push) Chat.push({ kind: 'sys', text: err });
+            return;
+          }
+          this.tpTarget = null;
+          this.camera.x = x; this.camera.y = y;
+        }).catch(() => {});
         return null;
       };
     }
 
     // 玩家与初始装备
     this.player = new Player();
-    this.player.net = this.net;   // 供花瓣系统（如 Peas 炸开）上行 RPC
     this.player.magician = !!(window.__queryParams && window.__queryParams.magician);  // 调试：?magician 开启魔法变种掉落 用
     this._resetPlayer(true);
     // 调试参数 ?hp=N（可与 mode/lang 逗号混搭）：直接设定人物血量上限与当前血量。
@@ -265,10 +279,8 @@ class Game {
     }
     // 游客名：本地实现没有账号系统，按官方游客样式给一个随机编号（聊天里显示）
     this.player.name = 'Guest #' + (1000 + Math.floor(Math.random() * 9000));
-    // 把地图与玩家初始状态交给服务端（此后权威状态归它管）。
-    // 走 connect(opts) 而不是直连 net.server：远端实现（WebSocketNet）没有本地世界，
-    // 客户端代码不该知道自己连的是进程内服务端还是真服务器。
-    this.net.connect({ map: this.map, playerTemplate: this.player });
+    // 连接与入服由准备页的 Ready 触发（connectServer / joinServer）。
+    // 走 Net 接口而不是直连 net.server：客户端不该知道自己连的是进程内服务端还是真服务器。
     this.camera.x = this.player.x; this.camera.y = this.player.y;
     // 相机缩放（1 = 正常；<1 = 看得更远）。由 Antennae（触角）的视野加成驱动，平滑过渡。
     this.camZoom = 1; this.camZoomTarget = 1;
@@ -280,6 +292,152 @@ class Game {
     // 客户端只在快照里按 id 镜像出视图实体（见 _applySnap）。
   }
 
+
+  // ---------------- 准备页：连接 / 入服 ----------------
+  // 只建立传输（WebSocket 握手）。纯静态托管（python -m http.server）连不上时，
+  // WebSocketNet 内部会自动回退 LocalNet，本函数不会抛错。
+  connectServer() {
+    if (this.net) return Promise.resolve({ ok: true, local: this.netLocal });
+    const proto = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss://' : 'ws://';
+    const url = proto + location.host + '/ws';
+    let net = null;
+    try { net = new WebSocketNet(url); } catch (e) { net = null; }
+    if (!net) {
+      net = new LocalNet();
+      this.netLocal = true;
+    }
+    this.net = net;
+    this.net.onMessage(this._onNetMessage);
+    this.player.net = net;        // 供花瓣系统（如 Peas 炸开）上行 RPC
+    // 聊天走同一条网络通道
+    if (typeof Chat !== 'undefined') Chat.bindNet(net);
+    return net.connect({ map: this.map, playerTemplate: this.player, name: this.player.name })
+      .then((res) => {
+        this.netLocal = !!res.local;
+        return res;
+      });
+  }
+
+  // 真正的入服：此时服务端才创建玩家实体并开始下发快照。
+  joinServer() {
+    if (this.joined) return Promise.resolve();
+    const ready = this.net ? Promise.resolve() : this.connectServer();
+    return ready.then(() => this.net.join({
+      map: this.map,
+      playerTemplate: this.player,
+      name: this.player.name,
+    })).then((res) => {
+      if (res && res.name) this.player.name = res.name;
+      this.joined = true;
+      this._netPos = null;
+      this.netLocal = !!(this.net && this.net.isLocal);
+      // 背包是服务端权威：入服后拉一次镜像
+      if (UI && typeof UI.syncInventoryFromServer === 'function') {
+        return UI.syncInventoryFromServer().catch(() => null);
+      }
+      return null;
+    }).then(() => { this.syncInventory(); });
+  }
+
+  // 其它玩家（多人）：服务端下发的玩家列表 -> 轻量 Player 视图（只负责画）。
+  _applyRemotePlayers(list) {
+    if (!this.remotePlayers) this.remotePlayers = new Map();
+    const seen = this._seenPlayers || (this._seenPlayers = new Set());
+    seen.clear();
+    for (const sp of list || []) {
+      if (!sp) continue;
+      seen.add(sp.id);
+      let v = this.remotePlayers.get(sp.id);
+      if (!v) {
+        v = new Player();
+        v.isRemote = true;
+        v.id = sp.id;
+        v.petals = [];
+        v.reload = [];
+        v.reloadHold = [];
+        v.slots = [];
+        v.remotePetalMap = new Map();
+        v.age = 1;
+        v.modeT = 0;
+        v.mode = 'normal';
+        this.remotePlayers.set(sp.id, v);
+      }
+      v.name = sp.name;
+      v.gone = false;
+      v.x = sp.x; v.y = sp.y;
+      v.facing = sp.facing || 0;
+      v.hp = sp.hp; v.maxHp = sp.maxHp;
+      v.dead = !!sp.dead;
+      v.hurtT = sp.hurtT || 0;
+      v.deathRot = sp.deathRot || 0;
+      v.invuln = sp.invuln || 0;
+      // 装备：远端玩家的卡只带 key/rarity，按 PETAL_TYPES 还原（只用来画）
+      v.slots = (sp.slots || []).map((c) => {
+        if (!c || !c.key) return null;
+        const type = PETAL_TYPES.find((t) => t.key === c.key);
+        return type ? { type, rarity: c.rarity } : null;
+      });
+      v.recompute();
+      // 花瓣：按 (slot, sub, gen) 复用，位置/血量直接采用服务端权威值
+      const pmap = v.remotePetalMap;
+      const alive = this._remoteAlive || (this._remoteAlive = new Set());
+      alive.clear();
+      for (const q of sp.petals || []) {
+        if (!q || q.dead) continue;
+        const card = v.slots[q.slot];
+        if (!card) continue;
+        const key = q.slot + '|' + q.sub + '|' + q.gen;
+        alive.add(key);
+        let b = pmap.get(key);
+        if (!b) {
+          // 位置全部来自服务端快照；px/tx 只用于帧间插值（25Hz -> 每帧），不做本地物理。
+          b = { card, slotIndex: q.slot, sub: q.sub, gen: q.gen,
+            x: q.x, y: q.y, px: q.x, py: q.y, tx: q.x, ty: q.y, blend: 1,
+            vx: q.vx || 0, vy: q.vy || 0 };
+          EntityFX.spawn(b, 'petal');
+          b.age = 1;
+          pmap.set(key, b);
+          v.petals.push(b);
+        }
+        b.svg = card.type.svg;
+        if (b.tx !== q.x || b.ty !== q.y) {
+          // 记录本段插值起终点：每帧由 _tickRemotePlayers 线性还原平滑位移
+          b.px = b.x; b.py = b.y; b.tx = q.x; b.ty = q.y; b.blend = 0;
+        }
+        b.vx = q.vx || 0; b.vy = q.vy || 0;
+        b.hp = q.hp; b.maxHp = q.maxHp;
+        if (q.hurtT > (b.hurtT || 0)) b.hurtT = q.hurtT;
+      }
+      // 快照里已经消失的花瓣：离开 v.petals，交给共享的 petalExit 播完退场再回收
+      //（与本地玩家同一条通道，绝不允许原地冻成一帧）。
+      for (const [key, b] of pmap) {
+        if (alive.has(key)) continue;
+        pmap.delete(key);
+        const i = v.petals.indexOf(b);
+        if (i >= 0) v.petals.splice(i, 1);
+        if (!b.exiting) {
+          b.exitRot = v._petalExitRot(b);
+          EntityFX.despawn(b);
+        }
+        v.petalExit.adopt(b);
+      }
+    }
+    for (const [id, v] of this.remotePlayers) {
+      if (seen.has(id)) continue;
+      // 玩家离开：花瓣不是凭空消失 —— 全部转入共享的 petalExit 播完退场，
+      // 视图保留到退场播完再删（见 _tickRemotePlayers）。
+      for (const b of v.petals) {
+        if (!b.exiting) {
+          b.exitRot = v._petalExitRot(b);
+          EntityFX.despawn(b);
+        }
+        v.petalExit.adopt(b);
+      }
+      v.petals = [];
+      v.remotePetalMap.clear();
+      v.gone = true;
+    }
+  }
 
   _resetPlayer(full) {
     const p = this.player;
@@ -314,11 +472,11 @@ class Game {
     // 复活位置由【服务端】按地图复活区域结算（见 net/server.js 的 _respawnPos）：
     // 本地模拟服务端可以直接拿返回值，避免先跳到原点再被拽回来那一帧抖动。
     let pos = null;
-    const canSync = this.net && typeof this.net.requestSync === 'function';
-    if (canSync) pos = this.net.requestSync('respawn');
+    // 本地实现同步返回复活点；远端实现返回 undefined（必须走 request 回执）。
+    if (this.net && typeof this.net.requestSync === 'function') pos = this.net.requestSync('respawn') || null;
     // 统一重置：客户端与服务端都走 Player.resetForSpawn，字段清单只有一份。
     p.resetForSpawn(pos);
-    if (!canSync && this.net) {
+    if (!pos && this.net) {
       // 远端实现没有本地世界：先本地重置（位置稍后对齐），回执到了再搬到服务端指定的复活点
       this.net.request('respawn').then((r) => {
         p.resetForSpawn(r);
@@ -329,9 +487,7 @@ class Game {
     this._deathShown = false;
     this._aggroCleared = false;      // 复位一次性标志：下次死亡要再清一次仇恨
     this.camera.x = p.x; this.camera.y = p.y;
-    // 非本地服务端（真实网络）：走消息让服务端结算并广播。
-    // 本地模拟服务端上面已经直接结算过，再发一次会多消耗一次保底次数。
-    if (!pos && this.net) this.net.send({ t: 'respawn' });
+    // 远端实现已经用 request('respawn') 结算过（见上），这里不再重复发送。
     // 仇恨豁免：复活后再清一次，避免生物继续追击已死亡的玩家
     this._clearAggro();
 
@@ -452,7 +608,7 @@ class Game {
     const nearR2 = nearR * nearR;
     let farN = 0;
     let farX = this._farX, farY = this._farY;
-    this._mobTotal = snap.ents.length;
+    this._mobTotal = snap.ents.length + ((snap.far && snap.far.length) || 0);
     for (const e of snap.ents) {
       const dx = e.x - px, dy = e.y - py;
       // Super / Eternal 永远建视图：Boss 血条要按稀有度挑它们（哪怕在视野边缘外）。
@@ -567,6 +723,23 @@ class Game {
       // 朝向平滑跟随（服务端每帧给值，这里做一次短插值，转向更顺）
       if (e.facing != null) v.facing = lerpAngle(v.facing, e.facing, 0.35);
     }
+    // 其它玩家（多人）：轻量视图，位置/花瓣全部来自服务端
+    this._applyRemotePlayers(snap.players);
+
+    // 远处生物（服务端精简下发）：[id, typeId, rarity, level, x, y]
+    if (snap.far && snap.far.length) {
+      for (let i = 0; i < snap.far.length; i++) {
+        const f = snap.far[i];
+        if (farN >= farX.length) {
+          const nx = new Float32Array(farX.length * 2);
+          const ny = new Float32Array(farY.length * 2);
+          nx.set(farX); ny.set(farY);
+          farX = this._farX = nx; farY = this._farY = ny;
+        }
+        farX[farN] = f[4]; farY[farN] = f[5]; farN++;
+      }
+    }
+
     // 消失：服务端已回收的个体 -> 播放完退场渐隐再移除
     this._farN = farN;
     for (const v of this.mobs) {
@@ -650,7 +823,7 @@ class Game {
       // 中毒：状态效果不进快照，靠这条事件在本地副本上挂同一份毒（dur/dps 与服端一致）。
       // 本地预测会照常每帧扣血 —— 下一份权威快照会把血量拉回服务端的真实值。
       if (p && !p.dead && ev.poison && typeof StatusFX !== 'undefined') {
-        StatusFX.add(p, 'poison', { dur: ev.poison.dur, value: ev.poison.rate });
+        StatusFX.add(p, 'poison', { dur: ev.poison.dur, value: ev.poison.rate, src: ev.poison.src });
       }
     } else if (ev.kind === 'chat' || ev.kind === 'sys') {
       if (typeof Chat !== 'undefined') Chat.push(ev);
@@ -768,6 +941,64 @@ class Game {
     }
   }
 
+  // 其它玩家的花瓣实体：与本地玩家共用一个渲染口径 —— 位置/血量/存活全部来自快照，
+  // 客户端只做帧间插值与动画计时（入场 / 红闪 / 退场），不跑任何本地物理。
+  _tickRemotePlayers(dt) {
+    if (!this.remotePlayers || !this.remotePlayers.size) return;
+    const k = dt / (this._snapDt || SNAP_DT);
+    const gone = this._remoteGone || (this._remoteGone = []);
+    gone.length = 0;
+    for (const v of this.remotePlayers.values()) {
+      v.clock = (v.clock || 0) + dt;           // 无敌光晕等纯表现计时的唯一来源
+      if (v.gone) {
+        // 玩家已离开：只推进/回收退场花瓣，播完再删掉整个视图
+        if (v.petalExit.length) v.petalExit.sweep(dt);
+        if (!v.petalExit.length) gone.push(v.id);
+        continue;
+      }
+      if (v.petals && v.petals.length) {
+        for (const b of v.petals) {
+          EntityFX.tickEntity(b, dt);          // 入场 / 红闪计时（退场实体已移入 petalExit）
+          if (b.blend < 1) {                   // 只在快照点之间线性插值，绝不本地积分位置
+            b.blend = Math.min(1, b.blend + k);
+            b.x = b.px + (b.tx - b.px) * b.blend;
+            b.y = b.py + (b.ty - b.py) * b.blend;
+          }
+        }
+        // 阵型多体：整簇中心方位（与本地玩家同一口径，不能各子体各转一个角度）
+        const fa = this._remoteFormAng || (this._remoteFormAng = new Map());
+        fa.clear();
+        for (const b of v.petals) {
+          const pt = b.card && b.card.type;
+          if (!pt || !pt.formation) continue;
+          const key = b.slotIndex + '|' + (b.gen | 0);
+          let s = fa.get(key);
+          if (!s) { s = { x: 0, y: 0, n: 0 }; fa.set(key, s); }
+          s.x += b.x; s.y += b.y; s.n++;
+        }
+        // 朝向是纯表现：位置权威，角度由"实体相对花心的方位"与自转给出（与本地玩家同一口径）。
+        for (const b of v.petals) {
+          const pt = b.card && b.card.type;
+          if (!pt) continue;
+          if (pt.orientOutward) {
+            const tip = (typeof PetalFX !== 'undefined') ? PetalFX.artTip(pt) : null;
+            b.selfRot = Math.atan2(b.y - v.y, b.x - v.x) - (tip || 0);
+          } else if (pt.formation) {
+            const s = fa.get(b.slotIndex + '|' + (b.gen | 0));
+            if (s && s.n) {
+              b.drawRot = Math.atan2(s.y / s.n - v.y, s.x / s.n - v.x) + Math.PI / 2;
+            }
+          } else {
+            b.selfRot = (b.selfRot || 0) + v._petalSelfRate(b) * dt;
+          }
+        }
+      }
+      // 离场花瓣统一由受控表推进 + 回收（唯一回收点）
+      if (v.petalExit && v.petalExit.length) v.petalExit.sweep(dt);
+    }
+    for (const id of gone) this.remotePlayers.delete(id);
+  }
+
   // 客户端【实际可见范围】的世界半径（px）：视口半对角线 + 相机相对玩家的偏移。
   // 这是服务端醒/睡半径的唯一来源（随 input.viewR 上行）：
   // 镜头拉远（Antennae 视野加成）之后，屏幕里的生物必须继续跑 AI，
@@ -863,6 +1094,8 @@ class Game {
 
   update(dt) {
     const p = this.player;
+    // 准备页（Connecting / Ready）阶段不跑任何模拟：点击 Ready 才算真正入服。
+    if (!this.joined || !this.net) return;
     const dir = this._readDir();
     // 模式控制：空格 = mode1 -> reach（花瓣距离×2 + 生气眼），Shift = mode2 -> detect（距离×0.3 + 伤心眼）
     p.mode = (this.keys['mode1'] || this.keys['mouse1']) ? 'reach'
@@ -933,6 +1166,8 @@ class Game {
 
     // —— 视图层生物：插值坐标推进 + 自身动画计时（AI/移动已归服务端）——
     this._tickMobViews(dt);
+    // 其它玩家的花瓣：每帧推进入场/红闪/退场计时，退场播完则回收
+    this._tickRemotePlayers(dt);
 
     // 玩家 vs 昆虫：同一套 physicsPush（反质量 + 动能）。生物速度来自快照（vx/vy），
     // 视图实体不积分位置，速度字段每份快照都会被权威值覆盖。
@@ -1252,6 +1487,15 @@ class Game {
   render() {
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    // 准备页（Connecting / Ready）阶段不渲染任何世界内容：
+    // Loading 蒙版是渐隐撤掉的，画布在那 450ms 里已经可见；若照常渲染，
+    // 会先闪一下玩家/瓦片才进入准备页。这里只铺一层与 #connect 相同的底色。
+    // 入服（点 Ready）之后才真正开始画世界。
+    if (!this.joined) {
+      ctx.fillStyle = '#24301f';
+      ctx.fillRect(0, 0, this.W, this.H);
+      return;
+    }
     ctx.clearRect(0, 0, this.W, this.H);
 
     const camX = this.camera.x, camY = this.camera.y;
@@ -1326,6 +1570,35 @@ class Game {
     visible.sort((a, b) => a.y - b.y);
     for (const m of visible) {
       try { m.draw(ctx); } catch (e) { console.error('[draw entity]', e); }
+    }
+    // 其它玩家（多人）：与生物同一套 y 排序，画在本机主角之前
+    if (this.remotePlayers && this.remotePlayers.size) {
+      const rps = this._remoteSorted || (this._remoteSorted = []);
+      rps.length = 0;
+      for (const rp of this.remotePlayers.values()) rps.push(rp);
+      rps.sort((a, b) => a.y - b.y);
+      for (const rp of rps) {
+        if (rp.x + rp.y === 0) continue;
+        if (rp.gone) {
+          // 玩家已离开：只把退场花瓣播完（本体不再画）
+          for (const b of rp.petalExit) rp._drawPetalEntity(ctx, b, true);
+          continue;
+        }
+        try { rp.draw(ctx); } catch (e) { console.error('[draw player]', e); }
+        // 图层高于生物的花瓣（Glass）：与本地玩家同一套补画入口
+        if (!rp.dead) { try { rp.drawOverMobs(ctx); } catch (e) { console.error('[draw player over-mob petals]', e); } }
+        if (!rp.dead && rp.name) {
+          ctx.save();
+          ctx.font = '800 15px Ubuntu, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,.75)';
+          ctx.strokeText(rp.name, rp.x, rp.y - rp.r * 1.75);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(rp.name, rp.x, rp.y - rp.r * 1.75);
+          ctx.restore();
+        }
+      }
     }
     // 花瓣光环粒子：必须在玩家（花瓣就在它里面画）【之前】绘制，
     // 这样高等级卡的粒子永远在花瓣图层之下，不会盖住花瓣本体。

@@ -142,10 +142,15 @@ const PetalFX = {
     if (!def || !def.artVariant || typeof txt !== 'string') return null;
     return def.artVariant(svgId, txt) || null;
   },
-  artOverlay(ctx, svgId, look, box) {
+  artOverlay(ctx, svgId, look, box, card) {
     const def = this._svgDef(svgId);
     if (!def || !def.artOverlay) return false;
-    return !!def.artOverlay(ctx, svgId, look, box);
+    return !!def.artOverlay(ctx, svgId, look, box, card);
+  },
+  // 卡面是否【持续】重画（不依赖朝向变化）：月石的斑点/描边时刻在变。
+  overlayAnimated(svgId) {
+    const def = this._svgDef(svgId);
+    return !!(def && def.overlayAnimated);
   },
   // 这张素材有没有"可动部件"。卡面据此决定要不要进入动态重绘队列
   // （没有可动部件的卡必须保持"画一次就不动"，否则就是纯浪费）。
@@ -222,7 +227,9 @@ const PetalFX = {
   // 返回 null = 未声明（不锁定朝向，按自转画）。
   artTip(type) {
     const def = this.defOf(type);
-    return (def && def.artTip != null) ? def.artTip : null;
+    if (!def || def.artTip == null) return null;
+    // 可为常量（Missile）或函数（Dandelion：要等素材实测出绒球方位）
+    return (typeof def.artTip === 'function') ? def.artTip(type) : def.artTip;
   },
 
   // 脱轨计划：返回 null = 不脱轨，否则 { vx, vy, holdReload }。
@@ -371,6 +378,24 @@ const PetalFX = {
     return (typeof petalMaxMobRarity === 'function') ? petalMaxMobRarity(type, rarity) : null;
   },
 
+  // 自走实体（Moon Rock）：由注册项自己推进位置 / 转向。
+  // 只在【服务端权威副本】调用（见 Player._syncPetals 的 stationary 分支）；
+  // 客户端副本一律用快照插值，否则两端各跑一套随机方向会持续抖动。
+  tickSelfMove(body, player, dt) {
+    if (!body) return false;
+    const def = this.defOf(body.card && body.card.type);
+    if (!def || !def.selfMove) return false;
+    return !!def.selfMove(this._ctx(body, player, dt), dt);
+  },
+
+  // 世界实体的【程序化绘制】接管（可选）：返回 true 表示画完了，
+  // 调用方不再画素材贴图（受伤红闪仍按碰撞圆走 EntityFX.drawHurtShape）。
+  drawBody(ctx2d, body, size, rot) {
+    const def = body && this.defOf(body.card && body.card.type);
+    if (!def || !def.drawBody) return false;
+    return !!def.drawBody(ctx2d, body, size, rot);
+  },
+
   _ctx(body, player, dt) {
     const card = body && body.card;
     const type = card && card.type;
@@ -390,7 +415,12 @@ const PetalFX = {
       // 【Healing Bonus（Basil）在这里最后结算】：所有回血来源（Leaf 持续 / Rose 一次性 /
       // 以后的任何新来源）都只能走这一个出口，于是"多个回血先加起来、再统一放大"天然成立。
       heal: (n) => {
-        const k = 1 + (player.healBonus || 0);
+        // 两个乘数、两个用途：
+        //   (1 + healBonus) = Basil 的【增疗】；
+        //   StatusFX.healMul = 减疗（Dandelion）等【减疗状态】的乘数（加号叠加后从 1 里扣）。
+        // 两者都在这里一次性结算，所以每个回血来源天然同时支持增疗与减疗。
+        const down = (typeof StatusFX !== 'undefined' && StatusFX.healMul) ? StatusFX.healMul(player) : 1;
+        const k = (1 + (player.healBonus || 0)) * down;
         const before = player.hp;
         player.hp = Math.min(player.maxHp, player.hp + (n || 0) * k);
         return player.hp - before;
@@ -516,6 +546,37 @@ PetalFX.register('orange', {
 // 发射链路与 Peas 完全共用引擎默认实现（launch 能力字段驱动初速、flightOf 读同一份参数）；
 // 差别只有两处声明：数据表的 launchRadial（方向取轨道角）与这里的 artTip（尖端角）。
 PetalFX.register('missile', { artTip: MISSILE_TIP_ANGLE });
+
+// —— 内置特效 12：蒲公英（Dandelion）——
+// 一卡多体、非固定阵型（与 Light 同型）：每个实体各占一个轨道位、各自结算。
+// 素材不是旋转对称的（白色绒球 + 深色茎），所以必须锁定朝向：
+//   orientOutward（数据表）-> 每个实体都把自己的【绒球】朝外；
+//   朝向角由 artTip 提供，而 artTip 不写死数字，而是从素材实测得出：
+//   cards.js 测量每张花瓣素材里【每条 path 的包围盒】，绒球（#cfcfcf）中心相对
+//   整张图形中心的方位就是"头部朝向"。素材换成另一张同构图时也会自动跟上。
+const DANDELION_SVG_ID = 15;
+const DANDELION_HEAD_FILL = '#cfcfcf';   // 素材里白色绒球的填充色（#333 是深色茎）
+let _dandelionTip = null;
+function dandelionHeadAngle() {
+  if (_dandelionTip != null) return _dandelionTip;
+  if (typeof CardRenderer === 'undefined' || !CardRenderer.partCenter) return 0;
+  const head = CardRenderer.partCenter(DANDELION_SVG_ID, DANDELION_HEAD_FILL);
+  const all = CardRenderer.contentBox ? CardRenderer.contentBox(DANDELION_SVG_ID) : null;
+  if (!head || !all) return 0;                    // 素材还没量完：这一帧先不转
+  const cx = all[0] + all[2] / 2, cy = all[1] + all[3] / 2;
+  const dx = head[0] - cx, dy = head[1] - cy;
+  // 【朝向校正】素材里 #cfcfcf 的实测方位是"根部"那一侧（绒球在它的反方向）：
+  // 原先统一 +π；实机看又向左偏了 45°，所以从 +π 里【减 45°】（= +3π/4）。
+  // 注意：绘制角 = 轨道角 − tip（见 player.js / cards.js），tip 越小图越顺时针，
+  // 向左偏就要减 tip —— 加 π/4 会把它转得更左。
+  // 实体（orientOutward）与卡面多体排布共用这一个 tip，两边不会再各偏各的。
+  // 同心（无方向）时同样走校正后的基准角，避免拿噪点当方向
+  const TIP_CORR = Math.PI - Math.PI / 4;
+  if (Math.hypot(dx, dy) < Math.max(0.5, all[2] * 0.02)) { _dandelionTip = TIP_CORR; return _dandelionTip; }
+  _dandelionTip = Math.atan2(dy, dx) + TIP_CORR;
+  return _dandelionTip;
+}
+PetalFX.register('dandelion', { artTip: dandelionHeadAngle });
 
 // —— 内置特效 5：蜜（Honey）——
 // ① 实体碰撞：这条【不写在这里】。所有花瓣都是实体（分离 + 双向伤害由战斗循环统一处理），
@@ -773,6 +834,195 @@ PetalFX.register('wax', {
     return { vx: 0, vy: 0, holdReload: true };
   }
 });
+
+// —— 内置特效 10：石头（Rock）——
+// 普通攻击/坦克花瓣：数值全部在 PETAL_RARITY_OVERRIDES.rock，
+// 行为与 Basic 完全同一套（轨道 + 实体分离 + 双向结算），这里只做显式登记。
+PetalFX.register('rock', {});
+
+// —— 内置特效 11：月石（Moon Rock）——
+// 形态：加载好【立刻】脱轨（autoDetach），在玩家附近随机生成；之后自己游走。
+//   · 不绕玩家公转：selfMove = 服务端权威副本自己推进位置（客户端只用快照插值）；
+//   · 以玩家默认最高速度的 0.2 倍随机移动，每 2000 tick 换一次方向；
+//     （60Hz 下 2000 tick ≈ 33.3s）
+//   · 自转是【绝对角速度】15s 一圈 —— 与它自己的移动/公转无关；
+//   · 有墙体碰撞：外接圆（= 实体碰撞圆）撞到墙【立即转向】，并且不在墙里移动；
+//   · 与玩家没有碰撞箱：不设 shape，玩家侧的推挤只认 shape（Wax），天然不碰；
+//   · 碰撞箱严格等于外形，就是半径 R 的圆（cr = R，由数据表的 radius 给出）；
+//   · 描边与斑点都是程序化绘制：描边绝对粗细恒定，斑点数量随稀有度递增。
+const MOON_SPIN_T = 15;          // 自转一圈 15s（绝对角速度）
+const MOON_MOVE_K = 0.2;         // 随机游走速度 = 玩家默认最高速度 × 0.2
+const MOON_TURN_TICKS = 2000;    // 每 2000 tick 换一次方向
+const MOON_RIM = 4;              // 外圈描边的绝对粗细（px）：用户在 common 半径 25 时定下的口径
+
+// 墙体判定：中心 + 一圈采样点都要能站（圆 = 碰撞箱，所以按半径判）。
+function moonBlocked(map, x, y, R) {
+  if (!map) return false;
+  if (typeof map.isInside === 'function' && !map.isInside(x, y)) return true;
+  if (typeof map.solidAtPoint !== 'function') return false;
+  if (map.solidAtPoint(x, y)) return true;
+  const rr = R * 0.94;
+  for (let k = 0; k < 12; k++) {
+    const th = (k / 12) * TAU;
+    if (map.solidAtPoint(x + Math.cos(th) * rr, y + Math.sin(th) * rr)) return true;
+  }
+  return false;
+}
+
+PetalFX.register('moon_rock', {
+  detach(ctx) {
+    const b = ctx.petal, p = ctx.player;
+    const st = petalStatsFor(ctx.type, ctx.rarity);
+    const R = st.radius || 25;
+    const map = p && p._mapRef;
+    // 落点：玩家附近随机一圈，优先玩家身后（不糊脸）。
+    // 【分两级】先找一个整个圆都能站的位置（最理想）；找不到就退而求其次，
+    // 只要中心点附近站得住 —— 月石半径大（最大 225），在灌木路口要求整圆空地
+    // 会把每一次生成都判成失败，而失败 = 原地退场 + 100s 冷却（看起来就是"刚生成就没"）。
+    // 就算真的贴着墙生成，移动阶段走 map.move 会把它沿墙滑开 / 贴墙转向，不会卡死。
+    const base = (p ? p.facing : 0) + Math.PI;
+    let placed = false, fallback = null;
+    for (let i = 0; i < 32; i++) {
+      const a = base + rand(-Math.PI, Math.PI);
+      const d = (p ? p.r : 16) + R + rand(8, 140);
+      const x = p.x + Math.cos(a) * d;
+      const y = p.y + Math.sin(a) * d;
+      const centerOK = (!map || typeof map.canStandAt !== 'function')
+        ? true : map.canStandAt(x, y, Math.min(R, 48));
+      if (!centerOK) continue;
+      if (!fallback) fallback = { x, y };
+      if (moonBlocked(map, x, y, R)) continue;   // 整圆有空地：最理想
+      b.x = x; b.y = y; placed = true;
+      break;
+    }
+    if (!placed && fallback) { b.x = fallback.x; b.y = fallback.y; placed = true; }
+    // 连中心点都找不到（极端情况）：贴着玩家生成。绝不原地销毁实体。
+    if (!placed) { b.x = p.x; b.y = p.y; }
+    b.cr = R;                 // 碰撞圆半径 = 外形半径（隐藏属性：碰撞箱严格等于形状）
+    b.r = R;
+    b.artSize = R * 2;        // 绘制直径 = 2R（大小随稀有度递增）
+    b.selfMove = true;        // 自走型：不绕玩家公转
+    b.selfRot = rand(0, TAU);
+    b.selfRate = TAU / MOON_SPIN_T;   // 绝对自转角速度：客户端副本据此本地推自转（纯表现）
+    b.mv = { dir: rand(0, TAU), ticks: 0 };
+    b.weight = (typeof rarityWeight === 'function') ? rarityWeight(ctx.rarity) : 1;
+    b.facing = 0; b.artRot = 0;
+    // 与玩家无碰撞箱：不写 shape/shapePoly（玩家推挤只认 shape）；
+    // 战斗侧仍按 cr 的圆与生物结算（entityHitMob 读 cr）——两条体系互不干扰。
+    return { vx: 0, vy: 0, holdReload: true };
+  },
+
+  // 服务端权威副本每帧推进（客户端副本不调用，直接走快照插值）。
+  selfMove(ctx, dt) {
+    const b = ctx.petal, p = ctx.player;
+    if (!b.mv) b.mv = { dir: rand(0, TAU), ticks: 0 };
+    const mv = b.mv;
+    // 自转：绝对 15s 一圈（不随移动/被绕改变）
+    b.selfRot = (b.selfRot || 0) + (TAU / MOON_SPIN_T) * dt;
+    // 定期换向：每 2000 tick 一次（不取 180° 翻转，避免来回往复）
+    mv.ticks = (mv.ticks | 0) + 1;
+    if (mv.ticks >= MOON_TURN_TICKS) { mv.ticks = 0; mv.dir += rand(0.6, TAU - 0.6); }
+    const R = b.cr || 25;
+    const map = p && p._mapRef;
+    const sp = PLAYER_BASE_SPEED * MOON_MOVE_K;
+    const dx = Math.cos(mv.dir) * sp * dt;
+    const dy = Math.sin(mv.dir) * sp * dt;
+    if (map && typeof map.move === 'function') {
+      // 走地图自己的圆碰撞解算（沿墙滑动 / 被卡住时自动推出），
+      // 只要有接触法线 = 撞到墙 -> 立即进行一次转向。
+      const res = map.move(b.x, b.y, dx, dy, R);
+      b.x = res.x; b.y = res.y;
+      if (res.normals && res.normals.length) {
+        mv.dir = rand(0, TAU);
+        mv.ticks = 0;
+      }
+      return;
+    }
+    b.x += dx; b.y += dy;
+  },
+
+  // 程序化绘制（世界实体）：外圈描边绝对粗细恒定 + 斑点随稀有度递增。
+  drawBody(ctx2d, body, size, rot) {
+    const card = body && body.card;
+    const type = card && card.type;
+    if (!type) return false;
+    const st = petalStatsFor(type, card.rarity);
+    drawMoonArt(ctx2d, st.radius || 25, card.rarity, rot || 0, MOON_RIM);
+    return true;
+  },
+
+  // 卡面：与 Third Eye 同一套 artOverlay 机制（cards.js 在素材之上调用）。
+  // 整颗月石由代码重画（完全盖住 77.svg），所以斑点数 / 描边都按【该卡稀有度】
+  // 实时生成，而不是用素材里烧死的 common 状态。
+  artOverlay(ctx2d, svgId, look, box, card) {
+    if (String(svgId) !== '77' || !box) return false;
+    const rarity = (card && card.rarity) || 'ultra';
+    // 素材内容包围盒 -> 像素半径（box = "画出的矩形 + 它覆盖的素材窗口"）
+    let R = Math.min(box.w, box.h) / 2;
+    const cb = (typeof CardRenderer !== 'undefined' && CardRenderer.contentBox)
+      ? CardRenderer.contentBox(svgId) : null;
+    const sx = box.uw > 0 ? box.w / box.uw : 1;
+    const sy = box.uh > 0 ? box.h / box.uh : 1;
+    if (cb && cb[2] > 0 && cb[3] > 0) R = 0.5 * Math.min(cb[2] * sx, cb[3] * sy);
+    R *= 1.03;   // 多盖 3%：把底层素材的描边/抗锯齿盖干净
+    // 动态：斑点跟着自转走（与世界里同一个 15s 一圈的绝对角速度）
+    const t = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    ctx2d.save();
+    ctx2d.translate(box.x + box.w / 2, box.y + box.h / 2);
+    drawMoonArt(ctx2d, R, rarity, (t * TAU) / MOON_SPIN_T, Math.max(1, R * 0.055));
+    ctx2d.restore();
+    return true;
+  },
+  // 实时动画标记：cards.js 的动态队列据此不依赖朝向变化，按固定频率重画
+  overlayAnimated: true
+});
+
+// 画一颗月石（原点 = 圆心）。rim = 描边粗细（px）：
+// 世界用恒定绝对厚度（MOON_RIM）；卡面按图案大小取一个最小可见值。
+function drawMoonArt(ctx2d, R, rarity, rot, rim) {
+  const idx = Math.max(0, (typeof RARITY_ORDER !== 'undefined') ? RARITY_ORDER.indexOf(rarity) : 0);
+  const spots = moonSpotsFor(idx);
+  const w = Math.max(0.5, rim || 0);
+  ctx2d.save();
+  ctx2d.rotate(rot || 0);
+  // 外圈：半径 R 的深灰圆；内圈半径 R-w 的浅灰圆 ——
+  // 于是【描边的绝对粗细恒为 w】，与半径无关（半径变大只缩内圈）。
+  ctx2d.fillStyle = '#6d6d6d';
+  ctx2d.beginPath(); ctx2d.arc(0, 0, R, 0, TAU); ctx2d.fill();
+  const Ri = Math.max(0.5, R - w);
+  ctx2d.fillStyle = '#878787';
+  ctx2d.beginPath(); ctx2d.arc(0, 0, Ri, 0, TAU); ctx2d.fill();
+  // 本体阴影（素材里的 #7c7c7c 那一层）：裁进内圈，留一道柔和暗边。
+  ctx2d.save();
+  ctx2d.beginPath(); ctx2d.arc(0, 0, Ri, 0, TAU); ctx2d.clip();
+  ctx2d.fillStyle = '#7c7c7c';
+  ctx2d.beginPath(); ctx2d.arc(-R * 0.10, -R * 0.12, Ri * 0.985, 0, TAU); ctx2d.fill();
+  // 斑点（#999）：数量与瓢虫同一口径（2 + 稀有度序号），固定种子 -> 分布一致。
+  ctx2d.fillStyle = '#999999';
+  for (const sp of spots) {
+    ctx2d.beginPath();
+    ctx2d.arc(Math.cos(sp.a) * sp.d * Ri, Math.sin(sp.a) * sp.d * Ri, sp.r * Ri, 0, TAU);
+    ctx2d.fill();
+  }
+  ctx2d.restore();
+  ctx2d.restore();
+}
+
+// 斑点分布（按稀有度序号缓存）：同一序号永远同一套位置，世界与卡面完全一致。
+const _moonSpotCache = {};
+function moonSpotsFor(idx) {
+  let list = _moonSpotCache[idx];
+  if (list) return list;
+  const n = 2 + idx;
+  let s = ((77 * 131 + idx * 17) | 0) || 1;
+  const rng = () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 8) & 0xffffff) / 0x1000000; };
+  list = [];
+  for (let i = 0; i < n; i++) {
+    list.push({ a: rng() * TAU, d: Math.sqrt(rng()) * 0.58, r: 0.055 + 0.05 * rng() });
+  }
+  _moonSpotCache[idx] = list;
+  return list;
+}
 
 // 蛛网【自己画的】素材（放射线 + 内凹环），不用 Web 花瓣本身的贴图。
 // 懒加载一次，未就绪时返回 null（调用方不画）。

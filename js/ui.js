@@ -259,7 +259,7 @@ const UI = {
       <!-- 底部常驻快捷栏：上行 = 当前装备的卡（主槽），下行 = 副槽（临时存储，按 R 整排互换） -->
       <div id="quickbar">
         <!-- 状态效果条：位于卡槽正上方，按获得顺序排列（圆形小图标，见 renderStatus） -->
-        <div id="statusRow" class="status-row"></div>
+        <div id="statusRow" class="status-row hidden"></div>
         <div id="slotRow" class="quickrow"></div>
         <!-- [R] 提示用绝对定位挂在 .subwrap 上，不参与副槽行的居中计算 -->
         <div class="subwrap">
@@ -627,6 +627,60 @@ const UI = {
     el.classList.add('gone');               // 撤蒙版 = 整块渐隐后移出布局
     await wait(450);
     el.style.display = 'none';
+  },
+
+  // ---------------- 准备页（Loading 之后、入服之前） ----------------
+  // 花园瓦片背景 + 白底黑描边「Connecting」；连接建立后文字快速缩小、
+  // Ready 按钮（Continue 同款样式）快速放大。只有点击 Ready 才真正入服，
+  // 服务端也到那一刻才创建玩家实体（Loading 阶段不跑任何模拟）。
+  // 预挂载准备页（只建 DOM，不连接）：在 Loading 蒙版开始淡出【之前】调用。
+  // 蒙版渐隐的 450ms 里画布已经可见，准备页必须已经在下面，
+  // 否则会先露出游戏画面再出现 Connecting。z-index 低于 #loading（见 css/style.css），
+  // 所以它不会盖住 Loading 与 studio logo。
+  mountConnect() {
+    if (this._connectEl && this._connectEl.parentNode) return this._connectEl;
+    const el = document.createElement('div');
+    el.id = 'connect';
+    el.innerHTML = `
+      <div id="connectInner">
+        <div id="connectText">${I18N.t('UI/Connect/Connecting', 'Connecting')}</div>
+        <button id="connectBtn" class="death-continue hidden">${I18N.t('UI/Connect/Ready', 'Ready')}</button>
+      </div>`;
+    document.body.appendChild(el);
+    this._connectEl = el;
+    return el;
+  },
+
+  async showConnect(connectFn, joinFn) {
+    if (this._connectShown) return;
+    this._connectShown = true;
+    const el = this.mountConnect();
+    const text = el.querySelector('#connectText');
+    const btn = el.querySelector('#connectBtn');
+    try {
+      if (connectFn) await connectFn();
+    } catch (e) {
+      console.warn('[connect] 连接失败，使用本地模拟：', e);
+    }
+    // 连接完成：文字快速渐小 -> 按钮快速渐大
+    text.classList.add('shrink');
+    await new Promise((r) => setTimeout(r, 280));
+    text.classList.add('hidden');
+    btn.classList.remove('hidden');
+    try { btn.focus(); } catch (e) { /* ignore */ }
+    await new Promise((resolve) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try { if (joinFn) await joinFn(); } catch (e) { console.error('[join]', e); }
+        el.classList.add('gone');
+        setTimeout(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          if (this._connectEl === el) this._connectEl = null;
+          resolve();
+        }, 450);
+      }, { once: true });
+    });
+    this._connectShown = false;
   },
 
   // studio logo 的 SVG 文本只取一次（init 时预取，hideLoading 直接用缓存）。
@@ -1850,37 +1904,141 @@ const UI = {
   //   · 花瓣本体与名称文字完全不被遮盖。
   // 视觉 = 一块"无阴影扇形"从 0 长满一整圈，扇形之外是阴影；扇形没有描边，就是两块区域的分界。
   //   · 扇形两条边界同点出发：慢边界与快边界，两者转速比率恒定（快 = 慢的 2 倍）；
-  // 状态效果条（卡槽正上方）：按【获得顺序】排圆形小图标。
-  // 每帧都会被调用，因此先用"签名"判重：效果集合与数值都没变就直接返回，不碰 DOM。
-  // 数值（将来有的效果）走右下角小角标 —— 只有 def.numeric 为真且 value 非空时才显示。
+  // 状态效果条（卡槽正上方）：每条 = 圆角条带（比图标略浅的底色）+ 圆形图标 + 数字。
+  // 每帧都会调用，因此先用"签名"判重：效果集合与显示文本都没变就直接返回，不碰 DOM。
+  // 兼容任意多个状态：按【获得顺序】横排，每条独立自适应宽度；
+  // 文本变化时只改自己的内容与宽度，宽度由 CSS transition 平滑过渡。
   renderStatus(ent) {
     const row = this.refs.statusRow;
     if (!row || typeof StatusFX === 'undefined') return;
     const list = StatusFX.list(ent);
+    if (!this._statusEls) this._statusEls = new Map();
+    if (!this._statusExits) this._statusExits = new Map();
+    const items = [];
     let sig = '';
-    for (const e of list) sig += e.id + (e.value == null ? '' : ':' + e.value) + '|';
-    if (sig === this._statusSig) return;
-    this._statusSig = sig;
-    row.innerHTML = '';
-    if (!list.length) { row.classList.add('hidden'); return; }
-    row.classList.remove('hidden');
     for (const e of list) {
       const def = StatusFX.defOf(e.id) || {};
+      const text = StatusFX.textOf ? StatusFX.textOf(e) : '';
       const name = I18N.t(def.nameKey || ('Status/' + e.id + '/Name'), e.id);
-      const el = document.createElement('div');
-      el.className = 'status-icon';
-      if (def.color) el.style.background = def.color;
-      const short = def.shortKey ? I18N.t(def.shortKey, name) : name;
-      el.textContent = String(short || name).slice(0, 1);
-      if (def.numeric && e.value != null) {
-        const b = document.createElement('i');
-        b.className = 'status-val';
-        b.textContent = fmtNum(e.value);
-        el.appendChild(b);
+      sig += e.id + ':' + text + '|';
+      items.push({ e, def, text, name });
+    }
+    if (sig === this._statusSig) return;
+    this._statusSig = sig;
+    if (items.length) row.classList.remove('hidden');
+
+    // ① 记录旧位置：新条带出现/旧条带消失后，其它条带据此做 FLIP 位移。
+    const prev = new Map();
+    for (const [id, el] of this._statusEls) {
+      if (el.parentNode === row) prev.set(id, { left: el.offsetLeft, top: el.offsetTop });
+    }
+
+    // ② 更新 / 新建 / 按获得顺序排序（appendChild 会把已有元素移到末尾）
+    const seen = new Set();
+    const added = [];
+    for (const it of items) {
+      const e = it.e, def = it.def;
+      // 正在退场的同名条带：立刻取消并回收，避免同 id 出现两条
+      const ex = this._statusExits.get(e.id);
+      if (ex) {
+        clearTimeout(ex.timer);
+        if (ex.el) ex.el.remove();
+        this._statusExits.delete(e.id);
       }
-      this._bindSimpleTip(el, () => name);
+      seen.add(e.id);
+      let el = this._statusEls.get(e.id);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'status-band';
+        const ico = document.createElement('i');
+        ico.className = 'status-ico';
+        const txt = document.createElement('b');
+        txt.className = 'status-txt';
+        el.appendChild(ico);
+        el.appendChild(txt);
+        this._statusEls.set(e.id, el);
+        added.push(el);
+      }
+      const ico = el.firstChild, txt = el.lastChild;
+      el.style.background = def.bandColor || def.color || 'rgba(0,0,0,0.45)';
+      ico.style.background = def.color || '#fff';
+      ico.style.color = def.iconText || '#000';
+      ico.textContent = def.glyph || '';
+      txt.textContent = it.text;
+      // 自适应宽度：左右内边距(14) + 图标位(16) + 间距(4) + 文本实际宽度
+      el.style.width = (34 + this._statusTextWidth(it.text)) + 'px';
+      this._bindSimpleTip(el, () => it.name);
       row.appendChild(el);
     }
+
+    // ③ 退场：脱离文档流留在原位渐小渐隐；其它条带立刻开始平滑让位。
+    for (const [id, el] of this._statusEls) {
+      if (seen.has(id)) continue;
+      this._statusEls.delete(id);
+      this._statusExit(row, id, el, prev.get(id));
+    }
+
+    // ④ 入场：0.55 倍 + 透明 -> 原尺寸（与实体入场同一观感）
+    if (added.length) {
+      for (const el of added) {
+        el.style.transition = 'none';
+        el.style.transform = 'scale(0.55)';
+        el.style.opacity = '0';
+      }
+      void row.offsetWidth;               // 强制一次布局，让起点生效
+      for (const el of added) {
+        el.style.transition = '';
+        el.style.transform = '';
+        el.style.opacity = '';
+      }
+    }
+
+    // ⑤ FLIP：被新条带挤开的旧条带，从旧位置平滑滑到新位置（整体始终居中）。
+    for (const [id, el] of this._statusEls) {
+      const p = prev.get(id);
+      if (!p || el.parentNode !== row) continue;
+      const dx = p.left - el.offsetLeft;
+      if (Math.abs(dx) < 0.5) continue;
+      el.style.transition = 'none';
+      el.style.transform = 'translateX(' + dx.toFixed(1) + 'px)';
+      void el.offsetWidth;
+      el.style.transition = '';
+      el.style.transform = '';
+    }
+  },
+
+  // 单条状态退场：保持原位脱离文档流，渐小渐隐后移除。
+  _statusExit(row, id, el, pos) {
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.position = 'absolute';
+    el.style.left = ((pos ? pos.left : el.offsetLeft) | 0) + 'px';
+    el.style.top = ((pos ? pos.top : el.offsetTop) | 0) + 'px';
+    el.style.margin = '0';
+    el.style.pointerEvents = 'none';
+    void el.offsetWidth;
+    el.style.transition = '';
+    el.style.transform = 'scale(0.55)';
+    el.style.opacity = '0';
+    const timer = setTimeout(() => {
+      el.remove();
+      this._statusExits.delete(id);
+      if (!this._statusEls.size && !this._statusExits.size) row.classList.add('hidden');
+    }, 220);
+    this._statusExits.set(id, { el, timer });
+  },
+
+  // 量一段状态文本的像素宽（与 .status-band 同一字体/字重）。
+  // 用 canvas 量而不是读 DOM：不触发重排，也不会被父元素的固定宽度截断。
+  _statusTextWidth(text) {
+    if (!text) return 0;
+    if (!this._statusMctx) {
+      const c = document.createElement('canvas');
+      this._statusMctx = c.getContext('2d');
+    }
+    const ctx = this._statusMctx;
+    ctx.font = '800 12px ' + ((typeof CardRenderer !== 'undefined' && CardRenderer.FONT) ? CardRenderer.FONT : 'Ubuntu, sans-serif');
+    return Math.ceil(ctx.measureText(String(text)).width) + 2;   // +2 给描边留边
   },
 
   //   · 慢边界在装填期间正好转一圈，快边界转两圈，因此在"装填完成"那一刻快边界恰好追上慢边界，
